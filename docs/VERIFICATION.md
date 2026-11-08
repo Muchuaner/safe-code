@@ -24,7 +24,7 @@
 
 Windows 214 的最终后台复验 `deploy / cloud / mount / ip` 均返回成功：七项实际状态为真，Claude 原生程序版本为 2.1.311；CloudCLI 隧道网页成功；两组 Windows 本机目录双向读写、CloudCLI 命名空间写入和卸载清理均通过；IP 策略检查了新建 SSH 与外部出口。
 
-Windows 原生交互验收返回 `success: true`：7 项状态、系统 OpenSSH、Generic RDP 会话凭据读写及独立回环 RDP 协议协商通过。Net.Coffee 综合定位显示“日本 · 东京”。声明页、登录窗、维护页均产生实际客户端截图，连接按钮及辅助控件位于视口内。
+Windows 原生交互验收返回 `success: true`：7 项状态、系统 OpenSSH、Generic RDP 会话凭据读写及独立回环 RDP 协议协商通过。Net.Coffee 综合定位显示“日本 · 东京”。声明页、登录窗、维护页均产生实际客户端截图，连接按钮及辅助控件位于视口内。语言配置额外检查基础 / GTK 翻译包，避免只有 Locale 而缺少系统翻译。
 
 另一次在缺失 `native.js` 时的负向验收退出码为 1，报告“核心模块未加载，已阻止概念稿模拟逻辑”；文件恢复后正常验收通过。不会静默把浏览器演示当作 Windows 安装结果。
 

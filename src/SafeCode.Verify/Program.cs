@@ -20,6 +20,10 @@ try
     var settings = new ConnectionSettings(Read("host"), Read("username"), Read("password"), root.TryGetProperty("port", out var port) ? port.GetInt32() : 22);
     var server = await session.ConnectAsync(settings, key => key.Fingerprint == Read("fingerprint"));
     Console.WriteLine("SSH_CONNECTED " + server.OsName + " " + server.Architecture);
+    if(phase=="localization"){
+        server=await session.DeployAsync("localization",DeploymentCatalog.Locales[0]);
+        if(!server.Statuses.GetValueOrDefault("localization"))throw new Exception("本土化语言包未就绪。");Console.WriteLine("LOCALE_TIMEZONE_AND_LANGUAGE_PACKS_VERIFIED");
+    }
     if (phase == "deploy")
     {
         foreach (var task in DeploymentCatalog.Steps)
