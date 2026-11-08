@@ -19,6 +19,7 @@ public sealed class ServerInfo
     public int CpuCount { get; set; }
     public bool IsRoot { get; set; }
     public string Username { get; set; } = "";
+    public string Hostname { get; set; } = "";
     public string HomeDirectory { get; set; } = "";
     public string ObservedEgressIp { get; set; } = "";
     public Dictionary<string, bool> Statuses { get; set; } = new();
@@ -37,7 +38,7 @@ public sealed record DeploymentStep(string Id, string Title, string Description)
 public static class DeploymentCatalog
 {
     public static readonly DeploymentStep[] Steps = [
-        new("account", "设置工作用户", "创建日常开发账户，配置独立密码和项目目录。"),
+        new("account", "设置工作用户和机器名称", "创建日常开发账户，配置独立密码和项目目录。"),
         new("localization", "本土化设置", "按出口所在地配置时区与系统语言。"),
         new("desktop", "安装虚拟桌面", "安装 XFCE 与 xrdp，通过加密隧道访问。"),
         new("chrome", "安装 Chrome", "使用 Google 官方软件源安装浏览器。"),
