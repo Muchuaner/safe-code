@@ -164,7 +164,7 @@ def inspect():
         localized=timezone==desired.get('timezone') and Path('/etc/default/locale').exists() and desired.get('locale','') in Path('/etc/default/locale').read_text() and all(package_installed(p) for p in locale_packages(desired.get('locale','')))
     pub=user_read('.ssh/authorized_keys') if account_ok else ''
     statuses={
-      'account':account_ok,
+      'account':account_ok and bool(a.get('hostname')) and a['hostname']==os.uname().nodename,
       'localization':localized,
       'desktop':package_installed('xfce4-session') and package_installed('xorgxrdp') and active('xrdp') and loopback,
       'chrome':bool(version('/usr/bin/google-chrome-stable')),
@@ -187,7 +187,7 @@ def inspect():
     match=re.search(r'(?m)^LANG="?([^\s"]+)',language)
     return {'osId':info.get('ID',''),'osName':info.get('PRETTY_NAME',''),'osVersion':info.get('VERSION_ID',''),
       'architecture':os.uname().machine,'memoryBytes':mem,'diskFreeBytes':disk.free,'cpuCount':os.cpu_count(),
-      'homeDirectory':str(h), 'isRoot':os.geteuid()==0,'username':a['username'] if account_ok else '', 'statuses':statuses,
+      'hostname':os.uname().nodename, 'homeDirectory':str(h), 'isRoot':os.geteuid()==0,'username':a['username'] if account_ok else '', 'statuses':statuses,
       'assignedIps':addresses,'timezone':run(['timedatectl','show','-p','Timezone','--value'],False).stdout.strip(),
       'systemLocale':match[1] if match else '', 'ipPolicyHealthy':healthy,
       'claudeVersion':version(h/'.local/bin/claude'),'desktopReady':statuses['desktop'],
@@ -196,18 +196,57 @@ def inspect():
 
 def setup_account(options):
     existing=read_config()
+    user=options.get('username') or (existing['username'] if existing else 'workspace')
+    hostname=options.get('hostname','').strip() or (existing or {}).get('hostname','') or 'safe-'+secrets.token_hex(4)
+    password=options.get('password','')
+    if not re.fullmatch('[a-z][a-z0-9_-]{1,30}',user):raise RuntimeError('用户名须为 2–31 位小写字母、数字、下划线或短横线。')
+    if hostname and not re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?',hostname):raise RuntimeError('机器名称须为 1–63 位字母、数字或短横线。')
+    if password and (len(password)<12 or len(password)>256 or any(c in password for c in '\r\n\0')):raise RuntimeError('工作密码须为 12–256 位，不能包含换行或空字符。')
     if existing:
         if run(['id',existing['username']],False).returncode:raise RuntimeError('工作用户记录与系统不一致，请手动检查。')
-        log('复用已有工作账户，不更改现有密码。');return
-    user=options.get('username','workspace')
-    if not re.fullmatch('[a-z][a-z0-9_-]{1,30}',user):raise RuntimeError('用户名须为 2–31 位小写字母、数字、下划线或短横线。')
+        if user!=existing['username']:
+            # 不移动或覆盖已有账户，创建独立环境，旧项目完整保留。
+            uid=pwd.getpwnam(existing['username']).pw_uid
+            if run(['pgrep','-u',str(uid),'-x','xfce4-session'],False).returncode==0:
+                raise RuntimeError('请先在原工作用户的远程桌面中注销，再更换用户名；现有账户、项目和会话均未修改。')
+            if any(os.path.ismount(p) for p in Path('/mnt/safe-code').glob('*/*/*')):
+                raise RuntimeError('更换用户名需要先卸载目录；原账户与项目不会被删除。')
+        else:
+            if password:
+                run(['chpasswd'],stdin=user+':'+password+'\n')
+            run(['hostnamectl','set-hostname',hostname])
+            write(STATE/'account.json',json.dumps({'username':user,'password':password or existing['password'],'hostname':hostname}),0o600)
+            log('工作账户设置已应用。');return
     if run(['id',user],False).returncode==0:raise RuntimeError('此用户已存在，拒绝覆盖其密码。请选择新工作用户名。')
-    password=secrets.token_urlsafe(20)
+    if existing and Path('/etc/systemd/system/safe-code-cloudcli.service').exists():
+        run(['systemctl','disable','--now','safe-code-cloudcli'])
+        log('旧工作用户的 CloudCLI 已停止；可为新用户重新安装。')
+    password=password or secrets.token_urlsafe(20)
     run(['useradd','-m','-s','/bin/bash',user])
     run(['chpasswd'],stdin=user+':'+password+'\n')
-    write(STATE/'account.json',json.dumps({'username':user,'password':password}),0o600)
+    write(STATE/'account.json',json.dumps({'username':user,'password':password,'hostname':hostname}),0o600)
     user_write('workspace/.keep','')
-    log('工作账户与项目目录已创建。')
+    if package_installed('xfce4-session'):setup_xsession()
+    run(['hostnamectl','set-hostname',hostname or 'safe-'+secrets.token_hex(4)])
+    log('工作账户、机器名称与项目目录已创建。')
+
+def list_directories(options):
+    a=account();entry=pwd.getpwnam(a['username'])
+    # 浏览以普通工作用户身份执行，不泄露管理员专属目录。
+    script="""import json,os,pathlib,sys
+p=pathlib.Path(sys.argv[1]).resolve(strict=True)
+if not p.is_dir():raise ValueError('目录不存在')
+items=[]
+for child in p.iterdir():
+ try:
+  if child.is_dir() and os.access(child,os.R_OK|os.X_OK):items.append({'name':child.name,'path':str(child)})
+ except OSError:pass
+print(json.dumps({'path':str(p),'parent':str(p.parent),'directories':sorted(items,key=lambda x:x['name'].casefold())}))
+"""
+    path=options.get('path') or str(Path(entry.pw_dir)/'workspace')
+    if not isinstance(path,str) or len(path)>4096 or '\0' in path:raise RuntimeError('目录路径无效。')
+    output=run(['runuser','-u',a['username'],'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin','python3','-I','-c',script,path])
+    return json.loads(output.stdout)
 
 def locale_packages(locale):
     language=locale.split('_',1)[0]
@@ -461,6 +500,16 @@ def main():
         result({'ip':str(ipaddress.IPv4Address(value))});return
     if os.geteuid()!=0:raise RuntimeError('安装需要 root 或免密 sudo 权限。')
     if op=='account_info':result(account());return
+    if op=='list_directories':result(list_directories(request.get('options') or {}));return
+    if op=='desktop_login_probe':
+        options=request.get('options') or {};path=Path('/var/log/xrdp-sesman.log');size=path.stat().st_size
+        offset=options.get('offset',size)
+        if not isinstance(offset,int) or offset<0 or offset>size:offset=size
+        with path.open('rb') as f:
+            f.seek(offset);lines=f.read(131072).decode('utf-8',errors='replace')
+        user=account()['username']
+        success=any(('++ created session' in line or '++ reconnected session' in line or 'Session started successfully' in line) and (user in line) for line in lines.splitlines())
+        result({'offset':size,'loggedIn':success});return
     secure_root_directory(STATE,0o700)
     write('/etc/needrestart/conf.d/99-safe-code.conf', '$nrconf{override_rc}->{qr(^(?:ssh|xrdp(?:-sesman)?)(?:\\.service)?$)} = 0;\n')
     secure_root_directory('/opt/safe-code',0o755)

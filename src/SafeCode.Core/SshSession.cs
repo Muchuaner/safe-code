@@ -206,11 +206,11 @@ public sealed partial class SshSession : IDisposable
         try{await WatchJobJsonAsync(jobId,ct);}finally{operations.Release();}
         return await RequestAsync<ServerInfo>("inspect",null,ct);
     }
-    public async Task<ServerInfo> DeployAsync(string id, LocaleSettings? locale, string username = "workspace", CancellationToken ct = default)
+    public async Task<ServerInfo> DeployAsync(string id, LocaleSettings? locale, string username = "workspace", CancellationToken ct = default, string password = "", string hostname = "")
     {
         object options = id switch
         {
-            "account" => new { username },
+            "account" => new { username, password, hostname },
             "localization" when locale != null => new { timezone = locale.Timezone, locale = locale.Locale },
             "localization" => throw new InvalidOperationException("请先选择与出口所在地一致的时区和语言。"),
             "ssh" => new { publicKey = CreateWorkspaceKey().PublicKey },
@@ -266,16 +266,14 @@ public sealed partial class SshSession : IDisposable
     }
     public async Task<NetworkStats> MeasureNetworkAsync(CancellationToken ct = default)
     {
-        int lost = 0; var latency = new List<long>();
-        for (int i = 0; i < 5; i++)
-        {
-            ct.ThrowIfCancellationRequested();
-            try { using var ping = new Ping(); var reply = await ping.SendPingAsync(Host, 1500); if (reply.Status == IPStatus.Success) latency.Add(reply.RoundtripTime); else lost++; }
-            catch { lost++; }
-            await Task.Delay(180, ct);
-        }
-        return new(latency.Count > 0 ? latency.Average() : null, lost * 20, 5);
+        ct.ThrowIfCancellationRequested();
+        long? latency=null;
+        try{using var ping=new Ping();var reply=await ping.SendPingAsync(Host,1500);if(reply.Status==IPStatus.Success)latency=reply.RoundtripTime;}catch{}
+        networkSamples.Enqueue(latency.HasValue);while(networkSamples.Count>20)networkSamples.Dequeue();
+        return new(latency,Math.Round(100.0*networkSamples.Count(ok=>!ok)/networkSamples.Count,1),networkSamples.Count);
     }
+    private readonly Queue<bool> networkSamples=new();
+
     public static string Quote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
     public void Dispose()
     {

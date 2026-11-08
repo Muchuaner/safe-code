@@ -10,7 +10,7 @@ Safe Code 自有源码采用 MIT 许可证。下列依赖保留其原有许可�
 | Microsoft.Web.WebView2 1.0.4314.35 | Windows 应用界面宿主 | Microsoft，包内 LICENSE.txt（BSD 条款）与 NOTICE.txt |
 | Microsoft.NETCore.App / WindowsDesktop.App 10.0 | 自包含运行时 | Microsoft / .NET contributors，运行时包内许可证及第三方说明 |
 
-WebView2 Runtime 是单独安装的 Microsoft 运行环境，不包含在此源码仓库或便携包中。
+WebView2 Runtime 是 Microsoft 运行环境，不包含在源码仓库或便携包中。Windows 单 EXE 离线安装包附带微软官方签名的 Evergreen Standalone Installer，按微软 WebView2 再分发方式安装；其许可仍由 Microsoft 提供。远程桌面使用 Windows 自带的 Microsoft RDP Client Control，不重新分发 Windows 系统组件。
 
 Ubuntu、XFCE、xrdp、Fcitx5、Google Chrome、Claude Code、Node.js、davfs2、nftables 和 CloudCLI 在用户明确部署时从各自官方源安装，不作为本项目自有源码或便携包组件重新打包；其许可证和账户条款由原厂提供。特别是 Google Chrome、Claude Code 的使用许可不由本项目的 MIT 许可证替代。
 

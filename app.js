@@ -26,7 +26,7 @@ let selectedTasks = new Set();
 let states = [];
 let taskLogs = [];
 const tasks = [
-  ['设置工作用户', '创建日常开发账户，配置用户权限与 SSH 密钥。'],
+  ['设置工作用户和机器名称', '创建开发账户，设置独立密码与机器名称。'],
   ['本土化设置', '按出口 IP 所在地匹配时区与系统语言。'],
   ['安装虚拟桌面', '配置 XFCE 与远程桌面，保留断线后的工作状态。'],
   ['安装 Chrome', '安装 Chrome 浏览器，配置桌面启动入口。'],
@@ -91,11 +91,11 @@ $('#terminal-card').onclick=()=>launchClient('terminal');
 $('#desktop-card').onclick=()=>launchClient('desktop');
 $('#accept').onclick=()=>{showScreen('login');$('#ip').focus();};
 $('#back').onclick=()=>{stopWork();$('#login-form').reset();resetLogin();showScreen('notice');};
-$('#reveal').onclick=()=>{const visible=$('#password').type==='password';$('#password').type=visible?'text':'password';$('#reveal').textContent=visible?'隐藏':'显示';$('#reveal').setAttribute('aria-label',visible?'隐藏密码':'显示密码');};
+$('#reveal').onclick=()=>{const visible=$('#password').type==='password';$('#password').type=visible?'text':'password';setEye($('#reveal'),visible);$('#reveal').setAttribute('aria-label',visible?'隐藏密码':'显示密码');};
 function resetLogin(){
   $('#login-form').querySelectorAll('input,button').forEach(el=>el.disabled=false);
-  $('#back').disabled=false;$('#password').type='password';$('#reveal').textContent='显示';$('#reveal').setAttribute('aria-label','显示密码');
-  $('#connect').innerHTML='连接服务器 <span>→</span>';
+  $('#back').disabled=false;$('#password').type='password';setEye($('#reveal'),false);$('#reveal').setAttribute('aria-label','显示密码');
+  $('#connect').textContent='连接服务器';
   $('#connection-message').className='connection-message';$('#connection-message').textContent='';
 }
 $('#login-form').onsubmit=event=>{
@@ -116,18 +116,18 @@ function renderTasks(){
     const copy=document.createElement('div');copy.className='step-copy';
     const heading=document.createElement('h3');heading.textContent=title;
     const desc=document.createElement('p');desc.className=taskLogs[i]?'task-log':'';const preset=currentLocale();const detail=i===1?(preset?preset.name+' · '+preset.timezone+' · '+preset.locale:'未能自动匹配所在地，请先设置时区与语言。'):description;desc.textContent=taskLogs[i]||detail;desc.setAttribute('role','status');desc.setAttribute('aria-live','polite');copy.append(heading,desc);
-    const button=document.createElement('button');button.className='deploy-button';button.textContent=states[i]==='done'?'已完成 ✓':states[i]==='running'?'部署中…':'开始部署';button.disabled=busy||states[i]==='done'||(i===1&&!currentLocale());button.setAttribute('aria-label',title+'：'+button.textContent);button.onclick=()=>deployOne(i);
+    const button=document.createElement('button');button.className='deploy-button';button.textContent=states[i]==='done'?'已完成':states[i]==='running'?'部署中…':'开始部署';button.disabled=busy||states[i]==='done'||(i===1&&!currentLocale());button.setAttribute('aria-label',title+'：'+button.textContent);button.onclick=()=>deployOne(i);
     if(selecting){
       const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.className='task-checkbox';checkbox.disabled=states[i]==='done'||busy||(i===1&&!currentLocale());checkbox.checked=states[i]!=='done'&&selectedTasks.has(i);checkbox.setAttribute('aria-label','选择'+title);
       checkbox.onchange=()=>{if(checkbox.checked)selectedTasks.add(i);else selectedTasks.delete(i);updateBatchControls();};
       row.append(checkbox);if(states[i]==='done')row.classList.add('unselectable');
     }
-    if(i===1){const settings=document.createElement('button');settings.className='text-button locale-settings-button';settings.textContent='设置';settings.setAttribute('aria-label','设置本土化');settings.disabled=busy;settings.onclick=openLocalization;row.append(number,copy,settings,button);}else row.append(number,copy,button);return row;
+    if(i===0||i===1){const settings=document.createElement('button');settings.className='text-button locale-settings-button';settings.textContent='自定义';settings.setAttribute('aria-label',i===0?'自定义工作用户和机器名称':'自定义本土化');settings.disabled=busy;settings.onclick=i===1?openLocalization:()=>openAccountSettings();row.append(number,copy,settings,button);}else row.append(number,copy,button);return row;
   }));
   const completed=states.filter(state=>state==='done').length;
   $('#overall-status').textContent=completed===tasks.length?'全部配置完成':completed+' / '+tasks.length+' 已完成';
   $('#overall-detail').textContent=completed===tasks.length?'开发环境已就绪。':'可单项部署，或选择所需项目批量部署。';
-  $('#deploy-all').disabled=busy||completed===tasks.length;$('#deploy-all').textContent=completed===tasks.length?'部署完成 ✓':busy?'正在部署…':'一键部署';
+  $('#deploy-all').disabled=busy||completed===tasks.length;$('#deploy-all').textContent=completed===tasks.length?'部署完成':busy?'正在部署…':'一键部署';
   updateBatchControls();
 }
 function updateBatchControls(){
@@ -307,3 +307,10 @@ for(const link of document.querySelectorAll('[data-resource]')){
   const url=resourceLinks[link.dataset.resource];
   if(url){link.href=url;link.target='_blank';link.rel='noopener noreferrer'+(link.dataset.resource==='vps'?' sponsored':'');link.referrerPolicy='no-referrer';link.removeAttribute('aria-disabled');link.title=link.textContent.trim();}
 }
+
+function setEye(button,visible){button.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>'+(visible?'':'<path d="m3 3 18 18"/>')+'</svg>';button.setAttribute('aria-pressed',String(visible));}
+setEye($('#reveal'),false);
+document.querySelectorAll('[data-reveal]').forEach(button=>{setEye(button,false);button.onclick=()=>{const field=document.getElementById(button.dataset.reveal);const visible=field.type==='password';field.type=visible?'text':'password';setEye(button,visible);};});
+function openAccountSettings(){$('#account-settings').showModal();}
+$('#account-settings-form').onsubmit=e=>{e.preventDefault();$('#account-settings').close();states[0]='pending';renderTasks();};
+for(const id of ['server-ingress','server-address']){const value=document.getElementById(id);const eye=document.createElement('button');eye.className='ip-eye reveal';eye.type='button';eye.setAttribute('aria-label','隐藏'+(id==='server-ingress'?'入口':'出口')+' IP');setEye(eye,true);let visible=true;let actual='';eye.onclick=()=>{if(visible)actual=value.textContent;visible=!visible;value.textContent=visible?actual:'•••.•••.•••.•••';eye.setAttribute('aria-label',(visible?'隐藏':'显示')+' IP');setEye(eye,visible);};new MutationObserver(()=>{if(!visible&&value.textContent!=='•••.•••.•••.•••'){actual=value.textContent;value.textContent='•••.•••.•••.•••';}}).observe(value,{childList:true});value.after(eye);}

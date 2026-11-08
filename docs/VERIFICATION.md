@@ -31,3 +31,15 @@ Windows 原生交互验收返回 `success: true`：7 项状态、系统 OpenSSH�
 ## 验证不能证明的事项
 
 未验证全部 Ubuntu 发行版本、所有 VPS 多网卡 / NAT 拓扑、Windows ARM64、长期断网 / 强制断电文件恢复或所有 RDP 客户端版本。本版不承诺 IP 评分等于 Claude 官方可用性，也未替用户验证 Claude 账号登录。新的真实双公网地址组合需先由服务商分配并绑定；当前测试 VPS 只有一个公网 IP，双地址隔离使用 Linux 命名空间验证。
+
+## 0.3 修改验证（2026-11-09）
+
+新增：工作用户与机器名称自定义，Windows DPAPI 登录配置保存，密码眼睛切换、入口与出口 IP 隐藏，每 5 秒一次 ICMP 与最近 20 次丢包统计，本地文档目录选择与服务器 workspace 起始目录浏览。
+
+214 上实际启动微软 RDP ActiveX 原生组件，经过 SSH 隧道自动传入工作用户凭据；日本 Ubuntu 的 xrdp-sesman 日志出现 `Session started successfully for user workspace`，并检查了运行中的 `xfce4-session` 与 `xfwm4`。这项检查替代之前仅验证凭据写入和 RDP 协商的不足；没有输入 xrdp 密码框。
+
+Windows WebView 验收覆盖真实七项状态、SSH 终端、重启恢复 DPAPI 保存的登录配置、IP 隐藏与恢复、密码眼睛、双目录按钮、远程目录起点与上级目录。登录和声明的操作区在窗口内。构建为零警告零错误。
+
+单 EXE 安装采用 Inno Setup，包含自包含 .NET 与微软签名的完整 WebView2 离线安装器；已有 WebView2 时复用。214 已有该运行时，未卸载其他应用依赖来模拟缺失场景。Windows 内置 OpenSSH Client 仍为终端所需系统可选组件。安装和每个程序文件按 manifest SHA256 验证；本地开发包不上传 GitHub。
+
+最终 0.3.0 安装文件：271,111,903 字节，SHA256 `a5b40c2f3b16a701bff408d2c9f3675804df602daa81e97480bdc74cde5c20de`。实际安装版验收返回 `desktopLogin`、`savedLogin`、`restoredLogin` 等检查全部为 true；最后新增的用户名切换保护在正在运行的 XFCE 会话上验证为拒绝修改、账户状态保持不变。桌面交付文件与安装源哈希相同，快捷方式指向当前用户应用目录。最终增补后的安装文件逐项与 manifest 核对通过。

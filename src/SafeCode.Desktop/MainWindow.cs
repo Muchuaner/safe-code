@@ -29,6 +29,7 @@ public sealed class MainWindow : Window
     private readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SafeCode");
     public MainWindow(string[] arguments)
     {
+        if(arguments.Contains("--acceptance"))dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Acceptance");
         this.arguments = arguments; Title = "Safe Code"; Width = 360; Height = 536;
         MinWidth = 360; MinHeight = 500; WindowStartupLocation = WindowStartupLocation.CenterScreen;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResize; Background = Brushes.White;
@@ -106,6 +107,7 @@ public sealed class MainWindow : Window
         {
             using var document = JsonDocument.Parse(e.WebMessageAsJson); var root = document.RootElement;
             id = root.GetProperty("id").GetString() ?? ""; string operation = root.GetProperty("op").GetString() ?? "";
+            if(arguments.Length>=3&&arguments[0]=="--acceptance")File.AppendAllText(arguments[2]+".stage.log","RPC "+operation+"\n");
             var args = root.TryGetProperty("args", out var value) ? value : default;
             var answer = await HandleAsync(operation, args);
             await RespondAsync(id, answer, null);
@@ -126,14 +128,15 @@ public sealed class MainWindow : Window
             case "window.maximize": WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized; return true;
             case "window.close": Close(); return true;
             case "copy": Clipboard.SetText(Read("text")); return true;
-            case "pickFolder": var dialog = new OpenFolderDialog { Title = "选择要挂载到 VPS 的本地目录" }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+            case "login.load": return LocalSecrets.Load();
+            case "pickFolder": var dialog = new OpenFolderDialog { Title = "选择要挂载到 VPS 的本地目录", InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
             case "acceptance.capture":
                 if(arguments.Length<3||arguments[0]!="--acceptance")throw new InvalidOperationException("未启用验收模式。");
-                string tag=Read("tag");if(tag!="login"&&tag!="notice")throw new ArgumentException("截图标识无效。");
+                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom")throw new ArgumentException("截图标识无效。");
                 await Task.Delay(200);using(var image=File.Create(arguments[2]+"."+tag+".png"))await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);return true;
             case "client.verify":
                 if(arguments.Length<3||arguments[0]!="--acceptance")throw new InvalidOperationException("未启用验收模式。");
-                return new{nativeSsh=await clients.VerifyNativeSshAsync(RequireSession(),lifetime.Token),credentialStore=await clients.VerifyCredentialStoreAsync(RequireSession(),lifetime.Token)};
+                return new{nativeSsh=await clients.VerifyNativeSshAsync(RequireSession(),lifetime.Token),desktopLogin=await clients.VerifyDesktopLoginAsync(RequireSession(),lifetime.Token),savedLogin=LocalSecrets.Load()?.Host==RequireSession().Host};
             case "acceptance.done":
                 if (arguments.Length < 3 || arguments[0] != "--acceptance") throw new InvalidOperationException("当前未启用验收模式。");
                 string output = arguments[2]; Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
@@ -144,11 +147,11 @@ public sealed class MainWindow : Window
                 _ = Dispatcher.BeginInvoke(() => Close()); return true;
             case "connect":
                 session?.Dispose(); session = new SshSession(dataDirectory);
-                session.Log += text => {lock(logLock)latestLog=(activeStep,text);};
+                session.Log += text => {if(arguments.Length>=3&&arguments[0]=="--acceptance")File.AppendAllText(arguments[2]+".stage.log","SSH "+text+"\n");lock(logLock)latestLog=(activeStep,text);};
                 var settings = new ConnectionSettings(Read("host"), Read("username"), Read("password"), args.TryGetProperty("port", out var port) ? port.GetInt32() : 22);
                 var server = await session.ConnectAsync(settings, host => acceptanceFingerprint != null ? acceptanceFingerprint == host.Fingerprint : Dispatcher.Invoke(() =>
                     MessageBox.Show(this, "首次连接此服务器。请核对主机指纹：\n\n" + host.Host + ":" + host.Port + "\n" + host.Fingerprint + "\n\n是否信任并继续？", "核对 SSH 主机密钥", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes), lifetime.Token);
-                return server;
+                LocalSecrets.Save(settings);return server;
             case "job.resume":
                 if(deploying)throw new InvalidOperationException("已有任务正在监控。");deploying=true;activeStep=Read("operation");
                 try{return await RequireSession().ResumeJobAsync(Read("jobId"),lifetime.Token);}finally{deploying=false;activeStep="";}
@@ -161,11 +164,12 @@ public sealed class MainWindow : Window
                 try
                 {
                     var locale = args.TryGetProperty("locale", out var region) && region.ValueKind != JsonValueKind.Null ? JsonSerializer.Deserialize<LocaleSettings>(region, JsonDefaults.Options) : null;
-                    var result = await RequireSession().DeployAsync(activeStep, locale, Read("username", "workspace"), lifetime.Token);
+                    var result = await RequireSession().DeployAsync(activeStep, locale, Read("username", "workspace"), lifetime.Token, Read("password"), Read("hostname"));
                     if (activeStep == "ssh") await RequireSession().VerifyWorkspaceKeyAsync(lifetime.Token);
                     return result;
                 }
                 finally { deploying = false; activeStep = ""; }
+            case "folder.list": return await RequireSession().RequestAsync<JsonElement>("list_directories",new { path=Read("path") },lifetime.Token);
             case "account": return await RequireSession().RequestAsync<AccountInfo>("account_info", null, lifetime.Token);
             case "desktop": await clients.OpenDesktopAsync(RequireSession(), lifetime.Token); return true;
             case "terminal": await clients.OpenTerminalAsync(RequireSession(), lifetime.Token); return RequireSession().Server;
