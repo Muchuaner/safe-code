@@ -99,7 +99,7 @@ function resetLogin(){
   $('#connection-message').className='connection-message';$('#connection-message').textContent='';
 }
 $('#login-form').onsubmit=event=>{
-  event.preventDefault();if(window.__safeCodeDesktop){alert('客户端核心模块未就绪，无法连接。');return;}const ip=$('#ip').value.trim();const username=$('#username').value.trim();
+  event.preventDefault();if(window.__safeCodeDesktop){showAppMessage('客户端核心模块未就绪，无法连接。');return;}const ip=$('#ip').value.trim();const username=$('#username').value.trim();
   if(!ip || !username){$('#connection-message').textContent='请填写 IP 地址和用户名。';$('#connection-message').className='connection-message error';return;}
   $('#login-form').querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#back').disabled=true;
   $('#connect').textContent='正在连接…';$('#connection-message').textContent='正在建立 SSH 连接，请稍候…';$('#connection-message').className='connection-message connecting';
@@ -115,7 +115,7 @@ function renderTasks(){
     const number=document.createElement('span');number.className='step-number';number.textContent=String(i+1);
     const copy=document.createElement('div');copy.className='step-copy';
     const heading=document.createElement('h3');heading.textContent=title;
-    const desc=document.createElement('p');desc.className=taskLogs[i]?'task-log':'';const preset=currentLocale();const detail=i===1?(preset?preset.name+' · '+preset.timezone+' · '+preset.locale:'未能自动匹配所在地，请先设置时区与语言。'):description;desc.textContent=taskLogs[i]||detail;desc.setAttribute('role','status');desc.setAttribute('aria-live','polite');copy.append(heading,desc);
+    const desc=document.createElement('p');desc.className=taskLogs[i]?'task-log':'';const preset=currentLocale();const detail=i===1?(preset?preset.name+' · '+preset.timezone+' · '+preset.locale:($('#rating-state').textContent==='查询中'?'正在识别出口 IP 的归属地…':'未能自动匹配所在地，请先设置时区与语言。')):description;desc.textContent=taskLogs[i]||detail;desc.setAttribute('role','status');desc.setAttribute('aria-live','polite');copy.append(heading,desc);
     const button=document.createElement('button');button.className='deploy-button';button.textContent=states[i]==='done'?'已完成':states[i]==='running'?'部署中…':'开始部署';button.disabled=busy||states[i]==='done'||(i===1&&!currentLocale());button.setAttribute('aria-label',title+'：'+button.textContent);button.onclick=()=>deployOne(i);
     if(selecting){
       const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.className='task-checkbox';checkbox.disabled=states[i]==='done'||busy||(i===1&&!currentLocale());checkbox.checked=states[i]!=='done'&&selectedTasks.has(i);checkbox.setAttribute('aria-label','选择'+title);
@@ -318,3 +318,17 @@ for(const button of document.querySelectorAll('[data-open-services]'))button.onc
 for(const id of ['usage-consent','settings-usage-consent'])document.getElementById(id).onchange=e=>{const enabled=e.target.checked;$('#usage-consent').checked=enabled;$('#settings-usage-consent').checked=enabled;};
 $('#feedback-form').onsubmit=e=>{e.preventDefault();$('#feedback-status').textContent='请在 Windows 客户端内提交反馈。';};
 $('#check-update').onclick=()=>{$('#update-status').textContent='请在 Windows 客户端内检查更新。';};
+
+let appDialogQueue=Promise.resolve();
+function appDialog(message,options={}){
+  const next=appDialogQueue.then(()=>new Promise(resolve=>{
+    const dialog=$('#app-message-dialog');$('#app-message-title').textContent=options.title||'提示';$('#app-message-body').textContent=message;
+    $('#app-message-details').hidden=!options.details;$('#app-message-details').open=false;$('#app-message-details').ontoggle=()=>{$('#app-message-details summary').textContent=$('#app-message-details').open?'收起服务器指纹':'查看服务器指纹';};$('#app-message-detail-text').textContent=options.details||'';
+    const yes=$('#app-message-confirm'),no=$('#app-message-cancel');yes.textContent=options.confirm||'知道了';no.textContent=options.cancel||'取消';no.hidden=!options.cancel;
+    yes.onclick=()=>dialog.close('confirm');no.onclick=()=>dialog.close('cancel');dialog.querySelector('[data-dialog-dismiss]').onclick=()=>dialog.close('cancel');
+    dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.returnValue='';dialog.showModal();(options.cancel?no:yes).focus();
+  }));appDialogQueue=next.catch(()=>{});return next;
+}
+function showAppMessage(message,options={}){return appDialog(String(message),options);}
+
+if(!window.__safeCodeDesktop)showScreen('notice');

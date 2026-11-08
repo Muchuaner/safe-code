@@ -42,6 +42,7 @@ internal sealed class ClientServices : IDisposable
         string config=Path.Combine(AppContext.BaseDirectory,"service-endpoints.json");
         try{if(File.Exists(config)){using var doc=JsonDocument.Parse(File.ReadAllText(config));if(doc.RootElement.TryGetProperty("feedbackBaseUrl",out var value)&&Uri.TryCreate(value.GetString(),UriKind.Absolute,out var uri)&&uri.Scheme=="https"&&!uri.IsLoopback&&string.IsNullOrEmpty(uri.UserInfo)&&uri.AbsolutePath=="/"&&string.IsNullOrEmpty(uri.Query)&&string.IsNullOrEmpty(uri.Fragment))endpoint=uri;}}catch(IOException){}catch(JsonException){}catch(InvalidOperationException){}
     }
+    public bool NoticeWasConfirmed=>preferences.Confirmed;
     public object Preferences()=>new{enabled=preferences.Enabled,confirmed=preferences.Confirmed,serviceAvailable=endpoint!=null,recipient=endpoint?.Host};
     private void Save(){string temp=preferencesPath+".new";File.WriteAllText(temp,JsonSerializer.Serialize(preferences,JsonDefaults.Options));File.Move(temp,preferencesPath,true);}
     public async Task<object> SetConsentAsync(bool enabled,bool confirmed)

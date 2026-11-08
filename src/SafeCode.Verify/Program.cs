@@ -2,6 +2,21 @@ using SafeCode.Core;
 using System.Net.Sockets;
 using System.Text.Json;
 
+if(args.Length>1&&args[0]=="trust-fixture"){
+    using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string Read(string k)=>c.GetProperty(k).GetString()!;
+    string directory=Read("directory");var store=new HostTrustStore(directory);var settings=new ConnectionSettings("127.0.0.1","fixture","fixture-only",c.GetProperty("port").GetInt32());
+    store.Accept(new("other.example",22,"SHA256:other"));
+    async Task<HostKeyInfo> NeedTrust(){using var s=new SshSession(directory);try{await s.ConnectAsync(settings,_=>false);throw new Exception("unconfirmed key accepted");}catch(HostTrustRequiredException e){return e.Key;}}
+    async Task Approved(){using var s=new SshSession(directory);try{await s.ConnectAsync(settings,_=>throw new Exception("approved key prompted again"));throw new Exception("fixture did not reject Debian");}catch(UnsupportedOsException){}}
+    var first=await NeedTrust();if(first.PreviousFingerprint!=null||first.Fingerprint!=Read("first"))throw new Exception("first key mismatch");store.Accept(first);await Approved();
+    File.WriteAllText(Read("mode"),"second");var changed=await NeedTrust();if(changed.PreviousFingerprint!=first.Fingerprint||changed.Fingerprint!=Read("second"))throw new Exception("changed key not identified");
+    if(store.Describe(settings.Host,settings.Port,first.Fingerprint).PreviousFingerprint!=first.Fingerprint)throw new Exception("decline changed stored trust");
+    string host=$"[127.0.0.1]:{settings.Port}";File.WriteAllText(Path.Combine(directory,"known_hosts"),host+" ssh-rsa old-key\nother.example ssh-rsa keep-key\n");store.Accept(changed);await Approved();
+    if(!File.ReadAllText(Path.Combine(directory,"known_hosts")).Contains("other.example")||File.ReadAllText(Path.Combine(directory,"known_hosts")).Contains("old-key"))throw new Exception("known_hosts isolation failed");
+    bool stale=false;try{store.Accept(first);}catch(InvalidOperationException){stale=true;}if(!stale)throw new Exception("stale challenge accepted");
+    if(store.Describe("other.example",22,"SHA256:other").PreviousFingerprint!="SHA256:other")throw new Exception("other host pin modified");
+    Console.WriteLine("FIRST_TRUST_REINSTALL_CONFIRM_DECLINE_CAS_AND_ENDPOINT_ISOLATION_PASSED");return 0;
+}
 if(args.Length>0&&args[0]=="geo"){
     string fixture="""{"country":"Hong Kong","countryCode":"hk","trust_score":78,"cidr":"203.0.113.0/24","geo_sources":[{"country":"Hong Kong","country_code":"hk"},{"country":"Japan","country_code":"jp","city":"Tokyo"},{"country":"Japan","country_code":"jp","city":"Tokyo"},{"country":"Japan","country_code":"jp","city":"Shinagawa"}]}""";
     var chosen=IpIntelligenceService.ParseLookup("203.0.113.9",fixture);if(chosen.RegionCode!="jp"||chosen.City!="Tokyo"||!chosen.HasGeoConflict)throw new Exception("多源多数定位失败。");
