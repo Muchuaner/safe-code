@@ -1,0 +1,23 @@
+[Unit]
+Description=Safe Code feedback and basic usage statistics
+After=network.target
+[Service]
+User=safe-code-feedback
+Group=safe-code-feedback
+WorkingDirectory=/opt/safe-code-feedback
+ExecStart=/usr/bin/python3 /opt/safe-code-feedback/server.py
+Environment=SAFECODE_PORT=18761
+Environment=SAFECODE_DB=/var/lib/safe-code-feedback/data.sqlite3
+StateDirectory=safe-code-feedback
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=128M
+TasksMax=32
+[Install]
+WantedBy=multi-user.target

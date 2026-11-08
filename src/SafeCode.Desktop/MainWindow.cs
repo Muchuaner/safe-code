@@ -16,6 +16,10 @@ public sealed class MainWindow : Window
 {
     private readonly WebView2 browser = new();
     private readonly WindowsClients clients = new();
+    private readonly ClientServices services;
+    private DownloadedInstaller? downloadedUpdate;
+    private bool installingUpdate;
+    private int maintenanceOperations;
     private readonly CancellationTokenSource lifetime = new();
     private SshSession? session;
     private readonly object logLock=new();
@@ -26,10 +30,12 @@ public sealed class MainWindow : Window
     private bool closingApproved;
     private string? acceptanceFingerprint;
     private readonly string[] arguments;
+    private bool IsAcceptance=>arguments.Length>=3&&(arguments[0]=="--acceptance"||arguments[0]=="--services-acceptance");
     private readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SafeCode");
     public MainWindow(string[] arguments)
     {
-        if(arguments.Contains("--acceptance"))dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Acceptance");
+        if(arguments.Contains("--acceptance")||arguments.Contains("--services-acceptance"))dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Acceptance");
+        services=new ClientServices(dataDirectory);
         this.arguments = arguments; Title = "Safe Code"; Width = 360; Height = 536;
         MinWidth = 360; MinHeight = 500; WindowStartupLocation = WindowStartupLocation.CenterScreen;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResize; Background = Brushes.White;
@@ -45,24 +51,25 @@ public sealed class MainWindow : Window
                 catch (Exception error) { MessageBox.Show(this,"本地目录仍在同步，窗口暂未关闭。请关闭远端正在使用的文件后重试。\n"+error.Message,"目录卸载失败",MessageBoxButton.OK,MessageBoxImage.Warning); }
                 return;
             }
-            logTimer.Stop();lifetime.Cancel(); clients.Dispose(); session?.Dispose(); browser.Dispose();
+            logTimer.Stop();lifetime.Cancel(); services.Dispose();clients.Dispose(); session?.Dispose(); browser.Dispose();
         };
     }
     private async Task InitializeAsync()
     {
         try
         {
-            if(arguments.Length>=3&&arguments[0]=="--acceptance")File.AppendAllText(arguments[2]+".stage.log","窗口已加载\n");
+            if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","窗口已加载\n");
             Directory.CreateDirectory(dataDirectory);
             var options = new CoreWebView2EnvironmentOptions();
-            if(arguments.Length>=3&&arguments[0]=="--acceptance")options.AdditionalBrowserArguments="--disable-gpu";
+            if(IsAcceptance)options.AdditionalBrowserArguments="--disable-gpu";
             var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataDirectory, "WebView"), options);
             await browser.EnsureCoreWebView2Async(environment);
-            if(arguments.Length>=3&&arguments[0]=="--acceptance")File.AppendAllText(arguments[2]+".stage.log","WebView 已就绪\n");
-            if (arguments.Length >= 3 && arguments[0] == "--acceptance")
+            if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","WebView 已就绪\n");
+            if (arguments.Length>=3&&arguments[0]=="--acceptance")
             { using var cfg = JsonDocument.Parse(File.ReadAllText(arguments[1])); acceptanceFingerprint = cfg.RootElement.GetProperty("fingerprint").GetString(); }
             browser.CoreWebView2.SetVirtualHostNameToFolderMapping("safe-code.local", Path.Combine(AppContext.BaseDirectory, "Web"), CoreWebView2HostResourceAccessKind.DenyCors);
             await browser.CoreWebView2.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache);
+            if(IsAcceptance)await browser.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("window.__safeCodeAcceptance=true;");
             await browser.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("""
                 window.__safeCodeDesktop=true;
                 for(const name of ['click','keydown'])document.addEventListener(name,e=>{if(!window.safeCodeNativeReady&&!e.target.closest?.('[data-safe-code-startup-close]')){e.preventDefault();e.stopImmediatePropagation();}},true);
@@ -89,13 +96,13 @@ public sealed class MainWindow : Window
             browser.CoreWebView2.WebMessageReceived += OnMessage;
             browser.CoreWebView2.NavigationCompleted += async (_, e) =>
             {
-                if (e.IsSuccess && arguments.Length >= 3 && arguments[0] == "--acceptance") await RunAcceptanceAsync(arguments[1], arguments[2]);
+                if(e.IsSuccess&&IsAcceptance){if(arguments[0]=="--services-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunServicesAcceptance()");else await RunAcceptanceAsync(arguments[1],arguments[2]);}
             };
             browser.Source = new Uri("https://safe-code.local/index.html");
         }
         catch (Exception error)
         {
-            if(arguments.Length>=3&&arguments[0]=="--acceptance")File.WriteAllText(arguments[2]+".error.txt",error.ToString());
+            if(IsAcceptance)File.WriteAllText(arguments[2]+".error.txt",error.ToString());
             MessageBox.Show(this, "客户端初始化失败。请安装 Microsoft Edge WebView2 Runtime。\n\n" + error.Message, "Safe Code", MessageBoxButton.OK, MessageBoxImage.Warning); Close();
         }
     }
@@ -107,9 +114,13 @@ public sealed class MainWindow : Window
         {
             using var document = JsonDocument.Parse(e.WebMessageAsJson); var root = document.RootElement;
             id = root.GetProperty("id").GetString() ?? ""; string operation = root.GetProperty("op").GetString() ?? "";
-            if(arguments.Length>=3&&arguments[0]=="--acceptance")File.AppendAllText(arguments[2]+".stage.log","RPC "+operation+"\n");
+            if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","RPC "+operation+"\n");
             var args = root.TryGetProperty("args", out var value) ? value : default;
-            var answer = await HandleAsync(operation, args);
+            if(installingUpdate)throw new InvalidOperationException("正在准备安装更新，请稍候。");
+            bool maintenance=operation is "cloud.install" or "mount.install" or "mount.apply" or "ip.apply" or "terminal";
+            if(maintenance)maintenanceOperations++;
+            object? answer;try{answer=await HandleAsync(operation,args);}finally{if(maintenance)maintenanceOperations--;}
+
             await RespondAsync(id, answer, null);
         }
         catch (Exception error) { await RespondAsync(id, null, error.Message); }
@@ -128,17 +139,30 @@ public sealed class MainWindow : Window
             case "window.maximize": WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized; return true;
             case "window.close": Close(); return true;
             case "copy": Clipboard.SetText(Read("text")); return true;
+            case "services.preferences": return services.Preferences();
+            case "services.consent": return await services.SetConsentAsync(args.GetProperty("enabled").GetBoolean(),args.TryGetProperty("confirmed",out var consent)&&consent.GetBoolean());
+            case "feedback.send": await services.SendFeedbackAsync(Read("message"),lifetime.Token);return true;
+            case "updates.check": return await services.CheckUpdateAsync(args.TryGetProperty("force",out var force)&&force.GetBoolean(),lifetime.Token);
+            case "updates.download":
+                downloadedUpdate=await services.DownloadUpdateAsync((done,total)=>{_ = Dispatcher.BeginInvoke(async()=>{if(browser.CoreWebView2!=null&&!lifetime.IsCancellationRequested)await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeUpdateProgress?.("+done+","+total+")");});},lifetime.Token);return true;
+            case "updates.install":
+                if(deploying||maintenanceOperations>0)throw new InvalidOperationException("请等待当前操作完成后安装更新。");
+                if(downloadedUpdate==null||!File.Exists(downloadedUpdate.Path))throw new InvalidOperationException("请先下载并校验安装包。");
+                installingUpdate=true;
+                try{await ClientServices.VerifyInstallerAsync(downloadedUpdate,lifetime.Token);if(session?.HasMounts==true)await session.UnmountAsync();
+                Process.Start(new ProcessStartInfo(downloadedUpdate.Path){UseShellExecute=true});closingApproved=true;Close();return true;}
+                catch{installingUpdate=false;throw;}
             case "login.load": return LocalSecrets.Load();
             case "pickFolder": var dialog = new OpenFolderDialog { Title = "选择要挂载到 VPS 的本地目录", InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
             case "acceptance.capture":
-                if(arguments.Length<3||arguments[0]!="--acceptance")throw new InvalidOperationException("未启用验收模式。");
-                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom")throw new ArgumentException("截图标识无效。");
+                if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
+                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services")throw new ArgumentException("截图标识无效。");
                 await Task.Delay(200);using(var image=File.Create(arguments[2]+"."+tag+".png"))await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);return true;
             case "client.verify":
-                if(arguments.Length<3||arguments[0]!="--acceptance")throw new InvalidOperationException("未启用验收模式。");
+                if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
                 return new{nativeSsh=await clients.VerifyNativeSshAsync(RequireSession(),lifetime.Token),desktopLogin=await clients.VerifyDesktopLoginAsync(RequireSession(),lifetime.Token),savedLogin=LocalSecrets.Load()?.Host==RequireSession().Host};
             case "acceptance.done":
-                if (arguments.Length < 3 || arguments[0] != "--acceptance") throw new InvalidOperationException("当前未启用验收模式。");
+                if (!IsAcceptance) throw new InvalidOperationException("当前未启用验收模式。");
                 string output = arguments[2]; Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
                 File.WriteAllText(output + ".json", args.GetRawText());
                 await Task.Delay(400);
@@ -147,7 +171,7 @@ public sealed class MainWindow : Window
                 _ = Dispatcher.BeginInvoke(() => Close()); return true;
             case "connect":
                 session?.Dispose(); session = new SshSession(dataDirectory);
-                session.Log += text => {if(arguments.Length>=3&&arguments[0]=="--acceptance")File.AppendAllText(arguments[2]+".stage.log","SSH "+text+"\n");lock(logLock)latestLog=(activeStep,text);};
+                session.Log += text => {if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","SSH "+text+"\n");lock(logLock)latestLog=(activeStep,text);};
                 var settings = new ConnectionSettings(Read("host"), Read("username"), Read("password"), args.TryGetProperty("port", out var port) ? port.GetInt32() : 22);
                 var server = await session.ConnectAsync(settings, host => acceptanceFingerprint != null ? acceptanceFingerprint == host.Fingerprint : Dispatcher.Invoke(() =>
                     MessageBox.Show(this, "首次连接此服务器。请核对主机指纹：\n\n" + host.Host + ":" + host.Port + "\n" + host.Fingerprint + "\n\n是否信任并继续？", "核对 SSH 主机密钥", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes), lifetime.Token);

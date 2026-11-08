@@ -4,7 +4,7 @@
 
 ## 运行 Windows 客户端
 
-运行单个 `SafeCode-0.3.0-Setup-x64.exe` 安装文件。内含 .NET 和 WebView2 离线依赖；无需 Python、Node.js、WSL 或 .NET SDK。详见 [Windows 使用说明](docs/WINDOWS.md)。
+运行单个 `SafeCode-0.4.0-Setup-x64.exe` 安装文件。内含 .NET 和 WebView2 离线依赖；无需 Python、Node.js、WSL 或 .NET SDK。详见 [Windows 使用说明](docs/WINDOWS.md)。
 
 输入 IP、用户名、密码，核对首次 SSH 指纹。**仅 Ubuntu 可以安装；非 Ubuntu 在任何部署写入前明确拒绝。** 安装管理员需为 root 或免密 sudo。支持目标为 Ubuntu 22.04 / 24.04 x86_64 的 systemd VPS，推荐 4GB 内存；实际环境验证为 Ubuntu 24.04 与 Windows 10 19045 x64。
 
@@ -53,7 +53,7 @@ python3 -m http.server 5173 --bind 127.0.0.1
 
 成功登录的信息通过 Windows DPAPI 按当前用户整体加密保存，不打印密码。工作用户与管理员分离，生成独立随机密码；本机密钥限制访问权限。巡检不会以 root 执行用户可写程序，用户配置写入以普通用户进行，拒绝越界符号链接。目录桥拒绝未认证请求、路径穿越和符号链接逃逸；RDP / CloudCLI 默认只监听 VPS 回环。
 
-IP 评分仅向 Net.Coffee 发送出口 IP；出口探测访问 ipify。不向开发者上传账号、密码、目录内容或遥测。第三方工具自身的账号授权和许可由原厂提供。详细限制见 [Windows 使用说明](docs/WINDOWS.md) 与 [测试记录](docs/VERIFICATION.md)。
+IP 评分仅向 Net.Coffee 发送出口 IP；出口探测访问 ipify。不自动上传账号、密码或目录内容。基础使用统计默认勾选，在声明页确认后上报，可随时关闭；主动反馈仅发送用户填写的文字和软件版本。第三方工具自身的账号授权和许可由原厂提供。详细限制见 [Windows 使用说明](docs/WINDOWS.md) 与 [测试记录](docs/VERIFICATION.md)。
 
 ## 项目入口与许可证
 
@@ -61,4 +61,6 @@ IP 评分仅向 Net.Coffee 发送出口 IP；出口探测访问 ipify。不向�
 
 自有源码采用 [MIT](LICENSE)。第三方依赖及单独安装组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-Windows 安装包在运行便携包构建后，用 Inno Setup 7 编译 `tools/windows-installer.iss`。默认读取 `dist/SafeCode-0.3.0-win-x64` 和 `.local/installer/MicrosoftEdgeWebView2RuntimeInstallerX64.exe`，输出至 `dist`；也可通过 `AppSource`、`RuntimeSource`、`SetupOutput` 预处理参数指定绝对路径。离线 Runtime 从微软官方 WebView2 Standalone x64 下载，并在构建机验证 Microsoft Corporation 的有效数字签名。编译与打包均不触发 GitHub 发布。
+Windows 安装包在运行便携包构建后，用 Inno Setup 7 编译 `tools/windows-installer.iss`。默认读取 `dist/SafeCode-0.4.0-win-x64` 和 `.local/installer/MicrosoftEdgeWebView2RuntimeInstallerX64.exe`，输出至 `dist`；也可通过 `AppSource`、`RuntimeSource`、`SetupOutput` 预处理参数指定绝对路径。离线 Runtime 从微软官方 WebView2 Standalone x64 下载，并在构建机验证 Microsoft Corporation 的有效数字签名。编译与打包均不触发 GitHub 发布。
+
+更新与反馈入口提供 GitHub 正式 Release 检测、SHA256 校验下载与用户确认安装。基础使用统计和主动反馈接入独立 HTTPS 服务，详见 [在线更新](docs/UPDATES.md) 与 [服务端维护](services/feedback/README.md)。

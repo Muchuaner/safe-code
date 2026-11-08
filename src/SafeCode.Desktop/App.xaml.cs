@@ -9,7 +9,7 @@ public partial class App : Application
             string dir=System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode");System.IO.Directory.CreateDirectory(dir);
             System.IO.File.WriteAllText(System.IO.Path.Combine(dir,"last-error.txt"),exception.Exception.ToString());
         };
-        singleInstance=new System.Threading.Mutex(true,"Local\\SafeCode-"+(e.Args.Contains("--acceptance")?"Acceptance-":"")+System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value,out bool created);
+        singleInstance=new System.Threading.Mutex(true,"Local\\SafeCode-"+((e.Args.Contains("--acceptance")||e.Args.Contains("--services-acceptance"))?"Acceptance-":"")+System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value,out bool created);
         if(!created){MessageBox.Show("Safe Code 已在运行，请切换到已有窗口。","Safe Code");Shutdown();return;}
         base.OnStartup(e);
         if(e.Args.Length>=3&&e.Args[0]=="--acceptance")System.IO.File.WriteAllText(e.Args[2]+".stage.log","启动\n");

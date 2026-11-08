@@ -314,3 +314,7 @@ document.querySelectorAll('[data-reveal]').forEach(button=>{setEye(button,false)
 function openAccountSettings(){$('#account-settings').showModal();}
 $('#account-settings-form').onsubmit=e=>{e.preventDefault();$('#account-settings').close();states[0]='pending';renderTasks();};
 for(const id of ['server-ingress','server-address']){const value=document.getElementById(id);const eye=document.createElement('button');eye.className='ip-eye reveal';eye.type='button';eye.setAttribute('aria-label','隐藏'+(id==='server-ingress'?'入口':'出口')+' IP');setEye(eye,true);let visible=true;let actual='';eye.onclick=()=>{if(visible)actual=value.textContent;visible=!visible;value.textContent=visible?actual:'•••.•••.•••.•••';eye.setAttribute('aria-label',(visible?'隐藏':'显示')+' IP');setEye(eye,visible);};new MutationObserver(()=>{if(!visible&&value.textContent!=='•••.•••.•••.•••'){actual=value.textContent;value.textContent='•••.•••.•••.•••';}}).observe(value,{childList:true});value.after(eye);}
+for(const button of document.querySelectorAll('[data-open-services]'))button.onclick=()=>$('#services-dialog').showModal();
+for(const id of ['usage-consent','settings-usage-consent'])document.getElementById(id).onchange=e=>{const enabled=e.target.checked;$('#usage-consent').checked=enabled;$('#settings-usage-consent').checked=enabled;};
+$('#feedback-form').onsubmit=e=>{e.preventDefault();$('#feedback-status').textContent='请在 Windows 客户端内提交反馈。';};
+$('#check-update').onclick=()=>{$('#update-status').textContent='请在 Windows 客户端内检查更新。';};
