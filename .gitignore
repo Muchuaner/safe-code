@@ -6,3 +6,11 @@
 node_modules/
 .local/
 artifacts/
+**/bin/
+**/obj/
+.local/
+dist/
+*.user
+
+__pycache__/
+*.pyc
