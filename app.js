@@ -99,7 +99,7 @@ function resetLogin(){
   $('#connection-message').className='connection-message';$('#connection-message').textContent='';
 }
 $('#login-form').onsubmit=event=>{
-  event.preventDefault();const ip=$('#ip').value.trim();const username=$('#username').value.trim();
+  event.preventDefault();if(window.__safeCodeDesktop){alert('客户端核心模块未就绪，无法连接。');return;}const ip=$('#ip').value.trim();const username=$('#username').value.trim();
   if(!ip || !username){$('#connection-message').textContent='请填写 IP 地址和用户名。';$('#connection-message').className='connection-message error';return;}
   $('#login-form').querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#back').disabled=true;
   $('#connect').textContent='正在连接…';$('#connection-message').textContent='正在建立 SSH 连接，请稍候…';$('#connection-message').className='connection-message connecting';
@@ -154,6 +154,7 @@ function updateTaskLog(index,message){
   renderTasks();
 }
 async function simulateTask(index,token){
+  if(window.__safeCodeDesktop)throw new Error('桌面客户端不允许使用模拟部署。');
   if(index===1&&!currentLocale())return false;
   states[index]='running';
   const preset=currentLocale();
@@ -192,38 +193,33 @@ async function queryIpInfo(ip){
     $('#score-source').textContent='Net.Coffee · IP 评分';$('#score-source').href='https://ip.net.coffee/claude/';
     $('#score-source').title='当前为示例 IP，归属地与评分仅为界面示意；真实查询暂支持公网 IPv4。';return;
   }
-  detectedRegion=null;renderTasks();
-  const controller=new AbortController();ipQueryController=controller;
-  const timeout=setTimeout(()=>controller.abort(),12000);
+  detectedRegion=null;renderTasks();const controller=new AbortController();ipQueryController=controller;
+  const timeout=setTimeout(()=>controller.abort(),35000);
   $('#rating-state').textContent='查询中';$('#ip-location').textContent='正在查询…';$('#ip-score').textContent='—';$('#score-unit').textContent='';
-  $('#score-source').textContent='Net.Coffee · IP 评分';$('#score-source').href='https://ip.net.coffee/ip/'+encodeURIComponent(ip);
+  $('#score-source').href='https://ip.net.coffee/ip/'+encodeURIComponent(ip);
   try{
-    const results=await Promise.allSettled(['geoip','iprisk'].map(async endpoint=>{
-      const response=await fetch('https://ip.net.coffee/api/'+endpoint+'/'+encodeURIComponent(ip),{signal:controller.signal,credentials:'omit',referrerPolicy:'no-referrer'});
-      if(!response.ok)throw new Error('查询失败');return response.json();
-    }));
-    if(ipQueryController!==controller)return;
-    const geo=results[0].status==='fulfilled'?results[0].value:null;
-    const risk=results[1].status==='fulfilled'?results[1].value:null;
-    const countryCode=(geo?.country_code||risk?.countryCode||'').toLowerCase();
-    const regions={jp:'jp',sg:'sg',gb:'gb',de:'de',kr:'kr'};
-    detectedRegion=countryCode==='us'?({'New York':'us_ny','Los Angeles':'us_la'}[geo?.city]||null):(regions[countryCode]||null);
-    renderTasks();
-    const country={ 'United States':'美国','Singapore':'新加坡','Japan':'日本','Germany':'德国','United Kingdom':'英国','Canada':'加拿大','Australia':'澳大利亚','China':'中国','Netherlands':'荷兰' };
-    const city={ 'New York':'纽约','Los Angeles':'洛杉矶','Singapore':'新加坡','Tokyo':'东京' };
-    $('#ip-location').textContent=geo&&geo.country?[country[geo.country]||geo.country,city[geo.city]||geo.city].filter(Boolean).join(' · '):'归属地暂无数据';
-    const score=risk&&risk.trust_score;
-    const validScore=typeof score==='number'&&Number.isFinite(score)&&score>=0&&score<=100;
-    $('#ip-score').textContent=validScore?String(score):'—';$('#score-unit').textContent=validScore?' / 100':'';
-    $('#rating-state').textContent=validScore?(risk.ip!==ip?'网段评分':'第三方'):'暂无评分';
-    $('#score-source').title=validScore?'Net.Coffee 信任评分，可能按网段缓存，并非 Claude 官方评分。':'第三方查询暂不可用，可点击前往原站查看。';
-  }catch{
-    if(ipQueryController!==controller)return;
-    $('#rating-state').textContent='暂不可用';$('#ip-location').textContent='归属地暂无数据';$('#ip-score').textContent='—';$('#score-unit').textContent='';
-  }finally{clearTimeout(timeout);}
+    const response=await fetch('https://ip.net.coffee/api/ip/lookup/'+encodeURIComponent(ip),{signal:controller.signal,credentials:'omit',referrerPolicy:'no-referrer'});
+    if(!response.ok)throw new Error('查询失败');const data=await response.json();if(ipQueryController!==controller)return;
+    const geo=selectGeoConsensus(data);const countries={'Japan':'日本','United States':'美国','Hong Kong':'香港','Singapore':'新加坡','Germany':'德国','United Kingdom':'英国','South Korea':'韩国'};const cities={'Tokyo':'东京','New York':'纽约','Los Angeles':'洛杉矶','Singapore':'新加坡'};
+    $('#ip-location').textContent=[countries[geo.country]||geo.country,cities[geo.city]||geo.city].filter(Boolean).join(' · ')||'定位待确认';
+    const score=data.trust_score;const valid=typeof score==='number'&&Number.isFinite(score)&&score>=0&&score<=100;
+    $('#ip-score').textContent=valid?String(score):'—';$('#score-unit').textContent=valid?' / 100':'';$('#rating-state').textContent=geo.source;
+    $('#score-source').title='定位优先采用 Net.Coffee 多源综合结果；评分可能按网段缓存，并非 Claude 官方评分。';
+    const regionMap={jp:'jp',sg:'sg',gb:'gb',de:'de',kr:'kr'};detectedRegion=geo.code==='us'?({'New York':'us_ny','Los Angeles':'us_la'}[geo.city]||null):(regionMap[geo.code]||null);renderTasks();
+  }catch{if(ipQueryController!==controller)return;$('#rating-state').textContent='暂不可用';$('#ip-location').textContent='暂无归属地';$('#ip-score').textContent='—';$('#score-unit').textContent='';}
+  finally{clearTimeout(timeout);}
+}
+function selectGeoConsensus(data){
+  let result={country:data.country||'',code:(data.countryCode||'').toLowerCase(),city:data.city||'',source:'简表'};
+  const sources=(data.geo_sources||[]).filter(x=>x.country_code);const groups=new Map();for(const source of sources){const code=source.country_code.toLowerCase();if(!groups.has(code))groups.set(code,[]);groups.get(code).push(source);}
+  const sorted=[...groups].sort((a,b)=>b[1].length-a[1].length);
+  if(sorted.length>1&&sorted[0][1].length===sorted[1][1].length)return{country:'定位待确认',code:'',city:'',source:'来源有分歧'};
+  if(sorted.length){const[code,items]=sorted[0];const counts=new Map();for(const x of items)if(x.city)counts.set(x.city,(counts.get(x.city)||0)+1);const cities=[...counts].sort((a,b)=>b[1]-a[1]||a[0].length-b[0].length);result={country:items[0].country||'',code,city:cities[0]?.[0]||items[0].region||'',source:'多源综合'};}
+  return result;
 }
 
 function installAdvanced(kind){
+  if(window.__safeCodeDesktop)throw new Error('桌面客户端不允许使用模拟安装。');
   const button=$('#install-'+kind);if(button.disabled)return;
   button.disabled=true;button.textContent='安装中…';$('#'+kind+'-state').textContent='正在安装组件…';
   const timer=setTimeout(()=>{
@@ -239,7 +235,7 @@ function appendMountPair(pair={local:'',remote:''}){
   const row=document.createElement('div');row.className='mount-pair';
   const heading=document.createElement('div');heading.className='mount-pair-heading';
   const title=document.createElement('span');title.className='mount-pair-number';
-  const remove=document.createElement('button');remove.type='button';remove.className='text-button';remove.textContent='移除';remove.onclick=()=>{row.remove();numberMountPairs();};
+  const remove=document.createElement('button');remove.type='button';remove.className='text-button mount-remove';remove.textContent='移除';remove.onclick=()=>{row.remove();numberMountPairs();};
   heading.append(title,remove);row.append(heading);
   for(const [key,label,placeholder] of [['local','本地目录','C:\\Users\\You\\Projects'],['remote','服务器目录','/home/workspace/projects']]){
     const field=document.createElement('label');field.textContent=label;
@@ -248,7 +244,7 @@ function appendMountPair(pair={local:'',remote:''}){
   $('#mount-list').append(row);numberMountPairs();
 }
 function numberMountPairs(){
-  $('#mount-list').querySelectorAll('.mount-pair').forEach((row,i)=>{row.querySelector('.mount-pair-number').textContent='目录 '+(i+1);row.querySelector('button').setAttribute('aria-label','移除目录 '+(i+1));});
+  $('#mount-list').querySelectorAll('.mount-pair').forEach((row,i)=>{row.querySelector('.mount-pair-number').textContent='目录 '+(i+1);row.querySelector('.mount-remove').setAttribute('aria-label','移除目录 '+(i+1));});
   $('#mount-count').textContent=$('#mount-list').children.length+' 组目录';
 }
 $('#mount-settings').onclick=()=>{

@@ -1,50 +1,62 @@
 # Safe Code
 
-为海外中文用户准备 VPS 开发环境的开源桌面工具。目前仓库提供应用界面与交互概念稿，桌面客户端及真实部署功能尚未实现。
+面向海外中文用户的开源 VPS 开发环境配置工具。当前本地开发版已包含 Windows 原生宿主、真实 SSH 部署、维护操作与进阶选项；**此版本按项目所有者要求暂不上传 GitHub**。软件面向海外中文用户，中国大陆禁止使用。
 
-软件面向海外中文用户，中国大陆禁止使用。
+## 运行 Windows 客户端
 
-## 本地预览
+解压 `dist/SafeCode-0.2.0-win-x64.zip`，运行 `SafeCode.exe`。自包含 .NET 运行时；无需 Python、Node.js、WSL 或 .NET SDK。需已有 Microsoft Edge WebView2 Runtime。详见 [Windows 使用说明](docs/WINDOWS.md)。
 
-界面使用原生 HTML、CSS 和 JavaScript，无需安装第三方依赖。
+输入 IP、用户名、密码，核对首次 SSH 指纹。**仅 Ubuntu 可以安装；非 Ubuntu 在任何部署写入前明确拒绝。** 安装管理员需为 root 或免密 sudo。支持目标为 Ubuntu 22.04 / 24.04 x86_64 的 systemd VPS，推荐 4GB 内存；实际环境验证为 Ubuntu 24.04 与 Windows 10 19045 x64。
+
+## 功能
+
+- 七步部署：普通工作用户、本土化、XFCE / xrdp、Chrome、中文拼音、Claude Code / Git / tmux、工作用户 SSH 密钥。单项或勾选批量执行，已完成项不能重复选择，输出真实日志。
+- 独立远端部署任务，断线不终止包安装；重连恢复监控，完成状态来自实际软件与服务检查。
+- 维护卡片：工作账户及复制、Windows MSTSC 远程桌面、真实 OpenSSH 终端。关闭应用释放本次连接资源。
+- 多目录挂载：本机目录经会话认证的回环文件服务和反向 SSH 通道挂载到 VPS，支持保存多组映射，退出前同步卸载。
+- CloudCLI：安装固定版本并以普通用户、回环地址运行，SSH 隧道内一键打开网页，账号授权由本人完成。
+- 出入口 IP 锁定 / 更换：只接受已分配地址，验证新连接、实际出口；独立定时回退、失败关闭与开机恢复。只管理本软件的策略，不清空系统规则。
+- 按出口 IP 综合定位推荐时区与语言，提供手动选择。Net.Coffee 多源定位优先于注册地简表；平票时要求确认。
+
+## 构建与项目结构
+
+开发需要 .NET 10 SDK。Windows 宿主使用 WPF + WebView2，沿用已确认的极简界面；SSH、权限检查、安装、隧道、文件桥与系统客户端调用在 C# / Ubuntu 模块中完成。
+
+```sh
+dotnet build src/SafeCode.Desktop/SafeCode.Desktop.csproj
+dotnet publish src/SafeCode.Desktop -c Release -r win-x64 --self-contained true -o dist/win-x64
+```
+
+带许可证、完整文件清单与哈希的便携包可用构建辅助程序生成（开发机需 Python 3）：
+
+```sh
+python3 tools/build_portable.py --dotnet dotnet
+```
+
+- `src/SafeCode.Core`：SSH 核心、独立作业、目录共享、IP 策略与地域解析。
+- `src/SafeCode.Core/Remote`：Ubuntu 部署与网络策略；检查 OS 后才允许写入。
+- `src/SafeCode.Desktop`：Windows 宿主、最小化 / 最大化 / 关闭、系统客户端与受限本机桥接。
+- `native.js`：真实桌面桥接。未成功加载时桌面版禁止退回模拟部署。
+- `src/SafeCode.Verify`、`tools/test_*.py`：集成与边界测试工具；测试凭据须由本机私密配置提供，不包含在源码中。
+
+## 浏览器概念预览
+
+原始浏览器交互概念稿仍可使用：
 
 ```sh
 python3 -m http.server 5173 --bind 127.0.0.1
 ```
 
-在浏览器打开 http://127.0.0.1:5173/ 。也可直接打开 `index.html`，但复制和 IP 查询等浏览器能力建议通过本地 HTTP 预览。
+打开 http://127.0.0.1:5173/ 。**普通浏览器模式仍模拟 SSH / 安装，不可作为部署结果；Windows 客户端才调用真实后端。** 预览省略了模拟标签以便观察布局。请勿在概念稿输入真实密码。
 
-## 当前演示内容
+## 安全与数据边界
 
-- 小型桌面窗口：声明、服务器登录、最小化、最大化和关闭；连接后展开为同尺寸的部署 / 维护界面。
-- 部署模式：工作用户、本土化、虚拟桌面、Chrome、中文输入法、Claude Code、SSH 通道七项；支持单项部署、勾选批量部署及逐条日志。
-- 本土化：按出口 IP 归属地匹配时区与语言，无法确定时手动选择。日本使用 `Asia/Tokyo` 与 `ja_JP.UTF-8`；中文输入法独立保留。
-- 维护模式：工作账户及复制、远程桌面、终端；账户信息使用二级弹窗，客户端通过独立示意窗口展示，主界面不展开额外内容。
-- 进阶选项：多组本地目录到服务器目录的挂载设置、CloudCLI 网页界面、入口 / 出口 IP 的锁定与更换。
-- 顶部状态：入口与出口 IP、连接延迟、丢包率、IP 归属和第三方评分。
+登录密码不持久保存、不打印。工作用户与管理员分离，生成独立随机密码；本机密钥限制访问权限。巡检不会以 root 执行用户可写程序，用户配置写入以普通用户进行，拒绝越界符号链接。目录桥拒绝未认证请求、路径穿越和符号链接逃逸；RDP / CloudCLI 默认只监听 VPS 回环。
 
-## 演示边界与数据处理
+IP 评分仅向 Net.Coffee 发送出口 IP；出口探测访问 ipify。不向开发者上传账号、密码、目录内容或遥测。第三方工具自身的账号授权和许可由原厂提供。详细限制见 [Windows 使用说明](docs/WINDOWS.md) 与 [测试记录](docs/VERIFICATION.md)。
 
-**SSH 登录、安装、挂载、IP 锁定、时区语言变更、延迟和丢包率均为模拟，不会连接或修改 VPS，也不会启动真实的 Windows 远程桌面或终端。** 为便于观察布局，页面内省略了模拟标签。请使用示例登录信息，切勿将演示状态当作真实部署结果。
+## 项目入口与许可证
 
-账户弹窗中的用户名和密码是固定示例数据。登录密码在模拟连接结束后清空；设置保留在页面内存，刷新后重置，不写入本地存储。
+[GitHub](https://github.com/Muchuaner/safe-code) · [QQ 群](https://qm.qq.com/q/cyUWAwYKQg) · [VPS 推荐](https://www.rainyun.com/Agentom_)
 
-输入有效公网 IPv4 时，页面会向 Net.Coffee 的 `geoip` 和 `iprisk` 接口发送该 IP，获取归属地和评分；不会发送账户和密码。查询可能因服务、限流或网络原因失败，接口也可能变更。评分可能按网段缓存，不是 Anthropic 官方判断或可用性承诺。示例 / 非公网地址的归属地和评分为界面示意值。多时区地区仅在能匹配具体城市时自动选取时区。
-
-目录映射只保存文本配置，不读取文件。CloudCLI 只提供打开效果示意，不下载或安装第三方软件。真正实现网络锁定时，仍需验证 IP 绑定、策略路由及出口故障不回退等行为。
-
-## 项目与社区
-
-- [GitHub 项目](https://github.com/Muchuaner/safe-code)
-- [QQ 互助群](https://qm.qq.com/q/cyUWAwYKQg)
-- [VPS 推荐 · 雨云](https://www.rainyun.com/Agentom_)：推广链接。
-
-以上入口同时显示在应用右上方，统一配置于 `app.js` 的 `resourceLinks`。
-
-## 开发方向
-
-下一阶段实现 Windows 桌面客户端、真实 SSH 部署与隧道管理，以及环境自检、配置备份和失败回滚。当前概念稿不代表这些功能已经完成。
-
-## 许可证
-
-本项目采用 [MIT 许可证](LICENSE)。CloudCLI 等第三方项目未随本仓库打包，其各自许可证由原项目维护。
+自有源码采用 [MIT](LICENSE)。第三方依赖及单独安装组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
