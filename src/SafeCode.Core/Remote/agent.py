@@ -161,7 +161,7 @@ def inspect():
     if locale_state.exists():
         desired=json.loads(locale_state.read_text())
         timezone=run(['timedatectl','show','-p','Timezone','--value'],False).stdout.strip()
-        localized=timezone==desired.get('timezone') and Path('/etc/default/locale').exists() and desired.get('locale','') in Path('/etc/default/locale').read_text()
+        localized=timezone==desired.get('timezone') and Path('/etc/default/locale').exists() and desired.get('locale','') in Path('/etc/default/locale').read_text() and all(package_installed(p) for p in locale_packages(desired.get('locale','')))
     pub=user_read('.ssh/authorized_keys') if account_ok else ''
     statuses={
       'account':account_ok,
@@ -209,12 +209,18 @@ def setup_account(options):
     user_write('workspace/.keep','')
     log('工作账户与项目目录已创建。')
 
+def locale_packages(locale):
+    language=locale.split('_',1)[0]
+    if not re.fullmatch('[a-z]{2}',language):raise RuntimeError('系统语言无效。')
+    if language=='zh':language='zh-hant' if locale.startswith(('zh_TW','zh_HK','zh_MO')) else 'zh-hans'
+    return ['language-pack-'+language,'language-pack-gnome-'+language]
+
 def setup_locale(options):
     account()
     timezone=options.get('timezone','');locale=options.get('locale','')
     if not timezone or '..' in timezone or not (Path('/usr/share/zoneinfo')/timezone).is_file():raise RuntimeError('请选择有效的 IANA 时区。')
     if not re.fullmatch('[a-z]{2}_[A-Z]{2}\\.UTF-8',locale):raise RuntimeError('请选择有效的 UTF-8 系统语言。')
-    apt(['locales','tzdata'])
+    apt(['locales','tzdata']+locale_packages(locale))
     supported=Path('/usr/share/i18n/SUPPORTED').read_text()
     if locale+' UTF-8' not in supported:raise RuntimeError('Ubuntu 不支持此 Locale。')
     log('设置时区：'+timezone);run(['timedatectl','set-timezone',timezone])
