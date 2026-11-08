@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Safe Code</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+<main class="window" id="window" aria-label="Safe Code 应用窗口">
+  <header class="titlebar"><span class="app-name">Safe Code</span><div class="window-controls"><button id="minimize" class="window-control" aria-label="最小化" title="最小化">−</button><button id="maximize" class="window-control" aria-label="最大化" title="最大化"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9"/></svg></button><button id="close" class="close" aria-label="退出软件" title="退出软件">×</button></div></header>
+  <section class="screen" id="notice-screen">
+    <div class="intro"><h1>Safe Code</h1><p>简单配置，安心开发。</p></div>
+    <div class="declaration"><h2>使用前，请先了解</h2><p>本程序纯开源、完全免费。<br>不会上传您的任何个人信息。</p><p>本程序仅面向海外中文用户，<br><strong>中国大陆禁止使用。</strong></p></div>
+    <div class="bottom-actions"><button class="primary" id="accept">我已知晓，确认并继续 <span>→</span></button><button class="plain" id="exit">退出软件</button></div>
+
+  </section>
+  <section class="screen" id="login-screen" hidden>
+    <div class="login-heading"><span class="kicker">连接你的工作空间</span><h1>登录服务器</h1><p>输入 VPS 信息，通过 SSH 建立连接。</p></div>
+    <form id="login-form" autocomplete="off">
+      <label for="ip">IP 地址</label><input id="ip" name="ip" placeholder="例如 203.0.113.10" required spellcheck="false" autocomplete="off">
+      <label for="username">用户名</label><input id="username" name="username" placeholder="例如 root" required spellcheck="false" autocomplete="off">
+      <label for="password">密码</label><div class="password-wrap"><input id="password" name="password" type="password" placeholder="请输入服务器密码" required autocomplete="off"><button type="button" class="reveal" id="reveal" aria-label="显示密码">显示</button></div>
+      <div id="connection-message" class="connection-message" role="status"></div><p class="rating-disclosure">真实公网 IP 将发送至 Net.Coffee 查询评分，不发送账户或密码。</p>
+      <button class="primary" id="connect" type="submit">连接服务器 <span>→</span></button>
+    </form>
+    <button class="plain back" id="back">返回使用声明</button>
+  </section>
+  <section class="workspace" id="workspace-screen" hidden>
+    <div class="connected-header"><div class="connection-card"><div class="ip-addresses"><div class="ip-address-row"><span class="ip-address-label">入口 IP</span><span class="ip-address-value" id="server-ingress"></span></div><div class="ip-address-row"><span class="ip-address-label">出口 IP</span><span class="ip-address-value" id="server-address"></span></div></div><p class="server-metadata"><span id="server-user"></span> <span class="separator">/</span> Ubuntu 24.04 <span class="separator">/</span> SSH</p></div><section class="network-card" aria-label="服务器网络状态"><div class="network-top"><div><span class="metric-label">连接延迟 </span><strong>168 <small>ms</small></strong></div><div><span class="metric-label">丢包率 </span><strong>0 <small>%</small></strong></div></div><div class="ip-intel"><div class="ip-intel-label"><span>IP 归属与评分</span><span id="rating-state"></span></div><div class="ip-intel-data"><span id="ip-location">美国 · 纽约</span><strong><span id="ip-score">85</span><small id="score-unit"> / 100</small></strong></div></div><a id="score-source" href="https://ip.net.coffee/claude/" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Net.Coffee · IP 评分</a></section><div class="header-controls"><div class="mode-buttons" aria-label="工作模式"><button class="mode-button active" id="deployment-mode" aria-pressed="true">部署模式</button><button class="mode-button" id="maintenance-mode" aria-pressed="false">维护模式</button></div><nav class="resource-links" aria-label="相关链接"><a class="resource-link sponsor-link" data-resource="vps">VPS 推荐 <span>推广</span></a><a class="resource-link" data-resource="qq">QQ 互助群</a><a class="resource-link" data-resource="github">GitHub</a></nav></div></div>
+    <div class="deployment-panel" id="deployment-panel"><div class="deployment-heading"><h2>配置开发环境</h2><span>按步骤部署，或一次完成。</span></div>
+    <div class="steps" id="steps"></div>
+    <div class="deploy-footer"><div><span id="overall-status" role="status">0 / 7 已完成</span><p id="overall-detail">可单项部署，或选择所需项目批量部署。</p></div><div class="batch-actions"><button class="text-button" id="cancel-selection" hidden>取消</button><button class="primary" id="deploy-all">一键部署</button></div></div>
+    </div>
+    <section class="maintenance-panel" id="maintenance-panel" hidden>
+      <div class="maintenance-heading"><h2>服务器维护</h2><p>常用操作，点击即可运行。</p></div>
+      <div class="maintenance-cards">
+        <button class="maintenance-card" id="account-card"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg><h3>工作账户</h3><p>查看用户名与密码</p><span>查看账户</span></button>
+        <button class="maintenance-card" id="desktop-card"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5M7 21h10"/></svg><h3>远程桌面</h3><p>打开并连接服务器桌面</p><span>打开桌面</span></button>
+        <button class="maintenance-card" id="terminal-card"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></svg><h3>SSH 终端</h3><p>打开终端并连接服务器</p><span>连接终端</span></button>
+      </div>
+      <div class="advanced-heading"><h2>进阶选项</h2><span>按需扩展你的工作环境。</span></div>
+      <div class="advanced-cards">
+        <article class="advanced-card"><div class="advanced-copy"><svg viewBox="0 0 24 24"><path d="M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M9 13h6m-3-3v6"/></svg><div><h3>目录挂载</h3><p id="mount-summary">将本机目录挂载到服务器，支持多组目录。</p></div></div><div class="advanced-actions"><span id="mount-state">未安装</span><button class="deploy-button" id="install-mount">安装</button><button class="deploy-button" id="mount-settings">设置</button></div></article>
+        <article class="advanced-card"><div class="advanced-copy"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18m-13 4-2 2 2 2m8-4 2 2-2 2"/></svg><div><h3>CloudCLI 网页界面</h3><p>在浏览器中使用 Claude Code。</p></div></div><div class="advanced-actions"><span id="cloud-state">未安装</span><button class="deploy-button" id="install-cloud">安装</button><button class="deploy-button" id="open-cloud" disabled>打开</button></div></article>
+        <article class="advanced-card"><div class="advanced-copy"><svg viewBox="0 0 24 24"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg><div><h3>出入口 IP</h3><p id="ip-policy-summary">入口用于接入，住宅 IP 用于出站。</p></div></div><div class="advanced-actions"><span id="ip-policy-state">未锁定</span><button class="deploy-button" id="lock-ips">锁定设置</button><button class="deploy-button" id="change-ips">更换 IP</button></div></article>
+      </div>
+    </section>
+    <div class="workspace-bottom"><span>SAFE CODE <span class="separator">/</span> 开源 · 免费 · 本地运行</span></div>
+  </section>
+</main>
+<dialog class="account-window" id="maintenance-result" aria-labelledby="result-title"><header class="titlebar"><span class="app-name" id="result-title">工作账户</span><button class="close" id="close-result" aria-label="关闭账户窗口">×</button></header><div class="account-body"><h2>工作账户</h2><p class="account-description">用于登录远程桌面和日常开发。</p><div id="result-body"></div><button class="primary" id="account-done">关闭</button></div></dialog>
+<dialog id="ip-policy-dialog" class="config-dialog" aria-labelledby="ip-policy-title"><header class="titlebar"><span class="app-name" id="ip-policy-title">出入口 IP 设置</span><button class="close" id="close-ip-policy" aria-label="关闭出入口设置">×</button></header><form id="ip-policy-form" class="config-body"><h2>入口与出口，各司其职。</h2><p class="config-description">填写已分配到这台 VPS 的 IP 地址。</p><label for="ingress-ip-input">入口 IP<input id="ingress-ip-input" required spellcheck="false" placeholder="普通 IP，用于 SSH 与桌面接入"></label><label for="egress-ip-input">出口 IP<input id="egress-ip-input" required spellcheck="false" placeholder="住宅 IP，用于对外访问"></label><label class="policy-toggle"><input type="checkbox" id="lock-ingress"><span>锁定入口接入<small>管理连接仅通过指定的入口 IP。</small></span></label><label class="policy-toggle"><input type="checkbox" id="lock-egress"><span>固定住宅出口<small>对外流量仅使用指定出口，故障时不切换其他 IP。</small></span></label><div class="config-footer"><span>更换出口后重新检查本土化设置。</span><button class="primary" type="submit">保存设置</button></div></form></dialog>
+<dialog id="localization-dialog" class="config-dialog" aria-labelledby="localization-title"><header class="titlebar"><span class="app-name" id="localization-title">本土化设置</span><button class="close" id="close-localization" aria-label="关闭本土化设置">×</button></header><form id="localization-form" class="config-body"><h2>与出口所在地保持一致。</h2><p class="config-description">按出口 IP 选择时区与系统语言，中文输入法保留。</p><label for="locale-region">所在地<select id="locale-region"><option value="auto">自动识别出口 IP</option><option value="jp">日本</option><option value="us_ny">美国 · 纽约</option><option value="us_la">美国 · 洛杉矶</option><option value="sg">新加坡</option><option value="gb">英国</option><option value="de">德国</option><option value="kr">韩国</option></select></label><div class="locale-preview"><div><span>时区</span><strong id="locale-timezone"></strong></div><div><span>系统语言</span><strong id="locale-language"></strong></div><div><span>Locale</span><strong id="locale-code"></strong></div></div><div class="config-footer"><span id="locale-hint">默认按出口 IP 的归属地匹配。</span><button class="primary" type="submit">保存设置</button></div></form></dialog>
+<dialog id="mount-dialog" class="mount-dialog" aria-labelledby="mount-title"><header class="titlebar"><span class="app-name" id="mount-title">目录挂载设置</span><button type="button" class="close" id="close-mount" aria-label="关闭挂载设置">×</button></header><form id="mount-form"><div class="mount-intro"><h2>挂载你的本地目录</h2><p>将这台电脑上的目录，映射到服务器的指定位置。</p></div><div id="mount-list"></div><button type="button" class="add-mount" id="add-mount">＋ 添加目录</button><div class="mount-footer"><span id="mount-count">支持多组目录挂载</span><button class="primary" type="submit">保存设置</button></div></form></dialog>
+<dialog id="client-window" class="client-window" aria-labelledby="client-window-title"><header class="titlebar"><span class="app-name" id="client-window-title"></span><button class="close" id="close-client" aria-label="关闭客户端窗口">×</button></header><iframe id="client-frame" title="客户端窗口"></iframe></dialog>
+<button id="restore-window" hidden aria-label="恢复 Safe Code 窗口">Safe Code <span>恢复窗口</span></button>
+<script src="app.js"></script>
+</body></html>

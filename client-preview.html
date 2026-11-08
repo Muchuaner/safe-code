@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Safe Code</title><style>
+*{box-sizing:border-box}body{margin:0;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:#f3f6f1;color:#35483a}header{height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:#fff;border-bottom:1px solid #e3e9df;font-size:11px}header span{color:#a1aca2;font-size:10px}.desktop{height:calc(100vh - 42px);display:flex;flex-direction:column}.toolbar{padding:10px 18px;background:#e7ece2;color:#6f806e;font-size:11px}.desktop-center{margin:auto;text-align:center;color:#8fa08b}.desktop-center h1{font-weight:400;font-size:28px;margin-bottom:12px}.desktop-center p{font-size:11px}.apps{display:flex;gap:35px;justify-content:center;margin-top:35px}.app-icon{background:#fff9;border:1px solid #dfe7d9;width:95px;padding:19px 8px;border-radius:5px;font-size:11px;color:#768970}.terminal{margin:0;height:calc(100vh - 42px);background:#202d25;color:#d0e0d0;padding:25px;font:13px/2 ui-monospace,Consolas,monospace;white-space:pre-wrap}.terminal small{font-family:inherit;color:#829b85;font-size:11px}.prompt{color:#88b88f}.cursor{animation:blink 1s infinite}@keyframes blink{50%{opacity:0}}[hidden]{display:none!important}
+</style></head><body><header><strong id="client-title"></strong><span>Safe Code</span></header><main class="desktop" id="desktop" hidden><div class="toolbar">应用程序　　文件管理器　　终端</div><div class="desktop-center"><h1>XFCE 工作桌面</h1><p>远程桌面已连接</p><div class="apps"><div class="app-icon">文件管理器</div><div class="app-icon">Chrome</div><div class="app-icon">终端</div></div></div></main><main class="terminal" id="terminal" hidden><small>Safe Code · SSH</small>
+
+Welcome to Ubuntu 24.04 LTS
+
+连接成功
+
+<span class="prompt">workspace@server:~$</span> <span class="cursor">▍</span></main><main id="cloud" hidden style="height:calc(100vh - 42px);display:flex;background:#fafbf9"><aside style="width:160px;padding:22px 16px;border-right:1px solid #e2e8e0;background:white"><strong style="font-size:16px;font-weight:500">CloudCLI</strong><p style="margin-top:30px;color:#7d8f7c">＋ 新建对话</p><p style="font-size:10px;margin-top:24px;color:#9ba797">项目 / workspace</p></aside><section style="flex:1;display:flex;flex-direction:column;padding:30px"><div style="margin:auto;text-align:center"><h1 style="font-size:25px;font-weight:400;color:#657f63">开始你的下一次创造</h1><p style="font-size:11px;color:#9aa996">在网页中使用 Claude Code</p></div><div style="padding:17px;background:white;border:1px solid #dce5d8;border-radius:6px;color:#a2aea0;font-size:11px">向 Claude 描述你的任务…</div></section></main><script>
+const kind=new URLSearchParams(location.search).get('client');
+const terminal=kind==='terminal';
+const cloud=kind==='cloud';
+document.title=cloud?'CloudCLI · Safe Code':terminal?'终端 · Safe Code':'远程桌面连接 · Safe Code';
+document.querySelector('#client-title').textContent=cloud?'CloudCLI — Claude Code 网页界面':terminal?'终端 — SSH':'远程桌面连接';
+document.querySelector(cloud?'#cloud':terminal?'#terminal':'#desktop').hidden=false;
+</script></body></html>
