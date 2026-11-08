@@ -22,6 +22,9 @@ public sealed class MainWindow : Window
     private int maintenanceOperations;
     private readonly CancellationTokenSource lifetime = new();
     private SshSession? session;
+    private CancellationTokenSource? connecting;
+    private bool connectionPending;
+    private (string Token,HostKeyInfo Key)? pendingHostTrust;
     private readonly object logLock=new();
     private (string Step,string Line)? latestLog;
     private readonly System.Windows.Threading.DispatcherTimer logTimer=new(){Interval=TimeSpan.FromMilliseconds(120)};
@@ -30,11 +33,12 @@ public sealed class MainWindow : Window
     private bool closingApproved;
     private string? acceptanceFingerprint;
     private readonly string[] arguments;
-    private bool IsAcceptance=>arguments.Length>=3&&(arguments[0]=="--acceptance"||arguments[0]=="--services-acceptance");
+    private bool IsAcceptance=>arguments.Length>=3&&(arguments[0]=="--acceptance"||arguments[0]=="--services-acceptance"||arguments[0]=="--connection-acceptance");
     private readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SafeCode");
     public MainWindow(string[] arguments)
     {
         if(arguments.Contains("--acceptance")||arguments.Contains("--services-acceptance"))dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Acceptance");
+        if(arguments.Contains("--connection-acceptance")){dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Connection-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;}
         services=new ClientServices(dataDirectory);
         this.arguments = arguments; Title = "Safe Code"; Width = 360; Height = 536;
         MinWidth = 360; MinHeight = 500; WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -69,7 +73,7 @@ public sealed class MainWindow : Window
             { using var cfg = JsonDocument.Parse(File.ReadAllText(arguments[1])); acceptanceFingerprint = cfg.RootElement.GetProperty("fingerprint").GetString(); }
             browser.CoreWebView2.SetVirtualHostNameToFolderMapping("safe-code.local", Path.Combine(AppContext.BaseDirectory, "Web"), CoreWebView2HostResourceAccessKind.DenyCors);
             await browser.CoreWebView2.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache);
-            if(IsAcceptance)await browser.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("window.__safeCodeAcceptance=true;");
+            if(IsAcceptance)await browser.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("window.__safeCodeAcceptance=true;window.__safeCodeConnectionAcceptance="+(arguments[0]=="--connection-acceptance"?"true":"false")+";");
             await browser.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("""
                 window.__safeCodeDesktop=true;
                 for(const name of ['click','keydown'])document.addEventListener(name,e=>{if(!window.safeCodeNativeReady&&!e.target.closest?.('[data-safe-code-startup-close]')){e.preventDefault();e.stopImmediatePropagation();}},true);
@@ -96,7 +100,7 @@ public sealed class MainWindow : Window
             browser.CoreWebView2.WebMessageReceived += OnMessage;
             browser.CoreWebView2.NavigationCompleted += async (_, e) =>
             {
-                if(e.IsSuccess&&IsAcceptance){if(arguments[0]=="--services-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunServicesAcceptance()");else await RunAcceptanceAsync(arguments[1],arguments[2]);}
+                if(e.IsSuccess&&IsAcceptance){if(arguments[0]=="--connection-acceptance"){using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunConnectionAcceptance("+cfg.RootElement.GetRawText()+")");}else if(arguments[0]=="--services-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunServicesAcceptance()");else await RunAcceptanceAsync(arguments[1],arguments[2]);}
             };
             browser.Source = new Uri("https://safe-code.local/index.html");
         }
@@ -156,7 +160,7 @@ public sealed class MainWindow : Window
             case "pickFolder": var dialog = new OpenFolderDialog { Title = "选择要挂载到 VPS 的本地目录", InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
             case "acceptance.capture":
                 if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
-                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services")throw new ArgumentException("截图标识无效。");
+                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services"&&tag!="loading"&&tag!="error"&&tag!="advanced"&&tag!="trust")throw new ArgumentException("截图标识无效。");
                 await Task.Delay(200);using(var image=File.Create(arguments[2]+"."+tag+".png"))await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);return true;
             case "client.verify":
                 if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
@@ -169,13 +173,25 @@ public sealed class MainWindow : Window
                 using (var file = File.Create(output + ".png")) await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, file);
                 Environment.ExitCode = args.GetProperty("success").GetBoolean() ? 0 : 1;
                 _ = Dispatcher.BeginInvoke(() => Close()); return true;
+            case "connection.cancel": connecting?.Cancel();pendingHostTrust=null;return true;
+            case "host.trust":
+                if(pendingHostTrust is not {} challenge||challenge.Token!=Read("token"))throw new InvalidOperationException("服务器身份确认已失效，请重新连接。");
+                new HostTrustStore(dataDirectory).Accept(challenge.Key);pendingHostTrust=null;return true;
+            case "notice.state":
+                string noticePath=Path.Combine(dataDirectory,"notice-accepted-v1");bool noticeAccepted=File.Exists(noticePath)||services.NoticeWasConfirmed;if(noticeAccepted&&!File.Exists(noticePath))File.WriteAllText(noticePath,DateTimeOffset.UtcNow.ToString("O"));return new{accepted=noticeAccepted};
+            case "notice.accept": File.WriteAllText(Path.Combine(dataDirectory,"notice-accepted-v1"),DateTimeOffset.UtcNow.ToString("O"));return true;
             case "connect":
+                if(connectionPending)throw new InvalidOperationException("连接正在处理中，请稍候。");
+                connectionPending=true;try{connecting?.Dispose();connecting=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);connecting.CancelAfter(TimeSpan.FromSeconds(90));
                 session?.Dispose(); session = new SshSession(dataDirectory);
                 session.Log += text => {if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","SSH "+text+"\n");lock(logLock)latestLog=(activeStep,text);};
                 var settings = new ConnectionSettings(Read("host"), Read("username"), Read("password"), args.TryGetProperty("port", out var port) ? port.GetInt32() : 22);
-                var server = await session.ConnectAsync(settings, host => acceptanceFingerprint != null ? acceptanceFingerprint == host.Fingerprint : Dispatcher.Invoke(() =>
-                    MessageBox.Show(this, "首次连接此服务器。请核对主机指纹：\n\n" + host.Host + ":" + host.Port + "\n" + host.Fingerprint + "\n\n是否信任并继续？", "核对 SSH 主机密钥", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes), lifetime.Token);
-                LocalSecrets.Save(settings);return server;
+                    var current=session;var server=await Task.Run(()=>current.ConnectAsync(settings,host=>acceptanceFingerprint!=null&&acceptanceFingerprint==host.Fingerprint,connecting.Token),connecting.Token);
+                    pendingHostTrust=null;LocalSecrets.Save(settings);return new{ready=true,server};
+                }catch(HostTrustRequiredException error){string token=Guid.NewGuid().ToString("N");pendingHostTrust=(token,error.Key);return new{requiresTrust=true,token,key=error.Key};}
+                catch(Exception error){pendingHostTrust=null;throw new InvalidOperationException(ConnectionErrors.Describe(error));}
+                finally{connectionPending=false;}
+
             case "job.resume":
                 if(deploying)throw new InvalidOperationException("已有任务正在监控。");deploying=true;activeStep=Read("operation");
                 try{return await RequireSession().ResumeJobAsync(Read("jobId"),lifetime.Token);}finally{deploying=false;activeStep="";}
@@ -208,7 +224,7 @@ public sealed class MainWindow : Window
             default: throw new InvalidOperationException("未知客户端操作。");
         }
     }
-    private SshSession RequireSession() => session?.IsConnected == true ? session : throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
+    private SshSession RequireSession() => !connectionPending&&session?.IsConnected == true&&session.Server!=null ? session : throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
     private async Task RespondAsync(string id, object? result, string? error)
     {
         if (lifetime.IsCancellationRequested || browser.CoreWebView2 == null) return;

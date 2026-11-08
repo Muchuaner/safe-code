@@ -9,7 +9,8 @@ namespace SafeCode.Desktop;
 // DPAPI CurrentUser: 密文只可由当前 Windows 用户在此系统解密。
 internal static class LocalSecrets
 {
-    private static readonly string FilePath=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode","login.dpapi");
+    internal static string? DirectoryOverride {get;set;}
+    private static string FilePath=>Path.Combine(DirectoryOverride??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode"),"login.dpapi");
     public static byte[] Protect(byte[] bytes)=>ProtectedData.Protect(bytes,null,DataProtectionScope.CurrentUser);
     public static void Save(ConnectionSettings settings)
     {

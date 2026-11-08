@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace SafeCode.Core;
 
 public sealed record ConnectionSettings(string Host, string Username, string Password, int Port = 22);
-public sealed record HostKeyInfo(string Host, int Port, string Fingerprint);
+public sealed record HostKeyInfo(string Host, int Port, string Fingerprint,string? PreviousFingerprint=null);
 public sealed record AccountInfo(string Username, string Password);
 public sealed record LocaleSettings(string Region, string Timezone, string Locale, string Language);
 public sealed record NetworkStats(double? LatencyMs, double LossPercent, int Probes);

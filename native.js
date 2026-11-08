@@ -17,6 +17,7 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     };
     window.safeCodeNativeLog = (step,line) => {
       if(currentTask>=0){taskLogs[currentTask]=line;renderTasks();}
+      else if(connectionInFlight&&!$('#workspace-screen').hidden){connectionProgress(line);}
       else if($('#login-screen').hidden===false){$('#connection-message').textContent=line;}
       else if($('#install-cloud').textContent==='安装中…'){$('#cloud-state').textContent=line.slice(-60);}
     };
@@ -28,7 +29,8 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     $('.titlebar').addEventListener('dblclick',e=>{if(!e.target.closest('button'))native('window.maximize');});
     const originalShowScreen=showScreen;showScreen=function(name){originalShowScreen(name);native('window.resize',{wide:name==='workspace'});};
     const advanced=document.createElement('button');advanced.type='button';advanced.className='plain';advanced.textContent='高级连接';advanced.style.marginTop='8px';
-    advanced.onclick=()=>{const value=prompt('SSH 端口',String(sshPort));if(value!==null){const port=Number(value);if(!Number.isInteger(port)||port<1||port>65535){alert('端口须为 1–65535。');return;}sshPort=port;}};
+    advanced.onclick=()=>{$('#ssh-port').value=String(sshPort);$('#advanced-dialog').showModal();$('#ssh-port').focus();};
+    $('#advanced-form').onsubmit=e=>{e.preventDefault();if(!$('#advanced-form').reportValidity())return;sshPort=Number($('#ssh-port').value);$('#advanced-dialog').close();};
     $('#login-form').append(advanced);
     function applyServer(server){
       nativeServer=server;states=ids.map(id=>server.statuses?.[id]?'done':'pending');
@@ -51,7 +53,7 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     const originalQuery=queryIpInfo;
     queryIpInfo=async function(ip){
       if(!isPublicIpv4(ip)){$('#ip-location').textContent='暂无归属地';$('#ip-score').textContent='—';$('#score-unit').textContent='';$('#rating-state').textContent='';detectedRegion=null;renderTasks();return;}
-      $('#rating-state').textContent='查询中';$('#ip-location').textContent='正在查询…';$('#ip-score').textContent='—';$('#score-unit').textContent='';
+      $('#rating-state').textContent='查询中';$('#ip-location').textContent='正在查询…';$('#ip-score').textContent='—';$('#score-unit').textContent='';renderTasks();
       try{
         const info=await native('ip.info',{ip});
         $('#ip-location').textContent=info.location||'暂无归属地';$('#ip-score').textContent=info.score===null?'—':String(info.score);$('#score-unit').textContent=info.score===null?'':' / 100';$('#rating-state').textContent=info.geoSource;
@@ -60,19 +62,60 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
       }catch{detectedRegion=null;$('#rating-state').textContent='暂不可用';$('#ip-location').textContent='暂无归属地';$('#ip-score').textContent='—';}
       if(nativeServer)applyServer(nativeServer);
     };
+    let connectionAttempt=0;let connectionReady=false;let connectionInFlight=false;let lastSettings=null;
+    function lockWorkspace(locked){for(const id of ['deployment-panel','maintenance-panel'])$( '#'+id).inert=locked;$('#workspace-screen').classList.toggle('is-connecting',locked);$('#maintenance-mode').disabled=locked;}
+    function connectionProgress(text,failed=false){$('#connection-progress').hidden=false;$('#connection-progress').classList.toggle('failed',failed);$('#connection-progress-text').textContent=text;$('#cancel-connect').hidden=failed;$('#retry-connect').hidden=!failed;$('#edit-connection').hidden=!failed;if(failed){busy=false;renderTasks();const values=$$('.network-top strong');for(const value of values)value.textContent='—';$('#rating-state').textContent='未连接';$('#ip-location').textContent='等待连接服务器';$('#server-address').textContent='待确认';}}
+    function prepareWorkspace(settings){
+      clearInterval(metricsTimer);nativeServer=null;connectionReady=false;connectionInFlight=true;busy=false;currentTask=-1;accountOptions={};detectedRegion=null;ipPolicy={lockIngress:false,lockEgress:false};
+      states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('等待连接完成。');selectedTasks.clear();selecting=false;renderTasks();
+      serverConnection={ingressIp:settings.host,egressIp:''};$('#server-ingress').textContent=settings.host;$('#server-address').textContent='正在检查…';$('#server-user').textContent=settings.username;
+      const user=$('#server-user');$('.server-metadata').replaceChildren(user,document.createTextNode(' / 系统待检查 / SSH'));
+      $('#ip-location').textContent='等待连接';$('#ip-score').textContent='—';$('#score-unit').textContent='';$('#rating-state').textContent='待检查';setMetrics(null);
+      switchMode('deployment');lockWorkspace(true);showScreen('workspace');connectionProgress('正在连接服务器…');
+    }
+    function confirmServerIdentity(response){const changed=!!response.key.previousFingerprint;
+      return appDialog(changed?'检测到服务器密钥已经变化。\n您是否重装过这台服务器？\n\n刚刚重装过，可选择“是”重新信任并连接；没有重装请选择“否”并核实服务器。':'首次连接这台服务器。\n请核对服务器身份，确认后建立连接。',{
+            title:changed?'是否重装过系统？':'确认服务器身份',confirm:changed?'是，重新连接':'信任并连接',cancel:changed?'否，取消':'取消',
+            details:'服务器：'+response.key.host+':'+response.key.port+(changed?'\n原指纹：'+response.key.previousFingerprint:'')+'\n新指纹：'+response.key.fingerprint});
+    }
     async function connect(settings){
-      $('#login-form').querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#back').disabled=true;
-      $('#connect').textContent='正在连接…';setMetrics(null);
+      const attempt=++connectionAttempt;lastSettings=settings;
+      $('#password').type='password';setEye($('#reveal'),false);prepareWorkspace(settings);
+      // 先呈现主界面，再开始 SSH；慢连接、身份确认和评分均留在主界面处理。
+      await native('window.resize',{wide:true});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       try{
-        const result=await native('connect',{host:settings.host,username:settings.username,password:settings.password,port:settings.port||sshPort});
+        let response;
+        for(;;){
+          if(attempt!==connectionAttempt)return null;
+          response=await native('connect',{host:settings.host,username:settings.username,password:settings.password,port:settings.port||sshPort});
+          if(attempt!==connectionAttempt)return null;
+          if(!response.requiresTrust)break;
+          const changed=!!response.key.previousFingerprint;
+          connectionProgress(changed?'等待确认：服务器密钥已变化。':'等待确认服务器身份。');
+          const accepted=await confirmServerIdentity(response);
+          if(attempt!==connectionAttempt)return null;
+          if(!accepted){connectionInFlight=false;await native('connection.cancel');connectionProgress('已取消连接，原信任记录未修改。',true);return null;}
+          await native('host.trust',{token:response.token});connectionProgress('正在重新连接服务器…');
+        }
+        const result=response.server;
         $('#password').value='';serverConnection={ingressIp:result.ipPolicy?.ingressIp||settings.host,egressIp:result.ipPolicy?.egressIp||result.observedEgressIp||''};$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp||'待确认';
-        taskLogs=Array(tasks.length).fill('');selecting=false;selectedTasks.clear();busy=false;detectedRegion=null;applyServer(result);switchMode('deployment');showScreen('workspace');
-        clearInterval(metricsTimer);const measure=async()=>{if(metricsBusy)return;metricsBusy=true;try{setMetrics(await native('metrics'));}catch{setMetrics({latencyMs:null,lossPercent:100});}finally{metricsBusy=false;}};metricsTask=measure();metricsTimer=setInterval(measure,5000);
-        await queryIpInfo(serverConnection.egressIp);applyServer(result);if(result.activeJobs?.length)resumeJob(result.activeJobs[0]);return result;
+        taskLogs=Array(tasks.length).fill('');busy=false;connectionReady=true;connectionInFlight=false;lockWorkspace(false);applyServer(result);
+        $('#connection-progress').hidden=true;
+        const measure=async()=>{if(metricsBusy||!connectionReady)return;metricsBusy=true;try{setMetrics(await native('metrics'));}catch{setMetrics({latencyMs:null,lossPercent:100});}finally{metricsBusy=false;}};metricsTask=measure();metricsTimer=setInterval(measure,5000);
+        // 评分不会阻塞连接完成或部署操作。
+        void queryIpInfo(serverConnection.egressIp).then(()=>{if(attempt===connectionAttempt&&nativeServer)applyServer(nativeServer);});
+        if(result.activeJobs?.length)resumeJob(result.activeJobs[0]);return result;
+      }catch(error){
+        if(attempt!==connectionAttempt)return null;
+        connectionReady=false;connectionInFlight=false;lockWorkspace(true);connectionProgress(error.message,true);
+        await showAppMessage(error.message,{title:'连接未完成'});return null;
       }finally{resetLogin();}
     }
-    $('#login-form').onsubmit=async e=>{e.preventDefault();try{await connect({host:$('#ip').value.trim(),username:$('#username').value.trim(),password:$('#password').value,port:sshPort});}catch(error){$('#connection-message').className='connection-message error';$('#connection-message').textContent=error.message;alert(error.message);}};
-    async function resumeJob(job){busy=true;currentTask=ids.indexOf(job.operation);if(currentTask>=0){states[currentTask]='running';taskLogs[currentTask]='恢复远端部署监控…';}renderTasks();try{applyServer(await native('job.resume',job));}catch(e){alert(e.message);}finally{currentTask=-1;busy=false;renderTasks();}}
+    $('#cancel-connect').onclick=async()=>{connectionAttempt++;connectionInFlight=false;connectionProgress('正在取消连接…');await native('connection.cancel');connectionProgress('已取消连接。',true);};
+    $('#edit-connection').onclick=()=>{connectionAttempt++;native('connection.cancel');showScreen('login');resetLogin();};
+    $('#retry-connect').onclick=()=>{if(lastSettings)void connect(lastSettings);};
+    $('#login-form').onsubmit=async e=>{e.preventDefault();await connect({host:$('#ip').value.trim(),username:$('#username').value.trim(),password:$('#password').value,port:sshPort});};
+    async function resumeJob(job){busy=true;currentTask=ids.indexOf(job.operation);if(currentTask>=0){states[currentTask]='running';taskLogs[currentTask]='恢复远端部署监控…';}renderTasks();try{applyServer(await native('job.resume',job));}catch(e){showAppMessage(e.message);}finally{currentTask=-1;busy=false;renderTasks();}}
     async function runTask(index){
       currentTask=index;states[index]='running';taskLogs[index]='正在连接 Ubuntu 部署模块…';renderTasks();
       try{
@@ -84,12 +127,12 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
       }catch(error){states[index]='pending';taskLogs[index]='失败：'+error.message;throw error;}
       finally{currentTask=-1;renderTasks();}
     }
-    deployOne=async function(index){if(busy||states[index]==='done')return;selecting=false;selectedTasks.clear();busy=true;try{await runTask(index);}catch(error){alert(error.message);}finally{busy=false;renderTasks();}};
+    deployOne=async function(index){if(busy||states[index]==='done')return;selecting=false;selectedTasks.clear();busy=true;try{await runTask(index);}catch(error){showAppMessage(error.message);}finally{busy=false;renderTasks();}};
     $('#deploy-all').onclick=async()=>{
       if(busy)return;if(!selecting){selecting=true;selectedTasks.clear();renderTasks();return;}
       const queue=[...selectedTasks].filter(i=>states[i]!=='done').sort((a,b)=>a-b);if(!queue.length)return;
       selecting=false;selectedTasks.clear();busy=true;
-      try{for(const i of queue)await runTask(i);}catch(error){alert(error.message);}finally{busy=false;renderTasks();}
+      try{for(const i of queue)await runTask(i);}catch(error){showAppMessage(error.message);}finally{busy=false;renderTasks();}
     };
     $('#account-card').onclick=async()=>{
       try{
@@ -100,19 +143,19 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
           const copy=document.createElement('button');copy.className='copy-button';copy.setAttribute('aria-label','复制'+name);copy.textContent='⧉';copy.onclick=async()=>{await native('copy',{text:value});copy.title='已复制';setTimeout(()=>copy.title='复制',1200);};group.append(code,copy);row.append(label,group);$('#result-body').append(row);
         }
         $('#maintenance-result').showModal();
-      }catch(error){alert(error.message);}
+      }catch(error){showAppMessage(error.message);}
     };
-    async function runMaintenanceCard(selector,action){const card=$(selector);const caption=card.querySelector('span');const text=caption.textContent;card.disabled=true;caption.textContent='正在连接…';try{await action();}catch(e){alert(e.message);}finally{card.disabled=false;caption.textContent=text;}}
+    async function runMaintenanceCard(selector,action){const card=$(selector);const caption=card.querySelector('span');const text=caption.textContent;card.disabled=true;caption.textContent='正在连接…';try{await action();}catch(e){showAppMessage(e.message);}finally{card.disabled=false;caption.textContent=text;}}
     $('#desktop-card').onclick=()=>runMaintenanceCard('#desktop-card',()=>native('desktop'));
     $('#terminal-card').onclick=()=>runMaintenanceCard('#terminal-card',async()=>{const result=await native('terminal');if(result)applyServer(result);});
     $('#install-cloud').onclick=async()=>{
       if(busy)return;busy=true;$('#install-cloud').disabled=true;$('#install-cloud').textContent='安装中…';
-      try{applyServer(await native('cloud.install'));}catch(error){$('#cloud-state').textContent='安装失败';$('#install-cloud').disabled=false;$('#install-cloud').textContent='重试';alert(error.message);}finally{busy=false;renderTasks();}
+      try{applyServer(await native('cloud.install'));}catch(error){$('#cloud-state').textContent='安装失败';$('#install-cloud').disabled=false;$('#install-cloud').textContent='重试';showAppMessage(error.message);}finally{busy=false;renderTasks();}
     };
-    $('#open-cloud').onclick=()=>native('cloud.open').catch(e=>alert(e.message));
+    $('#open-cloud').onclick=()=>native('cloud.open').catch(e=>showAppMessage(e.message));
     $('#install-mount').onclick=async()=>{
       if(busy)return;busy=true;$('#install-mount').disabled=true;$('#install-mount').textContent='安装中…';
-      try{applyServer(await native('mount.install'));}catch(error){$('#mount-state').textContent='安装失败';$('#install-mount').disabled=false;$('#install-mount').textContent='重试';alert(error.message);}finally{busy=false;renderTasks();}
+      try{applyServer(await native('mount.install'));}catch(error){$('#mount-state').textContent='安装失败';$('#install-mount').disabled=false;$('#install-mount').textContent='重试';showAppMessage(error.message);}finally{busy=false;renderTasks();}
     };
     let selectedRemoteField=null;
     async function listRemote(path=''){
@@ -121,18 +164,18 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
       catch(e){$('#folder-list').textContent='';$('#folder-error').textContent=e.message;$('#folder-confirm').disabled=true;}
     }
     $('#folder-confirm').onclick=()=>{if(selectedRemoteField)selectedRemoteField.value=$('#folder-path').textContent;$('#remote-folder-dialog').close();};
-    const originalAppendMountPair=appendMountPair;appendMountPair=function(pair){originalAppendMountPair(pair);const row=$('#mount-list').lastElementChild;for(const key of ['local','remote']){const field=row.querySelector('[data-path='+key+']');const wrap=document.createElement('span');wrap.className='folder-input';field.replaceWith(wrap);wrap.append(field);const picker=document.createElement('button');picker.type='button';picker.textContent='选择目录';picker.onclick=async()=>{if(key==='local'){try{const selected=await native('pickFolder');if(selected)field.value=selected;}catch(e){alert(e.message);}}else{selectedRemoteField=field;$('#remote-folder-dialog').showModal();await listRemote();}};wrap.append(picker);}};
-    openAccountSettings=async function(){try{$('#custom-hostname').value=accountOptions.hostname||nativeServer?.hostname||'safe-workstation';$('#custom-username').value=accountOptions.username||nativeServer?.username||'workspace';$('#custom-password').value='';$('#account-custom-hint').textContent='更换用户名会新建环境，保留旧账户与项目。请先注销旧桌面并卸载目录；旧 CloudCLI 将停止。';$('#account-settings').showModal();}catch(e){alert(e.message);}};
-    $('#account-settings-form').onsubmit=async e=>{e.preventDefault();if(busy)return;accountOptions={username:$('#custom-username').value.trim(),hostname:$('#custom-hostname').value.trim(),password:$('#custom-password').value};busy=true;try{const server=await native('deploy',{step:'account',...accountOptions});applyServer(server);accountOptions={};$('#custom-password').value='';$('#account-settings').close();}catch(e){alert(e.message);}finally{busy=false;renderTasks();}};
+    const originalAppendMountPair=appendMountPair;appendMountPair=function(pair){originalAppendMountPair(pair);const row=$('#mount-list').lastElementChild;for(const key of ['local','remote']){const field=row.querySelector('[data-path='+key+']');const wrap=document.createElement('span');wrap.className='folder-input';field.replaceWith(wrap);wrap.append(field);const picker=document.createElement('button');picker.type='button';picker.textContent='选择目录';picker.onclick=async()=>{if(key==='local'){try{const selected=await native('pickFolder');if(selected)field.value=selected;}catch(e){showAppMessage(e.message);}}else{selectedRemoteField=field;$('#remote-folder-dialog').showModal();await listRemote();}};wrap.append(picker);}};
+    openAccountSettings=async function(){try{$('#custom-hostname').value=accountOptions.hostname||nativeServer?.hostname||'safe-workstation';$('#custom-username').value=accountOptions.username||nativeServer?.username||'workspace';$('#custom-password').value='';$('#account-custom-hint').textContent='更换用户名会新建环境，保留旧账户与项目。请先注销旧桌面并卸载目录；旧 CloudCLI 将停止。';$('#account-settings').showModal();}catch(e){showAppMessage(e.message);}};
+    $('#account-settings-form').onsubmit=async e=>{e.preventDefault();if(busy)return;accountOptions={username:$('#custom-username').value.trim(),hostname:$('#custom-hostname').value.trim(),password:$('#custom-password').value};busy=true;try{const server=await native('deploy',{step:'account',...accountOptions});applyServer(server);accountOptions={};$('#custom-password').value='';$('#account-settings').close();}catch(e){showAppMessage(e.message);}finally{busy=false;renderTasks();}};
     native('login.load').then(saved=>{if(saved&&$('#workspace-screen').hidden){$('#ip').value=saved.host;$('#username').value=saved.username;$('#password').value=saved.password;sshPort=saved.port||22;}}).catch(()=>{});
-    $('#mount-settings').onclick=async()=>{try{mountPairs=await native('mount.settings');$('#mount-list').replaceChildren();(mountPairs.length?mountPairs:[{local:'',remote:''}]).forEach(appendMountPair);$('#mount-dialog').showModal();}catch(e){alert(e.message);}};
+    $('#mount-settings').onclick=async()=>{try{mountPairs=await native('mount.settings');$('#mount-list').replaceChildren();(mountPairs.length?mountPairs:[{local:'',remote:''}]).forEach(appendMountPair);$('#mount-dialog').showModal();}catch(e){showAppMessage(e.message);}};
     $('#mount-form').onsubmit=async e=>{
       e.preventDefault();const mappings=$$('#mount-list .mount-pair').map(row=>({local:row.querySelector('[data-path="local"]').value.trim(),remote:row.querySelector('[data-path="remote"]').value.trim()}));
-      try{await native('mount.apply',{mappings});mountPairs=mappings;$('#mount-summary').textContent='已挂载 '+mappings.length+' 组目录。';$('#mount-dialog').close();}catch(error){alert(error.message);}
+      try{await native('mount.apply',{mappings});mountPairs=mappings;$('#mount-summary').textContent='已挂载 '+mappings.length+' 组目录。';$('#mount-dialog').close();}catch(error){showAppMessage(error.message);}
     };
     $('#ip-policy-form').onsubmit=async e=>{
       e.preventDefault();const args={ingressIp:$('#ingress-ip-input').value.trim(),egressIp:$('#egress-ip-input').value.trim(),lockIngress:$('#lock-ingress').checked,lockEgress:$('#lock-egress').checked};
-      try{const result=await native('ip.apply',args);serverConnection={ingressIp:args.ingressIp,egressIp:args.egressIp};$('#server-ingress').textContent=args.ingressIp;$('#server-address').textContent=args.egressIp;ipPolicy=args;$('#ip-policy-state').textContent='已应用';$('#ip-policy-dialog').close();if(result)applyServer(result);await queryIpInfo(args.egressIp);}catch(error){alert(error.message);}
+      try{const result=await native('ip.apply',args);serverConnection={ingressIp:args.ingressIp,egressIp:args.egressIp};$('#server-ingress').textContent=args.ingressIp;$('#server-address').textContent=args.egressIp;ipPolicy=args;$('#ip-policy-state').textContent='已应用';$('#ip-policy-dialog').close();if(result)applyServer(result);await queryIpInfo(args.egressIp);}catch(error){showAppMessage(error.message);}
     };
     // 验收入口仅在桌面启动参数指定了私密配置文件时由宿主调用。
     window.safeCodeRunAcceptance=async config=>{
@@ -152,9 +195,10 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     let servicePreferences=null;let update=null;
     function showPreferences(p){servicePreferences=p;$('#usage-consent').checked=p.enabled;$('#settings-usage-consent').checked=p.enabled;$('#usage-recipient').textContent=p.serviceAvailable?'接收方：'+p.recipient+'。统计库不保存来源 IP；网络连接会向接收服务器展示来源 IP。':'反馈与统计服务尚未启用，目前不会上传。';$('#feedback-send').disabled=!p.serviceAvailable;}
     $('#accept').disabled=true;for(const id of ['usage-consent','settings-usage-consent'])document.getElementById(id).disabled=true;
-    native('services.preferences').then(showPreferences).catch(()=>{$('#usage-consent').checked=false;$('#settings-usage-consent').checked=false;}).finally(()=>{$('#accept').disabled=false;for(const id of ['usage-consent','settings-usage-consent'])document.getElementById(id).disabled=false;});
-    for(const id of ['usage-consent','settings-usage-consent'])document.getElementById(id).onchange=e=>{const enabled=e.target.checked;$('#usage-consent').checked=enabled;$('#settings-usage-consent').checked=enabled;native('services.consent',{enabled,confirmed:false}).then(showPreferences).catch(e=>alert(e.message));};
-    const previousAccept=$('#accept').onclick;$('#accept').onclick=()=>{previousAccept();native('services.consent',{enabled:$('#usage-consent').checked,confirmed:true}).then(showPreferences).catch(()=>{});};
+    const preferencesReady=native('services.preferences').then(showPreferences).catch(()=>{$('#usage-consent').checked=false;$('#settings-usage-consent').checked=false;}).finally(()=>{$('#accept').disabled=false;for(const id of ['usage-consent','settings-usage-consent'])document.getElementById(id).disabled=false;});
+    for(const id of ['usage-consent','settings-usage-consent'])document.getElementById(id).onchange=e=>{const enabled=e.target.checked;$('#usage-consent').checked=enabled;$('#settings-usage-consent').checked=enabled;native('services.consent',{enabled,confirmed:false}).then(showPreferences).catch(e=>showAppMessage(e.message));};
+    const previousAccept=$('#accept').onclick;$('#accept').onclick=async()=>{try{await native('notice.accept');previousAccept();native('services.consent',{enabled:$('#usage-consent').checked,confirmed:true}).then(showPreferences).catch(()=>{});}catch(e){showAppMessage('无法保存声明确认，请检查本机存储空间。');}};
+    const startupReady=preferencesReady.then(()=>native('notice.state')).then(state=>{if(state.accepted&&(!window.__safeCodeAcceptance||window.__safeCodeConnectionAcceptance)){showScreen('login');native('services.consent',{enabled:$('#usage-consent').checked,confirmed:true}).then(showPreferences).catch(()=>{});}else{showScreen('notice');}}).catch(()=>{showScreen('notice');});
     async function checkUpdate(force=false){$('#check-update').disabled=true;$('#update-status').textContent='正在检查 GitHub…';try{update=await native('updates.check',{force});$('#update-status').textContent='当前版本 '+update.currentVersion+' · '+update.status;$('#release-page').hidden=!update.page;$('#download-update').hidden=!update.canInstall;if(update.version)$('#services-entry').textContent='发现新版本';}catch(e){$('#update-status').textContent='检查失败：'+e.message;}finally{$('#check-update').disabled=false;}}
     $('#check-update').onclick=()=>checkUpdate(true);
     $('#release-page').onclick=()=>{if(update?.page)window.open(update.page,'_blank');};
@@ -173,6 +217,30 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
         await native('services.consent',{enabled:true,confirmed:false});
         await native('acceptance.done',{success:true,defaultEnabled:prefs.enabled,optOutSaved:!disabled.enabled,serviceAvailable:prefs.serviceAvailable,recipient:prefs.recipient,feedbackMarker,feedbackSentWithStatsDisabled:true,updateStatus:$('#update-status').textContent,viewportHeight:innerHeight});
       }catch(error){await native('acceptance.done',{success:false,error:error.message});}
+    };
+    window.safeCodeRunConnectionAcceptance=async config=>{
+      const waitFor=async predicate=>{const end=Date.now()+15000;while(!predicate()){if(Date.now()>end)throw new Error('等待界面超时');await new Promise(r=>setTimeout(r,30));}};
+      const centered=dialog=>{const b=dialog.getBoundingClientRect();if(Math.abs(b.left+b.width/2-innerWidth/2)>2||Math.abs(b.top+b.height/2-innerHeight/2)>2||b.right>innerWidth||b.bottom>innerHeight)throw new Error('弹窗没有居中或超出窗口');};
+      try{
+        await startupReady;
+        if(config.phase==='restart'){
+          if($('#login-screen').hidden||!$('#notice-screen').hidden)throw new Error('再次启动仍显示声明');
+          await native('acceptance.capture',{tag:'login'});await native('acceptance.done',{success:true,noticeSkippedAfterRestart:true});return;
+        }
+        $('#usage-consent').checked=false;await $('#accept').onclick();if(!(await native('notice.state')).accepted)throw new Error('声明确认未保存');
+        advanced.click();centered($('#advanced-dialog'));await native('acceptance.capture',{tag:'advanced'});$('#advanced-dialog .close').click();if($('#advanced-dialog').open)throw new Error('高级连接无法关闭');
+        advanced.click();$('#ssh-port').value='2222';$('#advanced-form').requestSubmit();if(sshPort!==2222||$('#advanced-dialog').open)throw new Error('SSH 端口未保存');
+        const settings={host:'127.0.0.1',username:'fixture',password:'fixture-only',port:config.silentPort};
+        const pendingConnect=connect(settings);if($('#workspace-screen').hidden||!$('#deployment-panel').inert)throw new Error('连接时未立即显示主界面或操作未锁定');
+        await native('acceptance.capture',{tag:'loading'});await $('#cancel-connect').onclick();await pendingConnect;if(!$('#connection-progress').classList.contains('failed'))throw new Error('取消未生效');
+        const failure=connect({...settings,port:1});await waitFor(()=>$('#app-message-dialog').open);centered($('#app-message-dialog'));
+        if(!$('#app-message-body').textContent.includes('服务器连接不上')||$('#app-message-body').textContent.includes('timed out'))throw new Error('连接失败未转换为中文提示');
+        await native('acceptance.capture',{tag:'error'});$('#app-message-dialog [data-dialog-dismiss]').click();await failure;if($('#app-message-dialog').open)throw new Error('报错弹窗无法关闭');
+        const change={key:{host:'203.0.113.10',port:22,previousFingerprint:'SHA256:fixture-old',fingerprint:'SHA256:fixture-new'}};
+        const no=confirmServerIdentity(change);await waitFor(()=>$('#app-message-dialog').open);centered($('#app-message-dialog'));await native('acceptance.capture',{tag:'trust'});$('#app-message-cancel').click();if(await no)throw new Error('否被当成同意');
+        const yes=confirmServerIdentity(change);await waitFor(()=>$('#app-message-dialog').open);$('#app-message-confirm').click();if(!await yes)throw new Error('是未返回确认');
+        await native('acceptance.done',{success:true,immediateWorkspace:true,connectingOperationsLocked:true,cancelResponsive:true,centeredErrors:true,friendlyNetworkError:true,advancedPortSaved:true,dialogsClosable:true,reinstallYesNo:true,noticeSaved:true});
+      }catch(e){await native('acceptance.done',{success:false,error:e.message});}
     };
     window.safeCodeNativeReady=true;
   })();

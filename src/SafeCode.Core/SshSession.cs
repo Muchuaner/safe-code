@@ -44,10 +44,12 @@ public sealed partial class SshSession : IDisposable
         connection = settings;
         var info = new PasswordConnectionInfo(settings.Host, settings.Port, settings.Username, settings.Password) { Timeout = TimeSpan.FromSeconds(18), RetryAttempts = 2 };
         client = new SshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(20) };
+        HostTrustRequiredException? trustRequired=null;
         client.HostKeyReceived += (_, e) =>
         {
             var fingerprint = "SHA256:" + Convert.ToBase64String(SHA256.HashData(e.HostKey)).TrimEnd('=');
-            e.CanTrust = VerifyOrConfirm(settings, fingerprint, confirmHost);
+            try{e.CanTrust=VerifyOrConfirm(settings,fingerprint,confirmHost);}
+            catch(HostTrustRequiredException error){trustRequired=error;e.CanTrust=false;}
             if (e.CanTrust)
             {
                 trustedKey = e.HostKey.ToArray(); Fingerprint = fingerprint;
@@ -75,11 +77,11 @@ public sealed partial class SshSession : IDisposable
             }
             remoteDirectory = (await ExecuteTextAsync("mktemp -d /tmp/safe-code.XXXXXXXX", cancellationToken)).Trim();
             Log?.Invoke("准备远端部署模块…");
-            using var sftp = MakeSftp(); sftp.Connect();
+            using var sftp = MakeSftp(); await sftp.ConnectAsync(cancellationToken);
             using var agent = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.agent.py") ?? throw new FileNotFoundException("缺少 Ubuntu 部署模块。");
-            sftp.UploadFile(agent, remoteDirectory + "/agent.py"); sftp.ChangePermissions(remoteDirectory + "/agent.py", 600);
+            await sftp.UploadFileAsync(agent, remoteDirectory + "/agent.py",cancellationToken); sftp.ChangePermissions(remoteDirectory + "/agent.py", 600);
             using var network = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.network.py")!;
-            sftp.UploadFile(network, remoteDirectory + "/network.py"); sftp.ChangePermissions(remoteDirectory + "/network.py", 600);
+            await sftp.UploadFileAsync(network, remoteDirectory + "/network.py",cancellationToken); sftp.ChangePermissions(remoteDirectory + "/network.py", 600);
             WriteKnownHost();
             Log?.Invoke("部署模块已就绪，检查服务器环境…");
             Server = await RequestAsync<ServerInfo>("inspect", null, cancellationToken);
@@ -87,22 +89,17 @@ public sealed partial class SshSession : IDisposable
             try{observedEgressIp=(await RequestAsync<EgressProbe>("egress_probe",null,cancellationToken)).Ip;Server.ObservedEgressIp=observedEgressIp;}catch{Log?.Invoke("出口 IP 暂未确认，可在进阶设置中选择。");}
             return Server;
         }
-        catch { client?.Dispose(); client = null; throw; }
+        catch { client?.Dispose(); client = null;if(trustRequired!=null)throw trustRequired;throw; }
     }
     public static Dictionary<string,string> ParseOsRelease(string input) => input.Split('\n').Where(x => x.Contains('=')).Select(x => x.Split('=', 2)).ToDictionary(x => x[0].Trim(), x => x[1].Trim().Trim('"'));
     private bool VerifyOrConfirm(ConnectionSettings settings, string fingerprint, Func<HostKeyInfo,bool> confirm)
     {
-        string path = Path.Combine(dataDirectory, "host-fingerprints.json");
-        var pins = File.Exists(path) ? JsonSerializer.Deserialize<Dictionary<string,string>>(File.ReadAllText(path)) ?? new() : new Dictionary<string,string>();
-        string key = settings.Host + ":" + settings.Port;
-        if (pins.TryGetValue(key, out string? known))
-        {
-            if (known != fingerprint) throw new InvalidOperationException("SSH 主机密钥已变化。为避免连接到错误服务器，本次连接已拒绝；请核实后在设置中重新信任。");
-            return true;
-        }
-        if (!confirm(new(settings.Host, settings.Port, fingerprint))) return false;
-        pins[key] = fingerprint; File.WriteAllText(path, JsonSerializer.Serialize(pins, JsonDefaults.Options)); return true;
+        var store=new HostTrustStore(dataDirectory);var key=store.Describe(settings.Host,settings.Port,fingerprint);
+        if(store.Matches(key))return true;
+        if(!confirm(key))throw new HostTrustRequiredException(key);
+        store.Accept(key);return true;
     }
+
     private void WriteKnownHost()
     {
         string host = Port == 22 ? Host : $"[{Host}]:{Port}";
@@ -281,7 +278,7 @@ public sealed partial class SshSession : IDisposable
         tunnels.Clear();
         fileForward?.Dispose(); fileServer?.Dispose();
         if (client?.IsConnected == true && remoteDirectory.StartsWith("/tmp/safe-code."))
-        { try { using var command = client.CreateCommand("rm -rf -- " + Quote(remoteDirectory)); command.Execute(); } catch { } }
+        { try { using var command = client.CreateCommand("rm -rf -- " + Quote(remoteDirectory)); command.CommandTimeout=TimeSpan.FromSeconds(2);command.Execute(); } catch { } }
         client?.Dispose(); client = null;
         connection = null;
     }
