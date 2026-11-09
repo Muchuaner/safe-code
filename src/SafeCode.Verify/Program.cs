@@ -2,6 +2,15 @@ using SafeCode.Core;
 using System.Net.Sockets;
 using System.Text.Json;
 
+if(args.Length>1&&args[0]=="directory-fixture"){
+    using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string fp=c.GetProperty("fingerprint").GetString()!;
+    using var client=new Renci.SshNet.SshClient("127.0.0.1",c.GetProperty("port").GetInt32(),"fixture","fixture-only");client.HostKeyReceived+=(_,e)=>e.CanTrust="SHA256:"+Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(e.HostKey)).TrimEnd('=')==fp;await client.ConnectAsync(default);
+    using var session=new SshSession(c.GetProperty("directory").GetString()!);var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;typeof(SshSession).GetField("client",flags)!.SetValue(session,client);
+    var gate=(SemaphoreSlim)typeof(SshSession).GetField("operations",flags)!.GetValue(session)!;await gate.WaitAsync();
+    try{using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(3));var dirs=await session.ListDirectoriesAsync("/normal",timeout.Token);if(dirs.GetProperty("path").GetString()!="/normal")throw new Exception("directory response incorrect");}finally{gate.Release();}
+    bool cancelled=false;using(var timeout=new CancellationTokenSource(200)){try{await session.ListDirectoriesAsync("/slow",timeout.Token);}catch(OperationCanceledException){cancelled=true;}}
+    if(!cancelled)throw new Exception("directory cancellation failed");Console.WriteLine("DIRECTORY_READ_BYPASSES_DEPLOYMENT_QUEUE_AND_CANCELS_PASSED");return 0;
+}
 if(args.Length>1&&args[0]=="trust-fixture"){
     using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string Read(string k)=>c.GetProperty(k).GetString()!;
     string directory=Read("directory");var store=new HostTrustStore(directory);var settings=new ConnectionSettings("127.0.0.1","fixture","fixture-only",c.GetProperty("port").GetInt32());

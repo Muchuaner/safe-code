@@ -14,9 +14,9 @@ internal sealed class RdpDesktop : F.Form
         ((ISupportInitialize)control).BeginInit();Controls.Add(control);((ISupportInitialize)control).EndInit();
         FormClosing+=(_,_)=>{try{client.Disconnect();}catch{}};
     }
-    public void Connect(string host,uint port,string username,string password)
+    public void Connect(string host,uint port,string username,string password,DesktopResolution? resolution=null)
     {
-        client=control.Client;client.Server=host;client.UserName=username;client.DesktopWidth=1280;client.DesktopHeight=800;
+        client=control.Client;client.Server=host;client.UserName=username;client.DesktopWidth=(resolution??new()).Width;client.DesktopHeight=(resolution??new()).Height;
         dynamic advanced=client.AdvancedSettings7;
         advanced.RDPPort=(int)port;advanced.EnableCredSspSupport=false;
         // 远端真实性由外层严格核对 SSH 主机密钥的隧道提供。

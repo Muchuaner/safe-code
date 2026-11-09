@@ -25,6 +25,7 @@ let selecting = false;
 let selectedTasks = new Set();
 let states = [];
 let taskLogs = [];
+let accountDraftPending=false;
 const tasks = [
   ['设置工作用户和机器名称', '创建开发账户，设置独立密码与机器名称。'],
   ['本土化设置', '按出口 IP 所在地匹配时区与系统语言。'],
@@ -116,7 +117,7 @@ function renderTasks(){
     const copy=document.createElement('div');copy.className='step-copy';
     const heading=document.createElement('h3');heading.textContent=title;
     const desc=document.createElement('p');desc.className=taskLogs[i]?'task-log':'';const preset=currentLocale();const detail=i===1?(preset?preset.name+' · '+preset.timezone+' · '+preset.locale:($('#rating-state').textContent==='查询中'?'正在识别出口 IP 的归属地…':'未能自动匹配所在地，请先设置时区与语言。')):description;desc.textContent=taskLogs[i]||detail;desc.setAttribute('role','status');desc.setAttribute('aria-live','polite');copy.append(heading,desc);
-    const button=document.createElement('button');button.className='deploy-button';button.textContent=states[i]==='done'?'已完成':states[i]==='running'?'部署中…':'开始部署';button.disabled=busy||states[i]==='done'||(i===1&&!currentLocale());button.setAttribute('aria-label',title+'：'+button.textContent);button.onclick=()=>deployOne(i);
+    const button=document.createElement('button');button.className='deploy-button';button.textContent=i===0&&accountDraftPending&&states[i]==='done'?'更新':states[i]==='done'?'已完成':states[i]==='running'?'部署中…':'开始部署';button.disabled=busy||(states[i]==='done'&&!(i===0&&accountDraftPending))||(i===1&&!currentLocale());button.setAttribute('aria-label',title+'：'+button.textContent);button.onclick=()=>deployOne(i);
     if(selecting){
       const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.className='task-checkbox';checkbox.disabled=states[i]==='done'||busy||(i===1&&!currentLocale());checkbox.checked=states[i]!=='done'&&selectedTasks.has(i);checkbox.setAttribute('aria-label','选择'+title);
       checkbox.onchange=()=>{if(checkbox.checked)selectedTasks.add(i);else selectedTasks.delete(i);updateBatchControls();};

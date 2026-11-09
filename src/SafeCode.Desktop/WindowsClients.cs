@@ -8,15 +8,15 @@ public sealed class WindowsClients : IDisposable
 {
     private readonly List<Process> terminals = [];
     private readonly List<RdpDesktop> desktops=[];
-    public async Task OpenDesktopAsync(SshSession session,CancellationToken ct)=>await LaunchDesktopAsync(session,ct);
-    private async Task<RdpDesktop> LaunchDesktopAsync(SshSession session,CancellationToken ct)
+    public async Task OpenDesktopAsync(SshSession session,CancellationToken ct,DesktopResolution? resolution=null)=>await LaunchDesktopAsync(session,ct,resolution);
+    private async Task<RdpDesktop> LaunchDesktopAsync(SshSession session,CancellationToken ct,DesktopResolution? resolution=null)
     {
         if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         uint port=await session.ForwardAsync(3389,ct);
         var window=new RdpDesktop();desktops.Add(window);
         window.FormClosed+=(_,_)=>desktops.Remove(window);
-        try{window.Show();window.Connect("127.0.0.1",port,account.Username,account.Password);return window;}catch{window.Close();window.Dispose();throw;}
+        try{window.Show();window.Connect("127.0.0.1",port,account.Username,account.Password,resolution);return window;}catch{window.Close();window.Dispose();throw;}
     }
     public async Task<bool> VerifyDesktopLoginAsync(SshSession session,CancellationToken ct)
     {

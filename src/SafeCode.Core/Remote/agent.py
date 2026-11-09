@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Safe Code Ubuntu 部署端。仅由客户端显式请求运行；不包含服务凭据。"""
-import contextlib,fcntl,hashlib,ipaddress,json,os,pwd,re,secrets,shlex,shutil,subprocess,sys,time,tempfile
+import base64,contextlib,fcntl,hashlib,ipaddress,json,os,pwd,re,secrets,shlex,shutil,subprocess,sys,time,tempfile
 from pathlib import Path
 STATE=Path('/var/lib/safe-code')
 REDACTIONS=[]
@@ -237,15 +237,24 @@ def list_directories(options):
 p=pathlib.Path(sys.argv[1]).resolve(strict=True)
 if not p.is_dir():raise ValueError('目录不存在')
 items=[]
-for child in p.iterdir():
+for child in os.scandir(p):
  try:
-  if child.is_dir() and os.access(child,os.R_OK|os.X_OK):items.append({'name':child.name,'path':str(child)})
+  if child.is_dir(follow_symlinks=False) or child.is_symlink():items.append({'name':child.name,'path':str(p/child.name)})
  except OSError:pass
-print(json.dumps({'path':str(p),'parent':str(p.parent),'directories':sorted(items,key=lambda x:x['name'].casefold())}))
+ if len(items)>=300:break
+print(json.dumps({'path':str(p),'parent':str(p.parent),'directories':sorted(items,key=lambda x:x['name'].casefold()),'truncated':len(items)>=300}))
 """
     path=options.get('path') or str(Path(entry.pw_dir)/'workspace')
     if not isinstance(path,str) or len(path)>4096 or '\0' in path:raise RuntimeError('目录路径无效。')
-    output=run(['runuser','-u',a['username'],'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin','python3','-I','-c',script,path])
+    log('以工作用户读取目录：'+path)
+    try:
+        output=subprocess.run(['runuser','-u',a['username'],'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin','python3','-I','-c',script,path],capture_output=True,text=True,timeout=8)
+    except subprocess.TimeoutExpired:raise RuntimeError('读取目录超时，请检查网络或失效的挂载目录后重试。')
+    if output.returncode:
+        if 'PermissionError' in output.stderr:raise RuntimeError('工作用户没有读取该目录的权限，请选择其他目录。')
+        if 'FileNotFoundError' in output.stderr:raise RuntimeError('目录不存在，请返回上一级或填写其他目录。')
+        raise RuntimeError('无法读取该目录，请检查目录状态后重试。')
+    log('目录读取完成。')
     return json.loads(output.stdout)
 
 def locale_packages(locale):
@@ -488,6 +497,9 @@ def poll_job(job,offset):
 def main():
     global JOB_DIR
     require_ubuntu() # 必须先检查系统，再创建任何目录或写入配置。
+    if sys.argv[1]=='--list-directories':
+        if os.geteuid()!=0:raise RuntimeError('需要安装管理员权限。')
+        result(list_directories(json.loads(base64.b64decode(sys.argv[2]))));return
     if sys.argv[1]=='--poll':
         if os.geteuid()!=0:raise RuntimeError('需要安装管理员权限。')
         result(poll_job(sys.argv[2],sys.argv[3]));return
