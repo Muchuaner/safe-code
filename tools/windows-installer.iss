@@ -1,7 +1,7 @@
 ﻿; 本地构建单个离线安装文件；不发布任何内容。
-#define AppVersion "0.4.2"
+#define AppVersion "0.4.3"
 #ifndef AppSource
-  #define AppSource "..\dist\SafeCode-0.4.2-win-x64"
+  #define AppSource "..\dist\SafeCode-0.4.3-win-x64"
 #endif
 #ifndef RuntimeSource
   #define RuntimeSource "..\.local\installer\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"

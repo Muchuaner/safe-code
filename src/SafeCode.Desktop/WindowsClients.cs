@@ -14,9 +14,14 @@ public sealed class WindowsClients : IDisposable
         if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         uint port=await session.ForwardAsync(3389,ct);
-        var window=new RdpDesktop();desktops.Add(window);
+        var window=new RdpDesktop(resolution);desktops.Add(window);
         window.FormClosed+=(_,_)=>desktops.Remove(window);
         try{window.Show();window.Connect("127.0.0.1",port,account.Username,account.Password,resolution);return window;}catch{window.Close();window.Dispose();throw;}
+    }
+    public object ResizeOpenDesktops(DesktopResolution resolution)
+    {
+        int updated=0,deferred=0;foreach(var desktop in desktops.ToArray()){if(desktop.IsDisposed)continue;if(desktop.ApplyResolution(resolution))updated++;else deferred++;}
+        return new{windows=updated+deferred,dynamicUpdated=updated,deferred};
     }
     public async Task<bool> VerifyDesktopLoginAsync(SshSession session,CancellationToken ct)
     {

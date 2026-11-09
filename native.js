@@ -207,7 +207,7 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
       try{await native('account.draft.save',draft);accountOptions=draft;accountDraftPending=true;$('#custom-password').value='';$('#account-settings').close();taskLogs[0]='参数已保存，等待'+(states[0]==='done'?'更新':'开始部署')+'后应用。';renderTasks();}catch(e){showAppMessage(e.message);}
     };
     $('#desktop-resolution').onclick=async()=>{try{const value=await native('desktop.resolution.get');$('#resolution-select').value=value.width+'x'+value.height;$('#resolution-dialog').showModal();}catch(e){showAppMessage(e.message);}};
-    $('#resolution-form').onsubmit=async e=>{e.preventDefault();const [width,height]=$('#resolution-select').value.split('x').map(Number);try{await native('desktop.resolution.save',{width,height});$('#resolution-dialog').close();}catch(e){showAppMessage(e.message);}};
+    $('#resolution-form').onsubmit=async e=>{e.preventDefault();const [width,height]=$('#resolution-select').value.split('x').map(Number);try{const result=await native('desktop.resolution.save',{width,height});$('#resolution-dialog').close();if(result.deferred>0)showAppMessage('窗口大小已调整。当前服务器未接受在线分辨率切换，新像素分辨率将在下次打开桌面时使用。');}catch(e){showAppMessage(e.message);}};
     native('login.load').then(saved=>{if(saved&&$('#workspace-screen').hidden){$('#ip').value=saved.host;$('#username').value=saved.username;$('#password').value=saved.password;sshPort=saved.port||22;}}).catch(()=>{});
     $('#mount-settings').onclick=async()=>{try{mountPairs=await native('mount.settings');$('#mount-list').replaceChildren();(mountPairs.length?mountPairs:[{local:'',remote:''}]).forEach(appendMountPair);$('#mount-dialog').showModal();}catch(e){showAppMessage(e.message);}};
     $('#mount-form').onsubmit=async e=>{
@@ -251,12 +251,12 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     if(!window.__safeCodeAcceptance)setTimeout(()=>checkUpdate(false),1500);
     window.safeCodeRunServicesAcceptance=async()=>{
       try{
-        const prefs=await native('services.preferences');showPreferences(prefs);if(!prefs.enabled)throw new Error('首次统计默认值错误');
+        const windowSizing=await native('acceptance.window-sizes');const prefs=await native('services.preferences');showPreferences(prefs);if(!prefs.enabled)throw new Error('首次统计默认值错误');
         await native('acceptance.capture',{tag:'notice'});if($('#exit').getBoundingClientRect().bottom>innerHeight||$('#usage-consent').getBoundingClientRect().bottom>$('#accept').getBoundingClientRect().top)throw new Error('声明页布局溢出');
         await native('services.consent',{enabled:false,confirmed:false});const disabled=await native('services.preferences');if(disabled.enabled)throw new Error('关闭统计失败');showPreferences(disabled);
         $('#services-dialog').showModal();if($('#feedback-send').getBoundingClientRect().bottom>$('#services-dialog').getBoundingClientRect().bottom)throw new Error('反馈按钮超出窗口');await checkUpdate(true);await native('acceptance.capture',{tag:'services'});const feedbackMarker='SafeCode Windows integration test '+crypto.randomUUID();await native('feedback.send',{message:feedbackMarker});$('#services-dialog').close();
         await native('services.consent',{enabled:true,confirmed:false});
-        await native('acceptance.done',{success:true,defaultEnabled:prefs.enabled,optOutSaved:!disabled.enabled,serviceAvailable:prefs.serviceAvailable,recipient:prefs.recipient,feedbackMarker,feedbackSentWithStatsDisabled:true,updateStatus:$('#update-status').textContent,viewportHeight:innerHeight});
+        await native('acceptance.done',{success:true,windowSizing,defaultEnabled:prefs.enabled,optOutSaved:!disabled.enabled,serviceAvailable:prefs.serviceAvailable,recipient:prefs.recipient,feedbackMarker,feedbackSentWithStatsDisabled:true,updateStatus:$('#update-status').textContent,viewportHeight:innerHeight});
       }catch(error){await native('acceptance.done',{success:false,error:error.message});}
     };
     window.safeCodeRunConnectionAcceptance=async config=>{
