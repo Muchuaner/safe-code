@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/safe-code-logo.png" alt="Safe Code Logo" width="900">
+</p>
+
 # Safe Code
 
 [下载 Beta 测试版](https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.3.2) · Windows 10 / 11 x64
