@@ -29,6 +29,7 @@ public sealed partial class SshSession : IDisposable
     public string KeyPath { get; private set; } = "";
     public string KnownHostsPath => Path.Combine(dataDirectory, "known_hosts");
     public event Action<string>? Log;
+    public event Action<string>? DirectoryLog;
     public bool IsConnected => client?.IsConnected == true;
 
     public SshSession(string? dataDirectory = null)
@@ -122,9 +123,23 @@ public sealed partial class SshSession : IDisposable
         if (command.ExitStatus != 0) throw new InvalidOperationException((command.Error + "\n" + command.Result).Trim());
         return command.Result;
     }
+    public async Task<JsonElement> ListDirectoriesAsync(string path,CancellationToken ct=default)
+    {
+        if(client?.IsConnected!=true)throw new InvalidOperationException("SSH 已断开，请重新连接。");
+        string options=Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{path},JsonDefaults.Options)));
+        using var command=client.CreateCommand(prefix+"python3 -u "+Quote(remoteDirectory+"/agent.py")+" --list-directories "+Quote(options));
+        command.CommandTimeout=TimeSpan.FromSeconds(10);
+        var executing=command.ExecuteAsync(ct);
+        var output=Task.Run(async()=>{using var reader=new StreamReader(command.OutputStream,Encoding.UTF8);string? result=null;while(await reader.ReadLineAsync(ct) is {} line){if(line.StartsWith("SC_RESULT:"))result=line[10..];else if(line.StartsWith("SC_ERROR:"))throw new InvalidOperationException(line[9..]);else DirectoryLog?.Invoke(line);}return result;},ct);
+        await executing;string? json=await output;
+        if(command.ExitStatus!=0||json==null)throw new InvalidOperationException("无法读取服务器目录，请重试。");
+        return JsonSerializer.Deserialize<JsonElement>(json,JsonDefaults.Options);
+    }
     public async Task<T> RequestAsync<T>(string operation, object? options = null, CancellationToken ct = default)
     {
+        Log?.Invoke("正在等待任务通道…");
         await operations.WaitAsync(ct);
+        Log?.Invoke("正在建立服务器任务通道…");
         string requestPath = remoteDirectory + "/request-" + Guid.NewGuid().ToString("N") + ".json";
         try
         {
@@ -135,6 +150,7 @@ public sealed partial class SshSession : IDisposable
                 using var bytes = new MemoryStream(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { op = operation, options, background = IsLongOperation(operation) }, JsonDefaults.Options)));
                 sftp.UploadFile(bytes, requestPath); sftp.ChangePermissions(requestPath, 600);
             }
+            Log?.Invoke("任务请求已上传，正在启动远端操作…");
             using var command = client.CreateCommand(prefix + "python3 -u " + Quote(remoteDirectory + "/agent.py") + " " + Quote(requestPath));
             command.CommandTimeout = TimeSpan.FromMinutes(45);
             var execution = command.ExecuteAsync(ct);
@@ -159,6 +175,7 @@ public sealed partial class SshSession : IDisposable
             if(IsLongOperation(operation)&&typeof(T)!=typeof(RemoteJob))
             {
                 var job=JsonSerializer.Deserialize<RemoteJob>(json,JsonDefaults.Options)??throw new InvalidDataException("缺少后台任务标识。");
+                Log?.Invoke("远端任务已启动，正在读取实际安装日志…");
                 json=await WatchJobJsonAsync(job.JobId,ct);
             }
             var value = JsonSerializer.Deserialize<T>(json, JsonDefaults.Options) ?? throw new InvalidDataException("服务器返回数据无效。");
@@ -177,8 +194,8 @@ public sealed partial class SshSession : IDisposable
         }
         finally
         {
-            try { using var sftp = MakeSftp(); sftp.Connect(); sftp.DeleteFile(requestPath); } catch { }
             operations.Release();
+            if(!ct.IsCancellationRequested)_=Task.Run(()=>{try{using var sftp=MakeSftp();sftp.ConnectionInfo.Timeout=TimeSpan.FromSeconds(3);sftp.OperationTimeout=TimeSpan.FromSeconds(2);sftp.Connect();sftp.DeleteFile(requestPath);}catch{}});
         }
     }
     private static bool IsLongOperation(string operation)=>operation is "account" or "localization" or "desktop" or "chrome" or "input" or "claude" or "ssh" or "cloud" or "mount_install";
