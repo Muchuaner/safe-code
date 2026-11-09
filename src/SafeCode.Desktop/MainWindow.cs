@@ -256,7 +256,10 @@ public sealed class MainWindow : Window
             case "mount.install":
                 if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="mount_install";
                 try{return await Task.Run(()=>RequireSession().RequestAsync<ServerInfo>("mount_install",null,lifetime.Token));}finally{deploying=false;activeStep="";}
-            case "mount.apply": return await RequireSession().ApplyMountsAsync(JsonSerializer.Deserialize<List<MountMapping>>(args.GetProperty("mappings"), JsonDefaults.Options) ?? [], lifetime.Token);
+            case "mount.apply":
+                var mappings=JsonSerializer.Deserialize<List<MountMapping>>(args.GetProperty("mappings"), JsonDefaults.Options) ?? [];
+                if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="mount_apply";
+                try{return await Task.Run(()=>RequireSession().ApplyMountsAsync(mappings,lifetime.Token));}finally{deploying=false;activeStep="";}
             case "ip.apply": return await RequireSession().ApplyIpPolicyAsync(JsonSerializer.Deserialize<IpPolicySettings>(args, JsonDefaults.Options) ?? throw new ArgumentException("缺少 IP 设置。"), lifetime.Token);
             default: throw new InvalidOperationException("未知客户端操作。");
         }
