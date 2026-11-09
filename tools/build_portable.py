@@ -4,7 +4,7 @@ import argparse,hashlib,json,os,shutil,subprocess,zipfile
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--dotnet',default='dotnet');p.add_argument('--output-dir',type=Path);a=p.parse_args()
 root=Path(__file__).resolve().parent.parent
-output=a.output_dir.resolve() if a.output_dir else root/'dist'/'SafeCode-0.4.2-win-x64';archive=output.parent/(output.name+'.zip')
+output=a.output_dir.resolve() if a.output_dir else root/'dist'/'SafeCode-0.4.3-win-x64';archive=output.parent/(output.name+'.zip')
 if output.exists():shutil.rmtree(output)
 subprocess.run([a.dotnet,'publish',str(root/'src/SafeCode.Desktop/SafeCode.Desktop.csproj'),'-c','Release','-r','win-x64','--self-contained','true','-o',str(output),'--nologo'],cwd=root,check=True,env={**os.environ,'DOTNET_CLI_TELEMETRY_OPTOUT':'1'})
 shutil.move(output/'SafeCode.Desktop.exe',output/'SafeCode.exe')
@@ -30,7 +30,7 @@ for package in sorted(packages):
   shutil.copy2(path,destination)
 mit=(root/'LICENSE').read_text();body=mit[mit.index('Permission is hereby'):]
 (legal/'SSH.NET-2026.0.0-MIT.txt').write_text('MIT License\n\nCopyright © Renci 2010-2026\n\n'+body)
-manifest={'version':'0.4.2','target':'win-x64','selfContained':True,'files':{}}
+manifest={'version':'0.4.3','target':'win-x64','selfContained':True,'files':{}}
 for path in sorted(output.rglob('*')):
  if path.is_file():manifest['files'][path.relative_to(output).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
 (output/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))

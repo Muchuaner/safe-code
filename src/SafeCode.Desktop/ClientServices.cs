@@ -103,19 +103,20 @@ internal sealed class ClientServices : IDisposable
     }
     public async Task<DownloadedInstaller> DownloadUpdateAsync(Action<long,long> progress,CancellationToken ct)
     {
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromMinutes(20));var downloadToken=deadline.Token;
         var item=release??throw new InvalidOperationException("请先检查新版本；没有可验证的安装包时可打开 GitHub 下载页。");
         string folder=Path.Combine(directory,"Updates",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
         string file=Path.Combine(folder,"SafeCode-"+item.Version+"-Setup-x64.exe");
-        using var download=downloadTransport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(downloadTransport,false){Timeout=TimeSpan.FromMinutes(20)};download.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+Version);
+        using var download=downloadTransport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(downloadTransport,false);download.Timeout=TimeSpan.FromMinutes(20);download.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+Version);
         Uri uri=new(item.Url);
         try{
             HttpResponseMessage? response=null;
             for(int i=0;i<6;i++){
                 if(uri.Scheme!="https"||uri.UserInfo!=""||!(uri.Host=="github.com"||uri.Host=="release-assets.githubusercontent.com"||uri.Host=="objects.githubusercontent.com"))throw new IOException("安装包跳转到了未允许的下载地址。");
-                response=await download.GetAsync(uri,HttpCompletionOption.ResponseHeadersRead,ct);
+                response=await download.GetAsync(uri,HttpCompletionOption.ResponseHeadersRead,downloadToken);
                 if((int)response.StatusCode is >=300 and <400){var location=response.Headers.Location;response.Dispose();response=null;if(location==null)throw new IOException("下载跳转无效。");uri=new Uri(uri,location);continue;}break;
             }
-            using(response){if(response==null)throw new IOException("下载跳转次数过多。");response.EnsureSuccessStatusCode();await using var source=await response.Content.ReadAsStreamAsync(ct);await using var target=new FileStream(file,FileMode.CreateNew,FileAccess.Write,FileShare.None,81920,true);using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);byte[] buffer=new byte[81920];long total=0;long lastProgress=Environment.TickCount64;int count;while((count=await source.ReadAsync(buffer,ct))>0){total+=count;if(total>item.Size)throw new IOException("下载文件大于发布记录。");hash.AppendData(buffer,0,count);await target.WriteAsync(buffer.AsMemory(0,count),ct);if(Environment.TickCount64-lastProgress>=200||total==item.Size){progress(total,item.Size);lastProgress=Environment.TickCount64;}}if(total!=item.Size||!Convert.ToHexString(hash.GetHashAndReset()).Equals(item.Digest,StringComparison.OrdinalIgnoreCase))throw new IOException("安装包校验失败，已拒绝运行。");}
+            using(response){if(response==null)throw new IOException("下载跳转次数过多。");response.EnsureSuccessStatusCode();await using var source=await response.Content.ReadAsStreamAsync(downloadToken);await using var target=new FileStream(file,FileMode.CreateNew,FileAccess.Write,FileShare.None,81920,true);using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);byte[] buffer=new byte[81920];long total=0;long lastProgress=Environment.TickCount64;int count;while((count=await source.ReadAsync(buffer,downloadToken))>0){total+=count;if(total>item.Size)throw new IOException("下载文件大于发布记录。");hash.AppendData(buffer,0,count);await target.WriteAsync(buffer.AsMemory(0,count),downloadToken);if(Environment.TickCount64-lastProgress>=200||total==item.Size){progress(total,item.Size);lastProgress=Environment.TickCount64;}}if(total!=item.Size||!Convert.ToHexString(hash.GetHashAndReset()).Equals(item.Digest,StringComparison.OrdinalIgnoreCase))throw new IOException("安装包校验失败，已拒绝运行。");}
             return new(file,item.Digest);
         }catch{File.Delete(file);throw;}
     }

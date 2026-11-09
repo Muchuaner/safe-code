@@ -43,7 +43,13 @@ public sealed class MainWindow : Window
     {
         if(arguments.Contains("--acceptance")||arguments.Contains("--services-acceptance"))dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Acceptance");
         if(arguments.Contains("--connection-acceptance")){dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Connection-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;}
-        if(arguments.Contains("--maintenance-acceptance")){supportSettings=LocalSecrets.Load();if(supportSettings?.Host!="64.83.48.184")throw new InvalidOperationException("仅允许日本测试 VPS 验收。");supportFingerprint=new HostTrustStore(dataDirectory).Describe(supportSettings.Host,supportSettings.Port,"").PreviousFingerprint;if(string.IsNullOrEmpty(supportFingerprint))throw new InvalidOperationException("日本测试机缺少已确认的指纹。");dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Maintenance-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;}
+        if(arguments.Contains("--maintenance-acceptance")){
+            using var testConfig=JsonDocument.Parse(File.ReadAllText(arguments[1]));var target=testConfig.RootElement;supportSettings=LocalSecrets.Load();
+            if(supportSettings==null||supportSettings.Host!=target.GetProperty("allowedHost").GetString()||!target.GetProperty("allowMaintenance").GetBoolean())throw new InvalidOperationException("维护验收需要明确指定已授权的测试目标。");
+            supportFingerprint=new HostTrustStore(dataDirectory).Describe(supportSettings.Host,supportSettings.Port,"").PreviousFingerprint;
+            if(string.IsNullOrEmpty(supportFingerprint)||supportFingerprint!=target.GetProperty("expectedFingerprint").GetString())throw new InvalidOperationException("验收目标指纹未匹配已确认记录。");
+            dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Maintenance-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;
+        }
         services=new ClientServices(dataDirectory);preferences=new ClientPreferences(dataDirectory);
         this.arguments = arguments; Title = "Safe Code"; Width = 360; Height = 536;
         MinWidth = 360; MinHeight = 500; WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -168,6 +174,9 @@ public sealed class MainWindow : Window
                 if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
                 string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services"&&tag!="loading"&&tag!="error"&&tag!="advanced"&&tag!="trust"&&tag!="resolution"&&tag!="draft"&&tag!="install"&&tag!="folder"&&tag!="maintenance")throw new ArgumentException("截图标识无效。");
                 await Task.Delay(200);using(var image=File.Create(arguments[2]+"."+tag+".png"))await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);return true;
+            case "acceptance.window-sizes":
+                if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
+                using(var window=new RdpDesktop(new(1024,768))){window.Show();await Task.Delay(150);var small=new{width=window.Width,height=window.Height};window.ApplyResolution(new(1600,900));var large=new{width=window.Width,height=window.Height};if(large.width<=small.width)throw new InvalidOperationException("分辨率增加后窗口未变大。");window.ApplyResolution(new(1024,768));if(window.Width!=small.width||window.Height!=small.height)throw new InvalidOperationException("分辨率减小后窗口未还原。");window.ApplyResolution(new(1920,1080));var area=System.Windows.Forms.Screen.FromControl(window).WorkingArea;if(!area.Contains(window.Bounds))throw new InvalidOperationException("桌面窗口超出工作区。");window.Close();return new{success=true,small,large,screenBoundsRespected=true};}
             case "acceptance.connect-current":
                 if(!IsAcceptance||arguments[0]!="--maintenance-acceptance"||supportSettings==null)throw new InvalidOperationException("未启用维护验收。");
                 session=new SshSession(dataDirectory);session.Log+=text=>QueueLog(activeStep,text);session.DirectoryLog+=text=>QueueLog("folder",text);
@@ -233,7 +242,7 @@ public sealed class MainWindow : Window
             case "account.draft.get": return preferences.ReadDraft(RequireSession());
             case "account.draft.save": preferences.SaveDraft(RequireSession(),new(Read("username"),Read("hostname"),Read("password")));return true;
             case "desktop.resolution.get": return preferences.ReadResolution();
-            case "desktop.resolution.save": preferences.SaveResolution(new(args.GetProperty("width").GetInt32(),args.GetProperty("height").GetInt32()));return true;
+            case "desktop.resolution.save": var resolution=new DesktopResolution(args.GetProperty("width").GetInt32(),args.GetProperty("height").GetInt32());preferences.SaveResolution(resolution);return clients.ResizeOpenDesktops(resolution);
             case "account": return await RequireSession().RequestAsync<AccountInfo>("account_info", null, lifetime.Token);
             case "desktop": await clients.OpenDesktopAsync(RequireSession(), lifetime.Token,preferences.ReadResolution()); return true;
             case "terminal": await clients.OpenTerminalAsync(RequireSession(), lifetime.Token); return RequireSession().Server;
