@@ -32,7 +32,7 @@ internal sealed class ClientServices : IDisposable
     private (string Version,string Url,string Digest,long Size)? release;
     private DateTimeOffset lastCheck;
     private UpdateInfo? lastUpdate;
-    public static string Version=>Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)??"0.4.0";
+    public static string Version=>Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]??Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)??"0.4.3";
     public ClientServices(string directory,HttpMessageHandler? transport=null,HttpMessageHandler? downloadTransport=null)
     {
         http=transport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(transport);http.MaxResponseContentBufferSize=1048576;http.Timeout=TimeSpan.FromSeconds(15);this.downloadTransport=downloadTransport;
@@ -78,21 +78,24 @@ internal sealed class ClientServices : IDisposable
     {
         if(lastUpdate!=null&&DateTimeOffset.UtcNow-lastCheck<TimeSpan.FromSeconds(force?30:43200))return lastUpdate;
         lastCheck=DateTimeOffset.UtcNow;
-        using var request=new HttpRequestMessage(HttpMethod.Get,"https://api.github.com/repos/"+Repository+"/releases/latest");request.Headers.Accept.ParseAdd("application/vnd.github+json");
+        bool betaChannel=ReleaseNumber.Parse(Version)?.Beta==true;
+        using var request=new HttpRequestMessage(HttpMethod.Get,"https://api.github.com/repos/"+Repository+(betaChannel?"/releases?per_page=100":"/releases/latest"));request.Headers.Accept.ParseAdd("application/vnd.github+json");
         using var response=await http.SendAsync(request,ct);
         if(response.StatusCode==HttpStatusCode.NotFound)return lastUpdate=new(Version,null,"尚未发布正式版本",null);
         if(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)throw new IOException("GitHub 暂时限制了查询频率，请稍后重试。");
         response.EnsureSuccessStatusCode();using var doc=JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));var root=doc.RootElement;
+        if(betaChannel){JsonElement? best=null;ReleaseNumber? bestNumber=null;foreach(var candidate in root.EnumerateArray()){if(candidate.GetProperty("draft").GetBoolean())continue;var number=ReleaseNumber.Parse(candidate.GetProperty("tag_name").GetString()??"");if(number==null||(candidate.GetProperty("prerelease").GetBoolean()&&!number.Beta))continue;if(bestNumber==null||number.CompareTo(bestNumber)>0){best=candidate;bestNumber=number;}}if(best==null)return lastUpdate=new(Version,null,"尚未发布测试版本",null);root=best.Value;}
         var update=ParseRelease(root,Version);release=null;
         if(update.CanInstall){string name="SafeCode-"+update.Version+"-Setup-x64.exe";var asset=root.GetProperty("assets").EnumerateArray().First(x=>x.GetProperty("name").GetString()==name);release=(update.Version!,asset.GetProperty("browser_download_url").GetString()!,asset.GetProperty("digest").GetString()![7..],asset.GetProperty("size").GetInt64());}
         return lastUpdate=update;
     }
     internal static UpdateInfo ParseRelease(JsonElement root,string current)
     {
-        string tag=root.GetProperty("tag_name").GetString()??"";string version=tag.TrimStart('v');
-        if(root.GetProperty("draft").GetBoolean()||root.GetProperty("prerelease").GetBoolean()||!System.Version.TryParse(version,out var latest)||!System.Version.TryParse(current,out var installed))throw new IOException("GitHub 返回的版本信息无效。");
+        string tag=root.GetProperty("tag_name").GetString()??"";string version=tag.StartsWith('v')?tag[1..]:tag;
+        var latest=ReleaseNumber.Parse(version);var installed=ReleaseNumber.Parse(current);
+        if(latest==null||installed==null||root.GetProperty("draft").GetBoolean()||(root.GetProperty("prerelease").GetBoolean()&&(!installed.Beta||!latest.Beta)))throw new IOException("GitHub 返回的版本信息无效。");
         string page="https://github.com/"+Repository+"/releases/tag/"+Uri.EscapeDataString(tag);
-        if(latest<=installed)return new(current,null,"已是最新版本",page);
+        if(latest.CompareTo(installed)<=0)return new(current,null,"已是最新版本",page);
         string name="SafeCode-"+version+"-Setup-x64.exe";bool valid=false;
         foreach(var asset in root.GetProperty("assets").EnumerateArray()){
             if(asset.GetProperty("name").GetString()!=name)continue;
