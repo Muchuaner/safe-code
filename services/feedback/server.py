@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 
-VERSION=re.compile(r'^\d{1,4}\.\d{1,4}\.\d{1,4}$')
+VERSION=re.compile(r'^(?:Beta-)?\d{1,4}\.\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$')
 class Store:
     def __init__(self,path):
         self.path=str(path)

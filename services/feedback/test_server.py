@@ -28,6 +28,9 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId='bad',version='0.4.0',message='测试反馈文字')),400)
     def test_full_chinese_feedback_escaped_json(self):
         self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='0.4.0',message='测'*4000)),202)
+    def test_beta_version(self):
+        event=self.usage();event['version']='Beta-0.4.3.1';self.assertEqual(self.post('/v1/usage',event),202)
+        self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='Beta-0.4.3.1',message='Beta test feedback')),202)
     def test_retention(self):
         with self.store.connect() as db:
             db.execute('INSERT INTO usage VALUES(?,?,?,?,?)',('old','old','2000-01-01','0.1.0','Windows'));db.execute('INSERT INTO feedback VALUES(?,?,?,?)',('old','2000-01-01T00:00:00+00:00','0.1.0','old-feedback'))
