@@ -2,6 +2,26 @@ using SafeCode.Core;
 using System.Net.Sockets;
 using System.Text.Json;
 
+if(args.Length>1&&args[0]=="mount-fixture"){
+    using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string directory=c.GetProperty("directory").GetString()!;int port=c.GetProperty("port").GetInt32();
+    using var client=new Renci.SshNet.SshClient("127.0.0.1",port,"fixture","fixture-only");client.HostKeyReceived+=(_,e)=>e.CanTrust=Convert.ToBase64String(e.HostKey)==c.GetProperty("key").GetString();await client.ConnectAsync(default);
+    using var session=new SshSession(Path.Combine(directory,"settings"));var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+    void Set(string name,object value)=>typeof(SshSession).GetField(name,flags)!.SetValue(session,value);
+    Set("client",client);Set("connection",new ConnectionSettings("127.0.0.1","fixture","fixture-only",port));Set("trustedKey",Convert.FromBase64String(c.GetProperty("key").GetString()!));Set("remoteDirectory",directory);
+    typeof(SshSession).GetProperty("Server")!.SetValue(session,new ServerInfo{MountReady=true});
+    Directory.CreateDirectory(Path.Combine(directory,"local"));var mappings=new List<MountMapping>{new(Path.Combine(directory,"local"),"/home/fixture/shared")};
+    var first=await session.ApplyMountsAsync(mappings);var second=await session.ApplyMountsAsync(mappings);
+    if(first.ClientId.Length!=20||second.ClientId!=first.ClientId||!session.HasMounts)throw new Exception("重挂载客户端标识丢失。");
+    if(session.ReadMountMappings().Count!=1)throw new Exception("挂载设置未保存。");
+    var oldChannel=typeof(SshSession).GetField("fileServer",flags)!.GetValue(session);bool refused=false;
+    try{await session.ApplyMountsAsync([new(mappings[0].Local,"/home/fixture/nonempty")]);}catch(InvalidOperationException e){refused=e.Message.Contains("不是空目录");}
+    if(!refused||!ReferenceEquals(oldChannel,typeof(SshSession).GetField("fileServer",flags)!.GetValue(session))||session.ReadMountMappings()[0].Remote!=mappings[0].Remote)throw new Exception("无效目录导致旧文件通道或设置丢失。");
+    await session.ApplyMountsAsync([]);if(session.HasMounts||session.ReadMountMappings().Count!=0)throw new Exception("清空挂载失败。");
+    var third=await session.ApplyMountsAsync(mappings);if(third.ClientId!=first.ClientId)throw new Exception("重新挂载身份改变。");await session.UnmountAsync();
+    bool completeError=false;try{await session.RequestAsync<JsonElement>("fixture_error");}catch(InvalidOperationException e){completeError=e.Message=="挂载失败\n第二行原因\n最后一行";}
+    if(!completeError)throw new Exception("多行远端错误被截断。");
+    Console.WriteLine("REMOUNT_ID_INVALID_TARGET_PRESERVES_CHANNEL_SETTINGS_CLEAR_REAPPLY_AND_MULTILINE_ERROR_PASSED");return 0;
+}
 if(args.Length>1&&args[0]=="directory-fixture"){
     using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string fp=c.GetProperty("fingerprint").GetString()!;
     using var client=new Renci.SshNet.SshClient("127.0.0.1",c.GetProperty("port").GetInt32(),"fixture","fixture-only");client.HostKeyReceived+=(_,e)=>e.CanTrust="SHA256:"+Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(e.HostKey)).TrimEnd('=')==fp;await client.ConnectAsync(default);

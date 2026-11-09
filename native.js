@@ -17,7 +17,8 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
       const item=pending.get(id);if(!item)return;pending.delete(id);error?item.reject(new Error(error)):item.resolve(result);
     };
     window.safeCodeNativeLog = (step,line) => {
-      if(step==='folder'&&$('#remote-folder-dialog').open){appendFolderLog(line);}
+      if(step==='mount_apply'&&mountSaving){mountProgressText.textContent=line;}
+      else if(step==='folder'&&$('#remote-folder-dialog').open){appendFolderLog(line);}
       else if(currentTask>=0){taskLogs[currentTask]=line;renderTasks();}
       else if(connectionInFlight&&!$('#workspace-screen').hidden){connectionProgress(line);}
       else if($('#login-screen').hidden===false){$('#connection-message').textContent=line;}
@@ -210,9 +211,19 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     $('#resolution-form').onsubmit=async e=>{e.preventDefault();const [width,height]=$('#resolution-select').value.split('x').map(Number);try{const result=await native('desktop.resolution.save',{width,height});$('#resolution-dialog').close();if(result.deferred>0)showAppMessage('窗口大小已调整。当前服务器未接受在线分辨率切换，新像素分辨率将在下次打开桌面时使用。');}catch(e){showAppMessage(e.message);}};
     native('login.load').then(saved=>{if(saved&&$('#workspace-screen').hidden){$('#ip').value=saved.host;$('#username').value=saved.username;$('#password').value=saved.password;sshPort=saved.port||22;}}).catch(()=>{});
     $('#mount-settings').onclick=async()=>{try{mountPairs=await native('mount.settings');$('#mount-list').replaceChildren();(mountPairs.length?mountPairs:[{local:'',remote:''}]).forEach(appendMountPair);$('#mount-dialog').showModal();}catch(e){showAppMessage(e.message);}};
+    let mountSaving=false;
+    const mountProgress=document.createElement('div');mountProgress.className='connection-progress';mountProgress.hidden=true;mountProgress.setAttribute('role','status');mountProgress.setAttribute('aria-live','polite');
+    const mountSpinner=document.createElement('span');mountSpinner.className='connection-spinner';mountSpinner.setAttribute('aria-hidden','true');
+    const mountProgressText=document.createElement('span');const mountElapsed=document.createElement('span');mountProgress.append(mountSpinner,mountProgressText,mountElapsed);$('#mount-form .mount-footer').before(mountProgress);
+    $('#mount-dialog').addEventListener('cancel',e=>{if(mountSaving)e.preventDefault();});
     $('#mount-form').onsubmit=async e=>{
-      e.preventDefault();const mappings=$$('#mount-list .mount-pair').map(row=>({local:row.querySelector('[data-path="local"]').value.trim(),remote:row.querySelector('[data-path="remote"]').value.trim()}));
-      try{await native('mount.apply',{mappings});mountPairs=mappings;$('#mount-summary').textContent='已挂载 '+mappings.length+' 组目录。';$('#mount-dialog').close();}catch(error){showAppMessage(error.message);}
+      e.preventDefault();if(mountSaving)return;if(busy){showAppMessage('已有任务正在执行，请等待完成。');return;}if(!$('#mount-form').reportValidity())return;
+      const mappings=$$('#mount-list .mount-pair').map(row=>({local:row.querySelector('[data-path="local"]').value.trim(),remote:row.querySelector('[data-path="remote"]').value.trim()}));
+      mountSaving=true;busy=true;const form=$('#mount-form'),button=form.querySelector('[type="submit"]');const controls=[...form.querySelectorAll('button,input'),$('#close-mount')].map(control=>[control,control.disabled]);
+      for(const [control] of controls)control.disabled=true;form.setAttribute('aria-busy','true');button.textContent='正在挂载…';mountProgress.hidden=false;mountProgressText.textContent=mappings.length?'正在建立文件通道并检查目录…':'正在同步并卸载目录…';mountElapsed.textContent='已用时 0 秒';
+      const started=Date.now();const timer=setInterval(()=>{mountElapsed.textContent='已用时 '+Math.floor((Date.now()-started)/1000)+' 秒';},1000);renderTasks();
+      try{await native('mount.apply',{mappings});mountPairs=mappings;$('#mount-summary').textContent=mappings.length?'已挂载 '+mappings.length+' 组目录。':'已卸载所有目录。';$('#mount-dialog').close();}catch(error){showAppMessage(error.message);}
+      finally{clearInterval(timer);mountSaving=false;busy=false;mountProgress.hidden=true;form.removeAttribute('aria-busy');for(const [control,disabled] of controls)control.disabled=disabled;button.textContent='保存设置';renderTasks();}
     };
     $('#ip-policy-form').onsubmit=async e=>{
       e.preventDefault();const args={ingressIp:$('#ingress-ip-input').value.trim(),egressIp:$('#egress-ip-input').value.trim(),lockIngress:$('#lock-ingress').checked,lockEgress:$('#lock-egress').checked};

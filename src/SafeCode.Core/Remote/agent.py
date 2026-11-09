@@ -64,7 +64,7 @@ import json,os,pathlib,sys,tempfile
 request=json.load(sys.stdin);base=pathlib.Path(os.environ['HOME']).resolve();relative=pathlib.Path(request['relative'])
 if relative.is_absolute() or '..' in relative.parts:raise ValueError('用户目录路径无效。')
 target=base/relative;operation=request['operation']
-checked=target.parent.resolve() if operation in ['alias','remove_alias'] else target.resolve()
+checked=target.parent.resolve() if operation in ['alias','check_alias','remove_alias'] else target.resolve()
 if not checked.is_relative_to(base):raise ValueError('用户配置路径指向主目录之外，已拒绝操作。')
 os.umask(0o077)
 if operation=='read':
@@ -72,14 +72,16 @@ if operation=='read':
     with target.open() as f:value=f.read(1048577)
     if len(value)>1048576:raise ValueError('用户配置文件过大。')
     print(json.dumps(value));sys.exit(0)
-if operation=='alias':
+if operation in ['alias','check_alias']:
     destination=pathlib.Path(request['destination'])
     if target.is_symlink():
         if target.readlink()!=destination:raise ValueError('目标已存在其他符号链接，未覆盖。')
         sys.exit(0)
     if target.exists():
-        if not target.is_dir() or any(target.iterdir()):raise ValueError('挂载目标不是空目录，未覆盖。')
+        if not target.is_dir() or any(target.iterdir()):raise ValueError('服务器目录不是空目录，请选择新的或空的目录：'+str(target))
+        if operation=='check_alias':sys.exit(0)
         target.rmdir()
+    if operation=='check_alias':sys.exit(0)
     target.parent.mkdir(parents=True,exist_ok=True);target.symlink_to(destination,target_is_directory=True);sys.exit(0)
 if operation=='remove_alias':
     destination=pathlib.Path(request['destination'])
@@ -101,7 +103,12 @@ def user_files(operation,relative,**parameters):
     a=account();entry=pwd.getpwnam(a['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
     request={'operation':operation,'relative':str(relative),**parameters}
-    return run(['runuser','-u',a['username'],'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin','LANG=C.UTF-8','python3','-I','-c',USER_FILES],stdin=json.dumps(request))
+    completed=run(['runuser','-u',a['username'],'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin','LANG=C.UTF-8','python3','-I','-c',USER_FILES],check=False,stdin=json.dumps(request))
+    if completed.returncode:
+        detail=(completed.stderr or completed.stdout or '用户目录操作失败').strip().splitlines()[-1]
+        if detail.startswith('ValueError: '):detail=detail[len('ValueError: '):]
+        raise RuntimeError(detail)
+    return completed
 
 def user_write(relative,content,mode=0o644):user_files('write',relative,content=content,mode=mode)
 def user_read(relative):
@@ -413,11 +420,17 @@ def apply_mounts(options):
     listeners=run(['ss','-H','-lnt','sport = :'+str(port)]).stdout
     if '127.0.0.1:'+str(port) not in listeners or any(x in listeners for x in ['0.0.0.0:'+str(port),'*:'+str(port),'[::]:'+str(port)]):raise RuntimeError('反向文件端口未限定为回环地址，请检查 sshd 的 GatewayPorts 设置。')
     aliases=[]
+    previous_record=STATE/('mount-'+client+'.json')
+    previous=json.loads(previous_record.read_text()) if previous_record.exists() else {}
+    previous_targets=dict(zip(previous.get('aliases',[]),previous.get('paths',[])))
+    log('正在检查服务器目录…')
     for mapping in mappings:
         value=mapping.get('remote','');target=Path(value)
         if not target.is_absolute() or '..' in target.parts or not target.parent.resolve().is_relative_to(home()):raise RuntimeError('挂载目标必须位于工作用户的主目录下。')
         if target==home():raise RuntimeError('不能覆盖整个用户目录。')
         if str(target) in aliases:raise RuntimeError('挂载目标不能重复。')
+        if any(target.is_relative_to(Path(alias)) or Path(alias).is_relative_to(target) for alias in aliases):raise RuntimeError('挂载目录不能相互包含，请选择独立的目录。')
+        user_files('check_alias',str(target.relative_to(home())),destination=previous_targets.get(str(target),''))
         aliases.append(str(target))
     remove_mounts({'clientId':client})
     managed=Path('/mnt/safe-code');secure_root_directory(managed,0o755);managed=managed/a['username'];secure_root_directory(managed,0o755);managed=managed/client;secure_root_directory(managed,0o755)
@@ -437,7 +450,8 @@ def apply_mounts(options):
         for target,url,alias in zip(targets,urls,aliases):
             target=Path(target)
             log('建立加密文件通道：'+str(target))
-            completed=subprocess.run(['mount','-t','davfs',url,str(target),'-o','conf='+str(config)+',uid='+str(uid)+',gid='+str(gid)+',file_mode=0600,dir_mode=0700,noexec,nosuid,nodev'],input='',text=True,capture_output=True,timeout=75)
+            try:completed=subprocess.run(['mount','-t','davfs',url,str(target),'-o','conf='+str(config)+',uid='+str(uid)+',gid='+str(gid)+',file_mode=0600,dir_mode=0700,noexec,nosuid,nodev'],input='',text=True,capture_output=True,timeout=75)
+            except subprocess.TimeoutExpired:raise RuntimeError('建立目录挂载超时，请检查 SSH 文件通道后重试。')
             if completed.returncode:raise RuntimeError('目录挂载失败：'+completed.stderr[-800:])
             if not os.path.ismount(target):raise RuntimeError('目标未成为实际挂载点。')
             mounted.append(str(target));write(record,json.dumps({'paths':mounted,'urls':urls,'aliases':aliases}),0o600)
@@ -485,7 +499,7 @@ def poll_job(job,offset):
         complete=data.rfind(b'\n')+1
         if complete:
             data=data[:complete];next_offset=offset+len(data)
-            lines=[x for x in data.decode('utf-8',errors='replace').splitlines() if not x.startswith(('SC_RESULT:','SC_ERROR:'))]
+            lines=[x for x in data.decode('utf-8',errors='replace').splitlines() if not x.startswith(('SC_RESULT:','SC_ERROR:','SC_ERROR_JSON:'))]
     value=json.loads((directory/'result.json').read_text()) if (directory/'result.json').exists() else None
     error=json.loads((directory/'error.json').read_text()).get('error') if (directory/'error.json').exists() else None
     if value is None and error is None:
@@ -555,4 +569,4 @@ if __name__=='__main__':
         for secret in REDACTIONS:
             if secret:message=message.replace(secret,'[已隐藏]')
         if JOB_DIR is not None:write(JOB_DIR/'error.json',json.dumps({'error':message},ensure_ascii=False),0o600)
-        print('SC_ERROR:'+message,flush=True);sys.exit(1)
+        print('SC_ERROR_JSON:'+json.dumps(message,ensure_ascii=False),flush=True);sys.exit(1)
