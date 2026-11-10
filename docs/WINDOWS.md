@@ -1,6 +1,6 @@
-# Safe Code Beta-0.4.3.1 · Windows 本地开发版
+# Safe Code Beta-0.4.3.3 · Windows 测试版
 
-推荐运行 `SafeCode-Beta-0.4.3.1-Setup-x64.exe`，安装到当前用户的应用目录，桌面生成 Safe Code 快捷方式。无需管理员权限。安装包内含自包含 .NET 和微软 WebView2 完整离线安装程序；已经安装 WebView2 时直接复用。安装过程不下载这两项依赖。安装后的 DLL 与界面资源保存在应用目录，用户无需管理。
+推荐运行 `SafeCode-Beta-0.4.3.3-Setup-x64.exe`，安装到当前用户的应用目录，桌面生成 Safe Code 快捷方式。无需管理员权限。安装包内含自包含 .NET 和微软 WebView2 完整离线安装程序；已经安装 WebView2 时直接复用。安装过程不下载这两项依赖。安装后的 DLL 与界面资源保存在应用目录，用户无需管理。
 
 支持 Windows 10 2004（19041）及以后版本、Windows 11 x64；本版在 Windows 10 19045 验证。无需在电脑上安装 Python、Node.js、WSL 或 .NET SDK。SSH 终端调用 Windows 自带 OpenSSH Client；精简系统若没有此可选功能，需要启用。VPS 上的 Ubuntu 软件、Chrome、Claude Code 与 CloudCLI 由 VPS 自己联网下载，不消耗用户电脑的软件下载流量；远程桌面和文件传输仍使用用户网络。首次取得安装包需要下载完整 EXE，之后可离线复制安装。
 

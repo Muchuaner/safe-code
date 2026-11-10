@@ -13,6 +13,6 @@ Windows 客户端编译、隐私与授权检查、接收服务单测和 HTTPS �
 
 下载 `SafeCode-Beta-0.4.3.3-Setup-x64.exe`，支持 Windows 10 2004（19041）及以上与 Windows 11 x64，含 .NET 与 WebView2 离线依赖。已安装 Beta 版可通过“更新与反馈”升级，正式版不接收 Beta 通道。
 
-文件大小：271,268,395 字节。
+文件大小：271,265,056 字节。
 
-SHA256：`58a0a6ea85b3e90e26a309df354610d52bbd58ec832ba40f1ad8224258fab466`
+SHA256：`0a3e6ebb3005092bd41ebed44ce135d0a2b9587f12dcda15b6bb921754776759`
