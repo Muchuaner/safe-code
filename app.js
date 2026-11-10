@@ -272,12 +272,57 @@ $('#close-localization').onclick=()=>$('#localization-dialog').close();
 $('#localization-form').onsubmit=e=>{
   e.preventDefault();localeSelection=$('#locale-region').value;states[1]='pending';taskLogs[1]='';selectedTasks.delete(1);renderTasks();$('#localization-dialog').close();
 };
+const ipPickerControls=new Map();
+function closeIpPickers(){for(const {trigger,menu} of ipPickerControls.values()){menu.hidden=true;trigger.setAttribute('aria-expanded','false');}}
+function syncIpPickers(){
+  for(const [id,{trigger,value,menu}] of ipPickerControls){
+    const select=document.getElementById(id);value.textContent=select.value||'未检测到可用 IP';trigger.disabled=select.options.length===0;trigger.classList.toggle('is-empty',!select.value);
+    for(const option of menu.querySelectorAll('[role=option]')){const selected=option.dataset.ip===select.value;option.setAttribute('aria-selected',String(selected));}
+  }
+  const button=$('#ip-policy-form [type=submit]');if(!$('#ip-policy-form').hasAttribute('aria-busy'))button.disabled=[...ipPickerControls.keys()].some(id=>!document.getElementById(id).value);
+}
+function setDetectedIpOptions(addresses){
+  const unique=[...new Set(addresses)];
+  for(const [id,{select,menu}] of ipPickerControls){
+    const previous=select.value;select.replaceChildren();menu.replaceChildren();
+    for(const ip of unique){
+      const option=document.createElement('option');option.value=ip;option.textContent=ip;select.append(option);
+      const item=document.createElement('button');item.type='button';item.className='ip-picker-option';item.setAttribute('role','option');item.tabIndex=-1;item.dataset.ip=ip;
+      const text=document.createElement('span');text.textContent=ip;const check=document.createElementNS('http://www.w3.org/2000/svg','svg');check.setAttribute('viewBox','0 0 16 16');check.setAttribute('aria-hidden','true');const path=document.createElementNS(check.namespaceURI,'path');path.setAttribute('d','m3 8 3 3 7-7');check.append(path);item.append(text,check);
+      item.onclick=()=>{select.value=ip;select.dispatchEvent(new Event('change'));closeIpPickers();ipPickerControls.get(id).trigger.focus();};menu.append(item);
+    }
+    select.value=unique.includes(previous)?previous:(unique[0]||'');
+  }
+  syncIpPickers();
+}
+for(const holder of document.querySelectorAll('[data-ip-picker]')){
+  const id=holder.dataset.ipPicker,select=document.getElementById(id),prefix=id.replace('-input','');
+  const trigger=document.createElement('button');trigger.type='button';trigger.className='ip-picker-trigger';trigger.id=prefix+'-trigger';trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-labelledby',prefix+'-label '+prefix+'-value');trigger.setAttribute('aria-controls',prefix+'-options');
+  const value=document.createElement('span');value.id=prefix+'-value';
+  const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');icon.setAttribute('viewBox','0 0 16 16');icon.setAttribute('aria-hidden','true');const path=document.createElementNS(icon.namespaceURI,'path');path.setAttribute('d','m4 6 4 4 4-4');icon.append(path);trigger.append(value,icon);
+  const menu=document.createElement('div');menu.id=prefix+'-options';menu.className='ip-picker-menu';menu.setAttribute('role','listbox');menu.setAttribute('aria-labelledby',prefix+'-label');menu.hidden=true;holder.append(trigger,menu);
+  const open=()=>{const wasOpen=!menu.hidden;closeIpPickers();if(wasOpen)return;menu.hidden=false;trigger.setAttribute('aria-expanded','true');(menu.querySelector('[aria-selected=true]')||menu.firstElementChild)?.focus();};
+  trigger.onclick=open;select.onchange=()=>{select.setCustomValidity('');syncIpPickers();};
+  holder.onkeydown=event=>{
+    if(event.key==='Escape'&&!menu.hidden){event.preventDefault();event.stopPropagation();closeIpPickers();trigger.focus();return;}
+    if(event.key==='Tab'){closeIpPickers();return;}
+    if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
+      event.preventDefault();if(menu.hidden){open();return;}
+      const options=[...menu.querySelectorAll('[role=option]')],index=options.indexOf(document.activeElement);if(!options.length)return;
+      const next=event.key==='Home'?0:event.key==='End'?options.length-1:(index+(event.key==='ArrowUp'?-1:1)+options.length)%options.length;options[next].focus();
+    }
+  };
+  ipPickerControls.set(id,{select,trigger,value,menu});
+}
+document.addEventListener('pointerdown',event=>{if(!event.target.closest('.ip-picker'))closeIpPickers();});
+$('#ip-policy-dialog').addEventListener('close',closeIpPickers);
+syncIpPickers();
 function openIpPolicy(change=false){
   $('#ip-policy-title').textContent=change?'更换入口与出口 IP':'出入口 IP 锁定设置';
   $('#ingress-ip-input').value=serverConnection.ingressIp;$('#egress-ip-input').value=serverConnection.egressIp;
   $('#lock-ingress').checked=ipPolicy.lockIngress;$('#lock-egress').checked=ipPolicy.lockEgress;
   for(const id of ['ingress-ip-input','egress-ip-input'])$('#'+id).setCustomValidity('');
-  $('#ip-policy-dialog').showModal();
+  syncIpPickers();$('#ip-policy-dialog').showModal();
 }
 $('#lock-ips').onclick=()=>openIpPolicy();$('#change-ips').onclick=()=>openIpPolicy(true);
 $('#close-ip-policy').onclick=()=>$('#ip-policy-dialog').close();

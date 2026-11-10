@@ -28,6 +28,7 @@ public sealed class MainWindow : Window
     private (string Token,HostKeyInfo Key)? pendingHostTrust;
     private readonly object logLock=new();
     private readonly Queue<(string Step,string Line)> logQueue=new();
+    private readonly Dictionary<string,DiagnosticTrace> diagnosticTraces=new();
     private CancellationTokenSource? browsing;
     private readonly System.Windows.Threading.DispatcherTimer logTimer=new(){Interval=TimeSpan.FromMilliseconds(120)};
     private string activeStep = "";
@@ -37,7 +38,7 @@ public sealed class MainWindow : Window
     private readonly string[] arguments;
     private readonly ConnectionSettings? supportSettings;
     private readonly string? supportFingerprint;
-    private bool IsAcceptance=>arguments.Length>=3&&(arguments[0]=="--acceptance"||arguments[0]=="--services-acceptance"||arguments[0]=="--connection-acceptance"||arguments[0]=="--maintenance-acceptance");
+    private bool IsAcceptance=>arguments.Length>=3&&(arguments[0]=="--acceptance"||arguments[0]=="--services-acceptance"||arguments[0]=="--connection-acceptance"||arguments[0]=="--maintenance-acceptance"||arguments[0]=="--ip-acceptance"||arguments[0]=="--updates-acceptance");
     private readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SafeCode");
     public MainWindow(string[] arguments)
     {
@@ -50,6 +51,17 @@ public sealed class MainWindow : Window
             if(string.IsNullOrEmpty(supportFingerprint)||supportFingerprint!=target.GetProperty("expectedFingerprint").GetString())throw new InvalidOperationException("验收目标指纹未匹配已确认记录。");
             dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Maintenance-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;
         }
+        if(arguments.Length>=1&&arguments[0] is "--ip-acceptance" or "--ip-manual")
+        {
+            dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-IP-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;
+            if(arguments[0]=="--ip-acceptance")
+            {
+                using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));
+                if(!cfg.RootElement.GetProperty("allowNetworkChanges").GetBoolean()||cfg.RootElement.GetProperty("host").GetString()!=cfg.RootElement.GetProperty("ingressIp").GetString())throw new InvalidOperationException("IP 验收需要明确授权并指定目标入口。");
+                acceptanceFingerprint=cfg.RootElement.GetProperty("fingerprint").GetString();
+            }
+        }
+        if(arguments.Length>=3&&arguments[0]=="--updates-acceptance"){dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Updates-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;}
         services=new ClientServices(dataDirectory);preferences=new ClientPreferences(dataDirectory);
         this.arguments = arguments; Title = "Safe Code"; Width = 360; Height = 536;
         MinWidth = 360; MinHeight = 500; WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -111,7 +123,7 @@ public sealed class MainWindow : Window
             browser.CoreWebView2.WebMessageReceived += OnMessage;
             browser.CoreWebView2.NavigationCompleted += async (_, e) =>
             {
-                if(e.IsSuccess&&IsAcceptance){if(arguments[0]=="--maintenance-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunMaintenanceAcceptance()");else if(arguments[0]=="--connection-acceptance"){using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunConnectionAcceptance("+cfg.RootElement.GetRawText()+")");}else if(arguments[0]=="--services-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunServicesAcceptance()");else await RunAcceptanceAsync(arguments[1],arguments[2]);}
+                if(e.IsSuccess&&IsAcceptance){if(arguments[0]=="--updates-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunUpdateAcceptance()");else if(arguments[0]=="--ip-acceptance"){using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunIpAcceptance("+cfg.RootElement.GetRawText()+")");}else if(arguments[0]=="--maintenance-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunMaintenanceAcceptance()");else if(arguments[0]=="--connection-acceptance"){using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunConnectionAcceptance("+cfg.RootElement.GetRawText()+")");}else if(arguments[0]=="--services-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunServicesAcceptance()");else await RunAcceptanceAsync(arguments[1],arguments[2]);}
             };
             browser.Source = new Uri("https://safe-code.local/index.html");
         }
@@ -125,6 +137,7 @@ public sealed class MainWindow : Window
     {
         if (!e.Source.StartsWith("https://safe-code.local/", StringComparison.Ordinal)) return;
         string id = "";
+        DiagnosticTrace? diagnostic=null;Exception? diagnosticError=null;
         try
         {
             using var document = JsonDocument.Parse(e.WebMessageAsJson); var root = document.RootElement;
@@ -134,12 +147,25 @@ public sealed class MainWindow : Window
             if(installingUpdate)throw new InvalidOperationException("正在准备安装更新，请稍候。");
             bool maintenance=operation is "cloud.install" or "mount.install" or "mount.apply" or "ip.apply" or "terminal";
             if(maintenance)maintenanceOperations++;
+            if(!IsAcceptance&&services.DiagnosticsAllowed)
+            {
+                string? diagnosticOperation=DiagnosticTrace.OperationFor(operation,args);
+                if(diagnosticOperation!=null){diagnostic=new(diagnosticOperation,services.DiagnosticGeneration);lock(logLock)diagnosticTraces[diagnosticOperation]=diagnostic;}
+            }
             object? answer;try{answer=await HandleAsync(operation,args);}finally{if(maintenance)maintenanceOperations--;}
 
             await FlushLogsAsync();
             await RespondAsync(id, answer, null);
         }
-        catch (Exception error) { await RespondAsync(id, null, error.Message); }
+        catch (Exception error) { diagnosticError=error;await RespondAsync(id, null, error.Message); }
+        finally
+        {
+            if(diagnostic!=null)
+            {
+                lock(logLock){if(diagnosticTraces.GetValueOrDefault(diagnostic.Operation)==diagnostic)diagnosticTraces.Remove(diagnostic.Operation);}
+                if(diagnostic.Operation!="connection"||pendingHostTrust==null||diagnosticError!=null)_=services.SendDiagnosticAsync(diagnostic,diagnosticError,lifetime.Token);
+            }
+        }
     }
     private async Task<object?> HandleAsync(string operation, JsonElement args)
     {
@@ -157,6 +183,7 @@ public sealed class MainWindow : Window
             case "copy": Clipboard.SetText(Read("text")); return true;
             case "services.preferences": return services.Preferences();
             case "services.consent": return await services.SetConsentAsync(args.GetProperty("enabled").GetBoolean(),args.TryGetProperty("confirmed",out var consent)&&consent.GetBoolean());
+            case "diagnostics.consent": return services.SetDiagnosticConsent(args.GetProperty("enabled").GetBoolean());
             case "feedback.send": await services.SendFeedbackAsync(Read("message"),lifetime.Token);return true;
             case "updates.check": return await services.CheckUpdateAsync(args.TryGetProperty("force",out var force)&&force.GetBoolean(),lifetime.Token);
             case "updates.download":
@@ -172,7 +199,7 @@ public sealed class MainWindow : Window
             case "pickFolder": var dialog = new OpenFolderDialog { Title = "选择要挂载到 VPS 的本地目录", InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
             case "acceptance.capture":
                 if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
-                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services"&&tag!="loading"&&tag!="error"&&tag!="advanced"&&tag!="trust"&&tag!="resolution"&&tag!="draft"&&tag!="install"&&tag!="folder"&&tag!="maintenance")throw new ArgumentException("截图标识无效。");
+                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services"&&tag!="loading"&&tag!="error"&&tag!="advanced"&&tag!="trust"&&tag!="resolution"&&tag!="draft"&&tag!="install"&&tag!="folder"&&tag!="maintenance"&&tag!="ip"&&tag!="update")throw new ArgumentException("截图标识无效。");
                 await Task.Delay(200);using(var image=File.Create(arguments[2]+"."+tag+".png"))await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);return true;
             case "acceptance.window-sizes":
                 if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
@@ -256,8 +283,19 @@ public sealed class MainWindow : Window
             case "mount.install":
                 if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="mount_install";
                 try{return await Task.Run(()=>RequireSession().RequestAsync<ServerInfo>("mount_install",null,lifetime.Token));}finally{deploying=false;activeStep="";}
-            case "mount.apply": return await RequireSession().ApplyMountsAsync(JsonSerializer.Deserialize<List<MountMapping>>(args.GetProperty("mappings"), JsonDefaults.Options) ?? [], lifetime.Token);
-            case "ip.apply": return await RequireSession().ApplyIpPolicyAsync(JsonSerializer.Deserialize<IpPolicySettings>(args, JsonDefaults.Options) ?? throw new ArgumentException("缺少 IP 设置。"), lifetime.Token);
+            case "mount.apply":
+                var mappings=JsonSerializer.Deserialize<List<MountMapping>>(args.GetProperty("mappings"), JsonDefaults.Options) ?? [];
+                if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="mount_apply";
+                try{return await Task.Run(()=>RequireSession().ApplyMountsAsync(mappings,lifetime.Token));}finally{deploying=false;activeStep="";}
+            case "ip.apply":
+                if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="ip_policy";
+                try
+                {
+                    var changed=await RequireSession().ApplyIpPolicyAsync(JsonSerializer.Deserialize<IpPolicySettings>(args,JsonDefaults.Options)??throw new ArgumentException("缺少 IP 设置。"),lifetime.Token);
+                    try{var saved=LocalSecrets.Load();if(saved!=null)LocalSecrets.Save(saved with{Host=RequireSession().Host,Port=RequireSession().Port});}catch(Exception){QueueLog(activeStep,"服务器设置已保存；本机连接记忆未能更新，下次请填写新入口。");}
+                    return changed;
+                }
+                finally{deploying=false;activeStep="";}
             default: throw new InvalidOperationException("未知客户端操作。");
         }
     }
@@ -266,7 +304,7 @@ public sealed class MainWindow : Window
         List<object> lines=[];lock(logLock){while(logQueue.Count>0){var item=logQueue.Dequeue();lines.Add(new{step=item.Step,line=item.Line});}}
         if(lines.Count>0&&!lifetime.IsCancellationRequested&&browser.CoreWebView2!=null)try{await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeNativeLogs?.("+JsonSerializer.Serialize(lines,JsonDefaults.Options)+")");}catch{}
     }
-    private void QueueLog(string step,string line){lock(logLock){logQueue.Enqueue((step,line));while(logQueue.Count>1000)logQueue.Dequeue();}}
+    private void QueueLog(string step,string line){lock(logLock){if(diagnosticTraces.TryGetValue(string.IsNullOrEmpty(step)?"connection":step,out var diagnostic))diagnostic.Observe(line);logQueue.Enqueue((step,line));while(logQueue.Count>1000)logQueue.Dequeue();}}
     private SshSession RequireSession() => !connectionPending&&session?.IsConnected == true&&session.Server!=null ? session : throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
     private async Task RespondAsync(string id, object? result, string? error)
     {

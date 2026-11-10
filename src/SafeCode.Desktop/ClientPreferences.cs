@@ -25,7 +25,11 @@ internal sealed class ClientPreferences(string directory)
         string path=DraftPath(session);Directory.CreateDirectory(Path.GetDirectoryName(path)!);byte[] data=JsonSerializer.SerializeToUtf8Bytes(draft,JsonDefaults.Options);
         try{File.WriteAllBytes(path+".new",LocalSecrets.Protect(data));File.Move(path+".new",path,true);}finally{CryptographicOperations.ZeroMemory(data);}
     }
-    public void ClearDraft(SshSession session)=>File.Delete(DraftPath(session));
+    public void ClearDraft(SshSession session)
+    {
+        // 使用默认账户参数时不会创建草稿目录，部署成功后的清理应直接跳过。
+        try{File.Delete(DraftPath(session));}catch(DirectoryNotFoundException){}
+    }
     public DesktopResolution ReadResolution()
     {
         try{var value=JsonSerializer.Deserialize<DesktopResolution>(File.ReadAllText(Path.Combine(directory,"desktop-resolution.json")),JsonDefaults.Options);return value!=null&&Resolutions.Contains(value)?value:new();}catch(IOException){return new();}catch(JsonException){return new();}

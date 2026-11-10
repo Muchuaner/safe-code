@@ -1,7 +1,7 @@
 ﻿; 本地构建单个离线安装文件；不发布任何内容。
-#define AppVersion "Beta-0.4.3.1"
+#define AppVersion "Beta-0.4.3.3"
 #ifndef AppSource
-  #define AppSource "..\dist\SafeCode-Beta-0.4.3.1-win-x64"
+  #define AppSource "..\dist\SafeCode-Beta-0.4.3.3-win-x64"
 #endif
 #ifndef RuntimeSource
   #define RuntimeSource "..\.local\installer\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
@@ -13,7 +13,7 @@
 AppId={{C219972F-04EC-4647-92E0-1F93DB8DDE29}
 AppName=Safe Code
 AppVersion={#AppVersion}
-VersionInfoVersion=0.4.3.1
+VersionInfoVersion=0.4.3.3
 AppPublisher=Safe Code
 DefaultDirName={localappdata}\Programs\Safe Code
 DefaultGroupName=Safe Code
@@ -36,7 +36,7 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Source: "{#AppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#RuntimeSource}"; DestDir: "{tmp}"; DestName: "WebView2-offline.exe"; Flags: deleteafterinstall
 [Icons]
-Name: "{userdesktop}\Safe Code"; Filename: "{app}\SafeCode.exe"
+Name: "{userdesktop}\Safe Code"; Filename: "{app}\SafeCode.exe"; IconFilename: "{app}\Icons\safe-code-shortcut.ico"; IconIndex: 0
 Name: "{userprograms}\Safe Code"; Filename: "{app}\SafeCode.exe"
 [Run]
 Filename: "{tmp}\WebView2-offline.exe"; Parameters: "/silent /install"; Flags: waituntilterminated; Check: NeedsWebView
