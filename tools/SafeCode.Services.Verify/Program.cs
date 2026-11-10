@@ -5,8 +5,16 @@ using System.Security.Cryptography;
 using SafeCode.Desktop;
 
 void Assert(bool value,string message){if(!value)throw new Exception(message);}
+if(args.Length==2&&args[0]=="--diagnostic-fixture"){
+ var trace=new DiagnosticTrace("chrome",0);trace.Observe("Waiting for cache lock: password=must-not-upload 203.0.113.7");
+ File.WriteAllText(args[1],JsonSerializer.Serialize(new{schema=1,eventId=Guid.NewGuid().ToString(),version=ClientServices.Version,report=trace.Finish(new InvalidOperationException("Waiting for cache lock /var/lib/dpkg/lock-frontend"))},SafeCode.Core.JsonDefaults.Options));return;
+}
 var directory=Path.Combine(Path.GetTempPath(),"safe-code-services-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
 string config=Path.Combine(AppContext.BaseDirectory,"service-endpoints.json");File.WriteAllText(config,"{\"feedbackBaseUrl\":\"https://collector.invalid/\"}");
+if(args.Contains("--update-live")){
+ try{using var live=new ClientServices(directory);var update=await live.CheckUpdateAsync(true,default);Assert(update.CanInstall,"No update found for older Beta test client");var file=await live.DownloadUpdateAsync((_,_)=>{},default);await ClientServices.VerifyInstallerAsync(file,default);Console.WriteLine(JsonSerializer.Serialize(new{current=ClientServices.Version,offered=update.Version,downloadedBytes=new FileInfo(file.Path).Length,sha256=file.Digest,verified=true,executed=false}));}
+ finally{Directory.Delete(directory,true);File.Delete(config);}return;
+}
 if(args.Contains("--live")){
  File.WriteAllText(config,"{\"feedbackBaseUrl\":\"https://safecode.tommukan.dpdns.org/\"}");
  try{using var live=new ClientServices(directory);await live.SetConsentAsync(true,true);await live.SetConsentAsync(true,true);using var saved=JsonDocument.Parse(File.ReadAllText(Path.Combine(directory,"usage-preferences.json")));string sid=saved.RootElement.GetProperty("installationId").GetString()!;string marker="SafeCode integration test "+Guid.NewGuid().ToString();await live.SetConsentAsync(false,false);await live.SendFeedbackAsync(marker,default);Console.WriteLine(JsonSerializer.Serialize(new{sid,marker,feedbackSent=true}));}
@@ -34,6 +42,50 @@ try{
  using(var client=new ClientServices(Path.Combine(directory,"download"),new FakeHandler(Feed(sha)),new FakeHandler(bytes:bytes))){await client.CheckUpdateAsync(true,default);var file=await client.DownloadUpdateAsync((_,_)=>{},default);await ClientServices.VerifyInstallerAsync(file,default);File.AppendAllText(file.Path,"tampered");bool refused=false;try{await ClientServices.VerifyInstallerAsync(file,default);}catch(IOException){refused=true;}Assert(refused,"modified installer accepted");}
  using(var client=new ClientServices(Path.Combine(directory,"bad-hash"),new FakeHandler(Feed(new string('0',64))),new FakeHandler(bytes:bytes))){await client.CheckUpdateAsync(true,default);bool refused=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(IOException){refused=true;}Assert(refused,"bad digest accepted");Assert(!Directory.EnumerateFiles(Path.Combine(directory,"bad-hash"),"*.exe",SearchOption.AllDirectories).Any(),"invalid executable retained");}
  using(var client=new ClientServices(Path.Combine(directory,"redirect"),new FakeHandler(Feed(sha)),new FakeHandler(redirect:true))){await client.CheckUpdateAsync(true,default);bool refused=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(IOException){refused=true;}Assert(refused,"unsafe redirect accepted");}
+ var diagnosticDirectory=Path.Combine(directory,"diagnostics");var diagnosticHandler=new FakeHandler();
+ using(var diagnosticClient=new ClientServices(diagnosticDirectory,diagnosticHandler))
+ {
+  Assert(!diagnosticClient.DiagnosticsAllowed&&JsonSerializer.Serialize(diagnosticClient.Preferences()).Contains("\"diagnosticsEnabled\":true"),"diagnostics must be checked by default but blocked before confirmation");
+  var beforeConsent=new DiagnosticTrace("chrome",diagnosticClient.DiagnosticGeneration);beforeConsent.Observe("Waiting for cache lock /var/lib/dpkg/lock-frontend password=super-secret");
+  await diagnosticClient.SendDiagnosticAsync(beforeConsent,new DirectoryNotFoundException("C:\\Users\\private\\account-drafts\\secret.dpapi"),default);
+  Assert(diagnosticHandler.Bodies.Count==0,"diagnostics sent before consent");
+  diagnosticClient.SetDiagnosticConsent(true);await diagnosticClient.SendDiagnosticAsync(beforeConsent,null,default);
+  Assert(diagnosticHandler.Bodies.Count==0,"diagnostics sent before notice confirmation");
+  await diagnosticClient.SetConsentAsync(false,true);
+  var trace=new DiagnosticTrace("chrome",diagnosticClient.DiagnosticGeneration);
+  foreach(string secret in new[]{"password=super-secret","token=sk-private-key","203.0.113.7","user@example.com","ssh-ed25519 PRIVATEKEY","C:\\Users\\private","/home/private/project","https://private.invalid/?token=secret"}){trace.Observe(secret);trace.Observe("Waiting for cache lock: "+secret);}
+  await diagnosticClient.SendDiagnosticAsync(trace,new DirectoryNotFoundException("private file path super-secret"),default);
+  Assert(diagnosticHandler.Bodies.Count==1,"explicit diagnostics opt-in failed with usage disabled");
+  string payload=diagnosticHandler.Bodies[0];using var packet=JsonDocument.Parse(payload);
+  Assert(packet.RootElement.EnumerateObject().Select(x=>x.Name).Order().SequenceEqual(new[]{"schema","eventId","version","report"}.Order()),"unexpected diagnostic fields");
+  foreach(string secret in new[]{"super-secret","sk-private-key","203.0.113.7","user@example.com","PRIVATEKEY","private.invalid","private file path"})Assert(!payload.Contains(secret),"private text entered diagnostic payload");
+  Assert(packet.RootElement.GetProperty("report").GetProperty("errorKind").GetString()=="directory_not_found","exception category missing");
+  Assert(packet.RootElement.GetProperty("report").GetProperty("signals")[0].GetProperty("code").GetString()=="package_lock_wait","lock diagnostic missing");
+  var oldTrace=new DiagnosticTrace("chrome",diagnosticClient.DiagnosticGeneration);diagnosticClient.SetDiagnosticConsent(false);diagnosticClient.SetDiagnosticConsent(true);
+  await diagnosticClient.SendDiagnosticAsync(oldTrace,null,default);Assert(diagnosticHandler.Bodies.Count==1,"old report survived consent revocation");
+  var bounded=new DiagnosticTrace("account",diagnosticClient.DiagnosticGeneration);for(int i=0;i<200;i++)bounded.Observe(i%2==0?"Unpacking package-private":"Setting up package-private");
+  Assert(bounded.Finish(null).Signals.Length==64,"diagnostic log is unbounded");
+  diagnosticClient.SetDiagnosticConsent(false);
+ }
+ using(var restarted=new ClientServices(diagnosticDirectory,new FakeHandler()))Assert(!restarted.DiagnosticsAllowed&&!JsonSerializer.Serialize(restarted.Preferences()).Contains("\"diagnosticsEnabled\":true"),"diagnostic optout not persisted");
+ var migratedDirectory=Path.Combine(directory,"diagnostic-migration");Directory.CreateDirectory(migratedDirectory);
+ File.WriteAllText(Path.Combine(migratedDirectory,"usage-preferences.json"),"{\"enabled\":false,\"confirmed\":true}");
+ using(var migrated=new ClientServices(migratedDirectory,new FakeHandler()))Assert(migrated.DiagnosticsAllowed,"missing diagnostic preference should default to checked");
+ var saveFailureDirectory=Path.Combine(directory,"diagnostic-save-failure");
+ using(var saveFailure=new ClientServices(saveFailureDirectory,new FakeHandler()))
+ {
+  await saveFailure.SetConsentAsync(false,true);saveFailure.SetDiagnosticConsent(false);
+  Directory.CreateDirectory(Path.Combine(saveFailureDirectory,"usage-preferences.json.new"));bool failed=false;
+  try{saveFailure.SetDiagnosticConsent(true);}catch(Exception e)when(e is IOException or UnauthorizedAccessException){failed=true;}
+  Assert(failed&&!saveFailure.DiagnosticsAllowed,"failed preference write enabled diagnostics");
+ }
+ var diagnosticBlocking=new BlockingHandler();using(var cancelling=new ClientServices(Path.Combine(directory,"diagnostic-cancel"),diagnosticBlocking))
+ {
+  await cancelling.SetConsentAsync(false,true);cancelling.SetDiagnosticConsent(true);
+  var sending=cancelling.SendDiagnosticAsync(new DiagnosticTrace("chrome",cancelling.DiagnosticGeneration),null,default);
+  await diagnosticBlocking.Started.Task;cancelling.SetDiagnosticConsent(false);await sending;Assert(diagnosticBlocking.Cancelled,"diagnostic optout did not cancel in-flight request");
+ }
+ Console.WriteLine("DIAGNOSTIC_PRIVACY_CONSENT_BOUNDS_RESTART_AND_CANCELLATION_CHECKS_PASSED");
  Console.WriteLine("CONSENT_OPTOUT_RESTART_CANCELLATION_FEEDBACK_RELEASE_DIGEST_TAMPER_AND_REDIRECT_CHECKS_PASSED");
 }finally{Directory.Delete(directory,true);File.Delete(config);}
 sealed class FakeHandler(string? feed=null,byte[]? bytes=null,bool redirect=false):HttpMessageHandler

@@ -48,3 +48,38 @@
 .desktop-card{position:relative}.maintenance-card-trigger{border:0;background:none;padding:0;width:100%;text-align:left;color:inherit;font:inherit}.maintenance-card-trigger>span{display:block;font-size:10px;color:var(--green);margin-top:13px}.resolution-link{position:absolute;right:14px;bottom:13px;font-size:9px}.small-dialog-body select{width:100%;height:37px;margin:7px 0 15px;border:1px solid var(--border);border-radius:4px;background:white;padding:0 9px;font:inherit;color:var(--ink)}.operation-log-output{height:230px;overflow:auto;scrollbar-width:none;background:#f7f9f6;border:1px solid var(--border);padding:12px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;line-height:1.7;color:#596e60}.folder-log{max-height:70px;overflow:auto;scrollbar-width:none;white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;line-height:1.65;color:#8b9a8e;margin:9px 0}.advanced-copy p.advanced-live-log{color:#58745f;min-height:0;max-height:33px;overflow:hidden;overflow-wrap:anywhere;margin-top:6px}.advanced-live-log[hidden]{display:none}#operation-log-status{font-size:11px;color:var(--green);line-height:1.7}#operation-log-dialog .dialog-hint{font-size:9px;line-height:1.6;color:#95a296}
 /* 桌面入口与分辨率设置保持同一基线。 */
 .maintenance-card-trigger{display:block;padding-bottom:27px}.maintenance-card-trigger>span{position:absolute;left:14px;bottom:13px;margin:0;line-height:14px}.resolution-link{bottom:13px;padding:0;font-size:10px;line-height:14px}.maintenance-panel .advanced-heading{margin-top:16px}.maintenance-heading p{margin-bottom:8px}
+
+/* 出入口只允许选择已检测地址；选择菜单与软件的绿色、留白保持一致。 */
+#ip-policy-dialog .ip-choice-field{margin:0 0 18px}
+#ip-policy-dialog .ip-choice-field>label{margin:0 0 8px;color:#6d8271;font-size:11px}
+.ip-picker{position:relative}
+.ip-picker-trigger{display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:42px;padding:10px 13px;border:1px solid #dce5de;border-radius:6px;background:#fff;color:#344b3c;text-align:left;font-size:13px;font-variant-numeric:tabular-nums;transition:border-color .15s,background .15s,box-shadow .15s}
+.ip-picker-trigger:hover:not(:disabled){border-color:#a4bbaa;background:#fbfdfb}
+.ip-picker-trigger[aria-expanded=true],.ip-picker-trigger:focus-visible{border-color:#6f9b7e;box-shadow:0 0 0 3px #2c74550c;outline:0}
+.ip-picker-trigger.is-empty{color:#9ba89e;font-size:11px}
+.ip-picker-trigger:disabled{background:#f6f8f6;color:#a1aaa3;cursor:default}
+.ip-picker-trigger>svg{width:14px;height:14px;flex-shrink:0;fill:none;stroke:#7d9584;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s}
+.ip-picker-trigger[aria-expanded=true]>svg{transform:rotate(180deg)}
+.ip-picker-menu{position:absolute;z-index:3;left:0;right:0;top:calc(100% + 5px);padding:5px;border:1px solid #dce6df;border-radius:7px;background:#fff;box-shadow:0 8px 24px #264d3314;max-height:176px;overflow-y:auto;scrollbar-width:thin}
+.ip-picker-option{display:flex;justify-content:space-between;align-items:center;width:100%;padding:10px 9px;border:0;border-radius:4px;background:#fff;color:#486150;font-size:12px;text-align:left;font-variant-numeric:tabular-nums}
+.ip-picker-option:hover,.ip-picker-option:focus-visible{background:#f3f7f3;outline:0}
+.ip-picker-option[aria-selected=true]{color:#2c7455;background:#edf5ef;font-weight:500}
+.ip-picker-option>svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;visibility:hidden}
+.ip-picker-option[aria-selected=true]>svg{visibility:visible}
+#ip-policy-form label.policy-toggle{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;margin:9px 0;border:1px solid #e5ece6;border-radius:6px;background:#fcfdfb}
+#ip-policy-form label.policy-toggle:has(input:checked){border-color:#dce9df;background:#f7faf7}
+#ip-policy-form .policy-toggle input[type=checkbox]{appearance:auto;width:14px;height:14px;min-width:14px;flex:0 0 14px;margin:1px 0 0;padding:0;border:0;box-shadow:none;accent-color:var(--green)}
+#ip-policy-form .policy-toggle span{font-size:11px;line-height:1.5}
+#ip-policy-form .policy-toggle small{margin-top:4px;font-size:9px;line-height:1.7}
+#ip-policy-form .config-description{margin-bottom:19px}
+#ip-policy-form .config-footer{margin-top:19px}
+
+
+/* 有新版本时在标题旁和页脚同时提示，不闪烁，不遮挡窗口控制。 */
+.titlebar-brand{display:flex;align-items:center;gap:12px;min-width:0}
+.update-notice{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;height:24px;padding:0 9px;border:1px solid #ead5ae;border-radius:5px;background:#fff5e4;color:#956019;font-size:10px;font-weight:550;white-space:nowrap}
+.update-notice:hover{background:#ffedcd;border-color:#d8b677;color:#7f4d0d}
+.update-notice-dot{width:5px;height:5px;border-radius:50%;background:#c08b32;flex-shrink:0}
+#services-entry.has-update{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #e7cea1;border-radius:4px;background:#fff3df;color:#996116;font-size:10px;font-weight:550}
+#services-entry.has-update::before{content:'';width:5px;height:5px;border-radius:50%;background:#bf8427}
+#services-entry.has-update:hover{background:#ffebc8;border-color:#d7b374}

@@ -12,6 +12,7 @@ namespace SafeCode.Desktop;
 internal sealed class UsagePreferences
 {
     public bool Enabled {get;set;}=true;
+    public bool DiagnosticsEnabled {get;set;}=true;
     public bool Confirmed {get;set;}
     public string InstallationId {get;set;}="";
 }
@@ -28,6 +29,10 @@ internal sealed class ClientServices : IDisposable
     private UsagePreferences preferences;
     private CancellationTokenSource reporting=new();
     private bool counted;
+    private CancellationTokenSource diagnosticReporting=new();
+    private int diagnosticGeneration;
+    private int diagnosticCount;
+    private readonly SemaphoreSlim diagnosticSlots=new(2,2);
     private readonly string eventId=Guid.NewGuid().ToString();
     private (string Version,string Url,string Digest,long Size)? release;
     private DateTimeOffset lastCheck;
@@ -43,7 +48,7 @@ internal sealed class ClientServices : IDisposable
         try{if(File.Exists(config)){using var doc=JsonDocument.Parse(File.ReadAllText(config));if(doc.RootElement.TryGetProperty("feedbackBaseUrl",out var value)&&Uri.TryCreate(value.GetString(),UriKind.Absolute,out var uri)&&uri.Scheme=="https"&&!uri.IsLoopback&&string.IsNullOrEmpty(uri.UserInfo)&&uri.AbsolutePath=="/"&&string.IsNullOrEmpty(uri.Query)&&string.IsNullOrEmpty(uri.Fragment))endpoint=uri;}}catch(IOException){}catch(JsonException){}catch(InvalidOperationException){}
     }
     public bool NoticeWasConfirmed=>preferences.Confirmed;
-    public object Preferences()=>new{enabled=preferences.Enabled,confirmed=preferences.Confirmed,serviceAvailable=endpoint!=null,recipient=endpoint?.Host};
+    public object Preferences()=>new{enabled=preferences.Enabled,confirmed=preferences.Confirmed,diagnosticsEnabled=preferences.DiagnosticsEnabled,serviceAvailable=endpoint!=null,recipient=endpoint?.Host};
     private void Save(){string temp=preferencesPath+".new";File.WriteAllText(temp,JsonSerializer.Serialize(preferences,JsonDefaults.Options));File.Move(temp,preferencesPath,true);}
     public async Task<object> SetConsentAsync(bool enabled,bool confirmed)
     {
@@ -52,6 +57,39 @@ internal sealed class ClientServices : IDisposable
         Save();
         if(enabled&&preferences.Confirmed)await CountLaunchAsync();
         return Preferences();
+    }
+    public bool DiagnosticsAllowed=>endpoint!=null&&preferences.Confirmed&&preferences.DiagnosticsEnabled;
+    public int DiagnosticGeneration=>diagnosticGeneration;
+    public object SetDiagnosticConsent(bool enabled)
+    {
+        // 默认勾选，保留已明确关闭的选择；声明确认前不发送。
+        preferences.DiagnosticsEnabled=enabled;
+        diagnosticGeneration++;
+        diagnosticReporting.Cancel();diagnosticReporting.Dispose();diagnosticReporting=new();
+        try{Save();}catch{preferences.DiagnosticsEnabled=false;throw;}
+        return Preferences();
+    }
+    public async Task SendDiagnosticAsync(DiagnosticTrace trace,Exception? error,CancellationToken ct)
+    {
+        if(!DiagnosticsAllowed||trace.Generation!=diagnosticGeneration||diagnosticCount>=20||!diagnosticSlots.Wait(0))return;
+        diagnosticCount++;
+        try
+        {
+            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct,diagnosticReporting.Token);
+            deadline.CancelAfter(TimeSpan.FromSeconds(12));
+            var report=trace.Finish(error);
+            var body=new{schema=1,eventId=Guid.NewGuid().ToString(),version=Version,report};
+            // 同一个 eventId 重试去重；仅内存，不留下本地日志包或离线队列。
+            for(int attempt=0;attempt<2;attempt++)
+            {
+                if(!DiagnosticsAllowed||trace.Generation!=diagnosticGeneration||deadline.IsCancellationRequested)return;
+                try{using var response=await http.PostAsJsonAsync(new Uri(endpoint!,"v1/diagnostics"),body,JsonDefaults.Options,deadline.Token);if(response.IsSuccessStatusCode||(int)response.StatusCode<500)return;}
+                catch(HttpRequestException){}
+                if(attempt==0)await Task.Delay(1000,deadline.Token);
+            }
+        }
+        catch(Exception){} // 诊断发送永远不能改变部署结果或弹出第二个错误。
+        finally{diagnosticSlots.Release();}
     }
     private async Task CountLaunchAsync()
     {
@@ -128,5 +166,5 @@ internal sealed class ClientServices : IDisposable
         await using var file=File.OpenRead(installer.Path);var digest=await SHA256.HashDataAsync(file,ct);
         if(!Convert.ToHexString(digest).Equals(installer.Digest,StringComparison.OrdinalIgnoreCase))throw new IOException("安装文件已变化，请重新下载。");
     }
-    public void Dispose(){reporting.Cancel();reporting.Dispose();http.Dispose();}
+    public void Dispose(){diagnosticGeneration++;diagnosticReporting.Cancel();diagnosticReporting.Dispose();reporting.Cancel();reporting.Dispose();http.Dispose();}
 }

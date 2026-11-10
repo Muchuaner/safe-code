@@ -1,4 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
 <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><Version>0.4.0</Version></PropertyGroup>
-<ItemGroup><Compile Include="../../src/SafeCode.Desktop/ReleaseNumber.cs" Link="ReleaseNumber.cs" /><Compile Include="../../src/SafeCode.Desktop/ClientServices.cs" Link="ClientServices.cs" /><ProjectReference Include="../../src/SafeCode.Core/SafeCode.Core.csproj" /></ItemGroup>
+<ItemGroup><Compile Include="../../src/SafeCode.Desktop/DiagnosticTrace.cs" Link="DiagnosticTrace.cs" /><Compile Include="../../src/SafeCode.Desktop/ReleaseNumber.cs" Link="ReleaseNumber.cs" /><Compile Include="../../src/SafeCode.Desktop/ClientServices.cs" Link="ClientServices.cs" /><ProjectReference Include="../../src/SafeCode.Core/SafeCode.Core.csproj" /></ItemGroup>
 </Project>

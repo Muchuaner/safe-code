@@ -6,7 +6,7 @@
 
 反馈由用户主动点击提交，仅含手写文字、随机提交编号及软件版本，与统计开关独立；不自动附带日志。请勿在反馈中填写密码或密钥。统计保留 90 天，反馈保留 180 天，每次写入清理过期项。SQLite 不保存来源 IP。网络传输会让接收服务器和 Cloudflare 看见来源 IP；专属 Nginx 与应用关闭访问正文记录。限流只在内存使用源地址摘要。
 
-服务以独立无登录用户 `safe-code-feedback` 运行，监听 `127.0.0.1:18761`。数据库在 `/var/lib/safe-code-feedback/data.sqlite3`，文件仅服务用户与管理员可访问。设置 128MB 内存上限、16 个并发处理槽、32KB 请求上限和约 128MiB 数据库上限。公开 POST `/v1/usage`、`/v1/feedback` 与只读 `/health`；不提供公开管理员接口。
+服务以独立无登录用户 `safe-code-feedback` 运行，监听 `127.0.0.1:18761`。数据库在 `/var/lib/safe-code-feedback/data.sqlite3`，文件仅服务用户与管理员可访问。设置 128MB 内存上限、16 个并发处理槽、32KB 请求上限和约 128MiB 数据库上限。公开 POST `/v1/usage`、`/v1/feedback`、`/v1/diagnostics` 与只读 `/health`；不提供公开管理员接口。
 
 洛杉矶部署复用现有 443 TCP/SNI 入口，仅添加本域名到 `127.0.0.1:8446` 的映射与独立 Nginx include。证书为独立 Let's Encrypt 证书，续期 hook 只检查并 reload Nginx。没有开放内部端口到公网，不修改既有 Claude、桌面、SSH、代理或防火墙。由于现有 TCP 转发不传递源地址，专属站点使用 Cloudflare 的地址头作尽力限流，不能用于认证；另有共享全局请求速率上限。数据库目录权限与 systemd 隔离见 unit。
 
@@ -23,3 +23,5 @@ systemctl status safe-code-feedback
 本地测试：`python3 -m unittest discover -s services/feedback -p 'test_*.py' -v`。
 
 若要按随机安装编号查看每天使用次数，在报表命令后加 `--per-installation`。该编号不能直接识别具体人员。
+
+Beta-0.4.3.3 新增独立开关的匿名安装诊断，默认勾选，固定词表报告不含原始日志或用户输入，保留 30 天。字段、限制、发布顺序与本地验证见 [安装诊断](../../docs/DIAGNOSTICS.md)。读取时在报表命令后加 `--diagnostics`。线上接收端已于 2026-11-10 升级，HTTPS 接收、固定字段校验和数据库回读均通过，验收测试行已移除。

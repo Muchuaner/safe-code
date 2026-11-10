@@ -154,13 +154,14 @@ public sealed partial class SshSession : IDisposable
             using var command = client.CreateCommand(prefix + "python3 -u " + Quote(remoteDirectory + "/agent.py") + " " + Quote(requestPath));
             command.CommandTimeout = TimeSpan.FromMinutes(45);
             var execution = command.ExecuteAsync(ct);
-            string? json = null; string? error = null;
+            string? json = null; string? error = null;string? structuredError=null;
             var stdout = Task.Run(async () =>
             {
                 using var reader = new StreamReader(command.OutputStream, Encoding.UTF8, false, 4096, true);
                 while (await reader.ReadLineAsync(ct) is { } line)
                 {
                     if (line.StartsWith("SC_RESULT:")) json = line[10..];
+                    else if (line.StartsWith("SC_ERROR_JSON:")) structuredError=JsonSerializer.Deserialize<string>(line[14..]);
                     else if (line.StartsWith("SC_ERROR:")) error = line[9..];
                     else Log?.Invoke(line);
                 }
@@ -171,7 +172,7 @@ public sealed partial class SshSession : IDisposable
                 while (await reader.ReadLineAsync(ct) is { } line) { error = line; Log?.Invoke(line); }
             }, ct);
             await execution; await Task.WhenAll(stdout, stderr);
-            if (command.ExitStatus != 0 || json == null) throw new InvalidOperationException(error ?? "远端任务未返回结果，请检查连接与部署日志。");
+            if (command.ExitStatus != 0 || json == null) throw new InvalidOperationException(structuredError ?? error ?? "远端任务未返回结果，请检查连接与部署日志。");
             if(IsLongOperation(operation)&&typeof(T)!=typeof(RemoteJob))
             {
                 var job=JsonSerializer.Deserialize<RemoteJob>(json,JsonDefaults.Options)??throw new InvalidDataException("缺少后台任务标识。");
