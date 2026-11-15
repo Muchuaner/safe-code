@@ -4,7 +4,7 @@ import argparse,hashlib,json,os,re,shutil,subprocess,zipfile
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--dotnet',default='dotnet');p.add_argument('--output-dir',type=Path);p.add_argument('--claude-payload',type=Path);p.add_argument('--claude-version');p.add_argument('--claude-sha256');p.add_argument('--openssh-payload',type=Path);p.add_argument('--codex-bridge-payload',type=Path);a=p.parse_args()
 root=Path(__file__).resolve().parent.parent
-output=a.output_dir.resolve() if a.output_dir else root/'dist'/'SafeCode-Beta-0.4.3.5-win-x64';archive=output.parent/(output.name+'.zip')
+output=a.output_dir.resolve() if a.output_dir else root/'dist'/'SafeCode-Beta-0.4.4.2-win-x64';archive=output.parent/(output.name+'.zip')
 if output.exists():shutil.rmtree(output)
 subprocess.run([a.dotnet,'publish',str(root/'src/SafeCode.Desktop/SafeCode.Desktop.csproj'),'-c','Release','-r','win-x64','--self-contained','true','-o',str(output),'--nologo'],cwd=root,check=True,env={**os.environ,'DOTNET_CLI_TELEMETRY_OPTOUT':'1'})
 shutil.move(output/'SafeCode.Desktop.exe',output/'SafeCode.exe')
@@ -59,7 +59,7 @@ if a.codex_bridge_payload:
   for name in ['LICENSE.txt','THIRD_PARTY_LICENSES.txt','UPSTREAM.txt']:
    data=source.read(prefix+name);(bundled/name).write_bytes(data);(legal/('Claude-Codex-'+name)).write_bytes(data)
  (bundled/'source.json').write_bytes((root/'third_party/claude-codex-vps/SOURCE.json').read_bytes())
-manifest={'version':'Beta-0.4.3.5','target':'win-x64','selfContained':True,'files':{}}
+manifest={'version':'Beta-0.4.4.2','target':'win-x64','selfContained':True,'files':{}}
 for path in sorted(output.rglob('*')):
  if path.is_file():manifest['files'][path.relative_to(output).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
 (output/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))

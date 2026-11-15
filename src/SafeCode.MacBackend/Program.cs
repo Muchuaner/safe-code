@@ -56,7 +56,7 @@ internal sealed class MacBackend : IDisposable
             if(diagnosticOperation!=null&&services.DiagnosticsAllowed){trace=new(diagnosticOperation,services.DiagnosticGeneration);traces[diagnosticOperation]=trace;}
             object? result=await HandleAsync(operation,args);await EmitAsync(new{id,result,error=(string?)null});
         }
-        catch(Exception error){failure=error;string? issue=trace==null?null:services.RecordFailure(trace,error);await EmitAsync(new{id,result=(object?)null,error=error.Message+(issue==null?"":"\n问题编号："+issue)});}
+        catch(Exception error){failure=error;string? issue=trace==null?null:services.RecordFailure(trace,error);await EmitAsync(new{id,result=(object?)null,error=ConnectionErrors.DescribeOperation(error)+(issue==null?"":"\n问题编号："+issue)});}
         finally
         {
             if(gate){step="";Interlocked.Decrement(ref activeMutations);mutation.Release();}

@@ -42,6 +42,7 @@ public sealed partial class SshSession
         if(connection==null||trustedKey==null)throw new InvalidOperationException("尚未确认服务器身份，不能建立挂载通道。");
         settings??=connection;
         var info=new PasswordConnectionInfo(settings.Host,settings.Port,settings.Username,settings.Password){Timeout=TimeSpan.FromSeconds(12),RetryAttempts=1};
+        PinHostKeyAlgorithms(info);
         var transport=new MountSshClient(info){KeepAliveInterval=TimeSpan.FromSeconds(10)};
         transport.HostKeyReceived+=(_,e)=>{e.CanTrust=CryptographicOperations.FixedTimeEquals(trustedKey,e.HostKey);if(!e.CanTrust)mountTrustFailed=true;};
         return transport;
