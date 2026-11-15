@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened runtime entitlements. Only applied when signing with options=runtime. -->
+	<!-- Do not write double hyphens inside these comments: AMFI rejects the whole file. -->
+	<!-- JIT: the self contained .NET 10 backend maps executable memory at start up. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<!-- The backend loads the native libraries shipped next to it in Contents/Resources/Core. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<!-- The SSH terminal drives /usr/bin/osascript, which sends Apple events to Terminal. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>

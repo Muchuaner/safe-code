@@ -277,13 +277,35 @@ public sealed partial class SshSession : IDisposable
         await work.ConnectAsync(ct); using var command = work.CreateCommand("id -un"); await command.ExecuteAsync(ct);
         if (command.Result.Trim() != account.Username) throw new InvalidOperationException("工作用户公钥登录验证失败。");
     }
-    public async Task<uint> ForwardAsync(uint destinationPort, CancellationToken ct = default, string localHost = "127.0.0.1")
+    // One live forward per destination port: repeating "打开远程桌面" used to add another listener
+    // on every click and hand the RDP client a new random port each time.
+    private readonly Dictionary<uint, ForwardedPortLocal> forwards = [];
+    public async Task<uint> ForwardAsync(uint destinationPort, CancellationToken ct = default, string localHost = "127.0.0.1", uint preferredPort = 0)
     {
         if (client?.IsConnected != true) throw new InvalidOperationException("SSH 已断开。");
         await Task.Yield();
         if(!System.Net.IPAddress.TryParse(localHost,out var localAddress)||!System.Net.IPAddress.IsLoopback(localAddress))throw new ArgumentException("本地转发必须限定为回环地址。");
-        var forward = new ForwardedPortLocal(localHost, 0, "127.0.0.1", destinationPort);
-        client.AddForwardedPort(forward); forward.Start(); tunnels.Add(forward); return forward.BoundPort;
+        if (forwards.TryGetValue(destinationPort, out var existing))
+        {
+            if (existing.IsStarted) return existing.BoundPort;
+            forwards.Remove(destinationPort);
+        }
+        Exception? failure = null;
+        // A preferred port keeps the loopback address stable between launches so the RDP client
+        // keeps one saved connection (and its stored password); 0 falls back to an ephemeral port.
+        foreach (var candidate in preferredPort == 0 ? new[] { 0u } : new[] { preferredPort, 0u })
+        {
+            var forward = new ForwardedPortLocal(localHost, candidate, "127.0.0.1", destinationPort);
+            try { client.AddForwardedPort(forward); forward.Start(); }
+            catch (Exception error)
+            {
+                failure = error;
+                try { client.RemoveForwardedPort(forward); } catch { }
+                continue;
+            }
+            tunnels.Add(forward); forwards[destinationPort] = forward; return forward.BoundPort;
+        }
+        throw failure ?? new IOException("本地端口转发失败。");
     }
     public async Task<NetworkStats> MeasureNetworkAsync(CancellationToken ct = default)
     {
@@ -300,7 +322,7 @@ public sealed partial class SshSession : IDisposable
     {
         hostLifetime?.Cancel();CloseHostTunnel();hostLifetime?.Dispose();hostLifetime=null;
         foreach (var tunnel in tunnels) { try { tunnel.Dispose(); } catch { } }
-        tunnels.Clear();
+        tunnels.Clear(); forwards.Clear();
         mountLifetime.Cancel();DisposeMountResource(fileForward);DisposeMountResource(mountTransport);DisposeMountResource(fileServer);
         if (client?.IsConnected == true && remoteDirectory.StartsWith("/tmp/safe-code."))
         { try { using var command = client.CreateCommand("rm -rf -- " + Quote(remoteDirectory)); command.CommandTimeout=TimeSpan.FromSeconds(2);command.Execute(); } catch { } }

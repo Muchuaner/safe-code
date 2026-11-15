@@ -1,10 +1,12 @@
 import AppKit
 import WebKit
 import Security
+import Network
 
 private let bundleID = "org.safecode.desktop"
 private let safeCodeVersion = "Beta-0.4.4.1"
-private enum AppError: LocalizedError {
+// Shared with RDPClient.swift, so this cannot stay file-private.
+enum AppError: LocalizedError {
     case message(String)
     var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
 }
@@ -42,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var resources: URL { Bundle.main.resourceURL! }
     private var index: URL { resources.appendingPathComponent("Web/index.html") }
     private var smokeOutput: URL?
+    /// Kept so the retry button in the provisioning alert can reopen the same desktop file.
+    private var pendingDesktop: URL?
     private var guide: NSWindow?
     private var guideWeb: WKWebView?
     private var guideReply: String?
@@ -93,8 +97,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         return config
     }
     private func makeWindow() {
-        window=NSWindow(contentRect:NSRect(x:0,y:0,width:360,height:536),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.title=isolated ? "Safe Code · 隔离预览":"Safe Code";window.minSize=NSSize(width:360,height:500);window.center();window.delegate=self;window.isReleasedWhenClosed=false
+        // The web UI draws its own title bar. Without .fullSizeContentView the window shows two
+        // stacked bars and the traffic lights float above the app header instead of inside it.
+        window=NSWindow(contentRect:NSRect(x:0,y:0,width:360,height:536),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
+        window.title=isolated ? "Safe Code · 隔离预览":"Safe Code";window.minSize=NSSize(width:360,height:500)
+        window.titleVisibility = .hidden;window.titlebarAppearsTransparent = true;window.isMovableByWindowBackground = false
+        // Read the saved frame before registering the name: setFrameAutosaveName may store the
+        // current frame immediately, which would make the "no saved frame" check always false.
+        let savedFrame=UserDefaults.standard.string(forKey:"NSWindow Frame SafeCodeMainWindow")
+        _=window.setFrameAutosaveName("SafeCodeMainWindow")
+        if savedFrame == nil {window.center()}
+        window.delegate=self;window.isReleasedWhenClosed=false
         web=WKWebView(frame:.zero,configuration:configuration());web.navigationDelegate=self;web.uiDelegate=self
         window.contentView=web
     }
@@ -120,7 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let process=Process();process.executableURL=Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Core/SafeCode.MacBackend")
         process.arguments=["--data-directory",directory.path]
         var env=ProcessInfo.processInfo.environment;env["DOTNET_CLI_TELEMETRY_OPTOUT"]="1";process.environment=env
-        let input=Pipe(),output=Pipe();process.standardInput=input;process.standardOutput=output;process.standardError=FileHandle.nullDevice
+        let input=Pipe(),output=Pipe();process.standardInput=input;process.standardOutput=output
+        // A discarded stderr turns every field failure into a guessing game; keep a bounded log.
+        process.standardError=isolated ? FileHandle.nullDevice : backendLog()
         stdin=input.fileHandleForWriting
         output.fileHandleForReading.readabilityHandler={ [weak self] handle in
             let data=handle.availableData
@@ -141,6 +156,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }}
         try process.run();backend=process
         try stdin?.write(contentsOf:Data((json(["key":secret.base64EncodedString(),"offline":isolated])+"\n").utf8))
+    }
+    private func backendLog() -> FileHandle {
+        let manager=FileManager.default
+        let folder=manager.urls(for:.libraryDirectory,in:.userDomainMask)[0].appendingPathComponent("Logs/Safe Code",isDirectory:true)
+        try? manager.createDirectory(at:folder,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let file=folder.appendingPathComponent("backend.log")
+        if let attributes=try? manager.attributesOfItem(atPath:file.path),let size=attributes[.size] as? NSNumber,size.intValue > 2_000_000 {try? manager.removeItem(at:file)}
+        if !manager.fileExists(atPath:file.path) {manager.createFile(atPath:file.path,contents:nil,attributes:[.posixPermissions:0o600])}
+        guard let handle=try? FileHandle(forWritingTo:file) else {return FileHandle.nullDevice}
+        _=try? handle.seekToEnd()
+        return handle
     }
     private func send(_ message:[String:Any]) {
         do {guard backend?.isRunning==true,let stdin=stdin else{throw AppError.message("客户端核心未运行。")};try stdin.write(contentsOf:Data((json(message)+"\n").utf8))}
@@ -181,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
         guard message.webView===web,source.standardizedFileURL.path==index.path,let id=body["id"] as? String,let op=body["op"] as? String,let args=body["args"] as? [String:Any] else{return}
         switch op {
-        case "window.resize":let wide=args["wide"] as? Bool ?? false;window.setContentSize(NSSize(width:wide ? 740:360,height:wide ? 634:536));window.center();answer(id,true)
+        case "window.resize":let wide=args["wide"] as? Bool ?? false;window.setContentSize(NSSize(width:wide ? 740:360,height:wide ? 634:536));answer(id,true)
         case "window.drag":if let event=NSApp.currentEvent,event.type == .leftMouseDown {window.performDrag(with:event)};answer(id,true)
         case "window.minimize":window.miniaturize(nil);answer(id,true)
         case "window.maximize":window.zoom(nil);answer(id,true)
@@ -200,7 +226,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func openFile(_ path:String) {
         let url=URL(fileURLWithPath:path).standardizedFileURL;let root=directory.standardizedFileURL.path+"/"
         guard url.path.hasPrefix(root),["rdp","dmg"].contains(url.pathExtension.lowercased()),FileManager.default.fileExists(atPath:url.path) else{fail("拒绝打开非客户端生成的文件。");return}
-        if url.pathExtension=="rdp" && NSWorkspace.shared.urlForApplication(toOpen:url)==nil {fail("请先安装支持 RDP 的 macOS 客户端（例如 Windows App），再打开远程桌面。SSH 隧道已建立，地址保存在本机 RDP 配置中。密码需在远程桌面客户端自行输入。");return};NSWorkspace.shared.open(url)
+        if url.pathExtension=="rdp" {openWhenTunnelAlive(url);return}
+        NSWorkspace.shared.open(url)
+    }
+    /// The RDP file only carries a loopback address, so a dead tunnel reaches the client as a
+    /// generic connection error. Probe the port first and name the real cause instead.
+    private func openWhenTunnelAlive(_ url:URL) {
+        guard let port=rdpPort(url),let endpoint=NWEndpoint.Port(rawValue:port) else {openWithClient(url);return}
+        let connection=NWConnection(host:"127.0.0.1",port:endpoint,using:.tcp)
+        var settled=false
+        let decide:(Bool)->Void={ [weak self] alive in
+            DispatchQueue.main.async {
+                guard !settled else{return};settled=true;connection.cancel()
+                if alive {self?.openWithClient(url)}
+                else {self?.fail("远程桌面的 SSH 隧道已断开（127.0.0.1:\(port)）。请在应用里重新连接服务器，再打开远程桌面。")}
+            }
+        }
+        connection.stateUpdateHandler={ state in
+            switch state {case .ready:decide(true);case .failed(_),.cancelled,.waiting(_):decide(false);default:break}
+        }
+        connection.start(queue:.global(qos:.userInitiated))
+        DispatchQueue.global().asyncAfter(deadline:.now()+1.5){decide(false)}
+    }
+    /// One click has to end in a remote desktop, not in an install prompt. A client the user
+    /// already has is reused; when there is none, RDPClient provisions the official one without
+    /// asking for an administrator password.
+    private func openWithClient(_ url:URL) {
+        pendingDesktop=url
+        RDPClient.shared.ensureClient { [weak self] result in
+            switch result {
+            case .success(let client):
+                RDPClient.shared.launch(rdp:url, with:client) { [weak self] error in
+                    if let error=error {self?.fail(error.localizedDescription)}
+                }
+            case .failure(let error):self?.offerRDPClient(error.localizedDescription)
+            }
+        }
+    }
+    private func rdpPort(_ url:URL) -> UInt16? {
+        guard let text=try? String(contentsOf:url,encoding:.utf8) else{return nil}
+        for line in text.split(separator:"\n") where line.hasPrefix("full address:s:") {
+            guard let separator=line.lastIndex(of:":") else{continue}
+            return UInt16(line[line.index(after:separator)...].trimmingCharacters(in:.whitespaces))
+        }
+        return nil
+    }
+    private func offerRDPClient(_ reason:String) {
+        let alert=NSAlert();alert.messageText="远程桌面客户端还没准备好"
+        alert.informativeText=reason+"\n\nSSH 隧道已建立，服务器地址已写入本机 RDP 配置；也可以手动安装后直接双击该配置连接。工作用户密码需在客户端内输入。"
+        alert.addButton(withTitle:"重试");alert.addButton(withTitle:"打开下载页");alert.addButton(withTitle:"稍后")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            guard let target=pendingDesktop else {break}
+            RDPClient.shared.ensureClient { [weak self] result in
+                switch result {
+                case .success(let client):
+                    RDPClient.shared.launch(rdp:target, with:client) { [weak self] error in
+                        if let error=error {self?.fail(error.localizedDescription)}
+                    }
+                case .failure(let error):self?.fail(error.localizedDescription)
+                }
+            }
+        case .alertSecondButtonReturn:if let page=URL(string:"https://aka.ms/WindowsApp") {NSWorkspace.shared.open(page)}
+        default:break
+        }
     }
     private func openGuide(id:String,connecting:Bool) {
         if guide != nil {guide?.makeKeyAndOrderFront(nil);answer(id,false);return}
@@ -218,6 +307,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         quit();return false
     }
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool{showMain();return true}
+    // macOS 14+ warns in the console and disables restoration when this is not implemented.
+    func applicationSupportsSecureRestorableState(_ app:NSApplication)->Bool{true}
     func applicationShouldTerminate(_ sender:NSApplication)->NSApplication.TerminateReply {
         if quitting{return .terminateNow};quit();return .terminateCancel
     }

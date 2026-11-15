@@ -12,7 +12,9 @@ SSH 指纹确认、Ubuntu 部署、工作账户草稿、IP 设置、目录浏览
 
 “SSH 终端”调用系统 Terminal 和 /usr/bin/ssh，使用独立配置、专用密钥和已核验服务器指纹，不把密码写进终端脚本或命令参数。首次使用可能由 macOS 询问是否允许控制 Terminal。
 
-“远程桌面”通过 SSH 连接服务器回环地址的 3389 端口，在本机生成不含密码的 .rdp 文件，交给已经安装的 RDP 客户端（例如 Windows App）打开。工作用户密码需在该客户端自行填写；更改分辨率在下次打开时生效。
+“远程桌面”通过 SSH 连接服务器回环地址的 3389 端口，在本机生成不含密码的 `.rdp` 文件并直接拉起 RDP 客户端。macOS 不自带 RDP 客户端，因此这一步由应用自己收尾，不需要用户先去商店或官网安装：已装 Microsoft Windows App 或 Homebrew FreeRDP 时直接复用，两者都没有时应用自动下载官方安装包（约 90 MB，SHA-256 与 Microsoft Developer ID 双重校验），解包后安装到 `~/Applications`，不需要管理员密码和 Installer 交互。失败时提供重试与下载页两个出口。本地入口固定为 `127.0.0.1:13389`（被占用时回落随机端口），文件固定为 `Desktops/Safe Code.rdp`，同一会话内重复点击复用同一条隧道。地址固定后客户端凭据可长期复用，不必每次当作新机器重新选择。服务端的第二层认证（xrdp 自己的登录窗口）同样不再出现：`安装虚拟桌面` 会写入 `autorun` 与 `[Xorg]` 固定凭据，点一下直接进桌面，机制与安全边界见 `docs/DESKTOP_AUTOLOGIN_2026-11-15.md`。打开前会先探测本地端口，隧道已断时直接提示重新连接，不把失效地址交给客户端。
+
+需要注意的是密码有两层，`.rdp` 只能解决第一层。客户端会把凭据存入 macOS 钥匙串；但 xrdp 在收到连接后会用 PAM 再认证一次，那个带 `Session` 下拉框的登录窗口属于服务端，`.rdp` 文件无法携带密码，`authentication level` 也只控制服务器证书校验而不影响这一步。因此未在服务器启用 `require_credentials` 时，每轮会话仍需要输入一次工作用户密码。要免掉它，需在 `/etc/xrdp/xrdp.ini` 的 `[Globals]` 设置 `require_credentials=true` 并重启 xrdp：xrdp 手册说明该选项会改用连接初始阶段由客户端提供的凭据，不再显示登录窗口；代价是客户端拿不到凭据时会直接认证失败，而不是退回登录窗口。
 
 登录信息和工作账户草稿以 AES-256-GCM 加密保存，加密密钥放在 macOS 登录钥匙串。应用数据位于 ~/Library/Application Support/Safe Code，目录仅当前用户可访问。应用不会读取或迁移 Windows DPAPI 数据，也不会写入 Codex 或 CC Switch 配置。
 
@@ -41,7 +43,11 @@ python3 tools/build_macos.py --arch arm64
 python3 tools/build_macos.py --arch x64
 ```
 
-可选 --claude-payload 指向已核对 SHA256 的官方 Linux x64 Claude Code 2.1.311，供服务器安装时通过 SSH 上传；其余架构按现有官方校验下载流程处理。构建脚本只写本地 dist，不发布或替换已安装应用。可用 --sign-identity 指定开发者签名；公证是单独的发行步骤。
+可选 --claude-payload 指向已核对 SHA256 的官方 Linux x64 Claude Code 2.1.311，供服务器安装时通过 SSH 上传；其余架构按现有官方校验下载流程处理。构建脚本只写本地 dist，不发布或替换已安装应用。
+
+签名分两种模式，由 --sign-identity 决定。默认 `-`（ad-hoc）用于本机开发：不加 hardened runtime，带 `--timestamp=none`，可离线构建，产物仍需用户手动放行。传入真实 `Developer ID Application` 身份时脚本自动切到发行模式：每个 Mach-O 加 `--options runtime --timestamp`，并对 `Contents/Resources/Core/SafeCode.MacBackend` 与最外层 app 应用 `macos/SafeCode.entitlements`（.NET 后端的 JIT 与库校验、以及 osascript 的 Apple 事件都需要它，缺任一项后端会在启动后立即退出）。
+
+公证需要额外两个参数：`--keychain-profile` 指向 `xcrun notarytool store-credentials` 保存的凭据名，`--notarize` 打开提交流程。脚本先压缩 app 提交并装订，再构建 DMG、对镜像签名、二次提交、装订并用 `spctl` 验证，最后才写 `.dmg.sha256`（签名会改动镜像字节，校验和必须在最后计算）。ad-hoc 模式拒绝 `--notarize`，避免产出“看起来已公证”的包。
 
 ## 验证记录（2026-11-15）
 

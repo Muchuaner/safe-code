@@ -588,13 +588,43 @@ def setup_xsession():
     user_write('.xsession','#!/bin/sh\nunset DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER\nexec startxfce4\n',0o755)
     user_write('.xsessionrc','export LANG='+locale+'\nexport XMODIFIERS="@im=fcitx"\nexport GTK_IM_MODULE=fcitx\nexport QT_IM_MODULE=fcitx\n')
 
+def xrdp_section(text,section):
+    match=re.search(r'(?ms)^\['+re.escape(section)+r'\]\s*\n(.*?)(?=^\[|\Z)',text)
+    if not match:raise RuntimeError('xrdp 配置缺少 ['+section+'] 段，未修改配置。')
+    return match
+
+def xrdp_set(text,section,key,value):
+    match=xrdp_section(text,section);body=re.sub(r'(?m)^[ \t]*'+re.escape(key)+r'=.*$',key+'='+value,match.group(1),count=1)
+    if not re.search(r'(?m)^'+re.escape(key)+r'='+re.escape(value)+r'$',body):body=key+'='+value+'\n'+match.group(1)
+    return text[:match.start(1)]+body+text[match.end(1):]
+
+def desktop_autologin(text):
+    """让 xrdp 用已部署的工作用户直接登录，省掉客户端之外的第二层密码框。
+
+    xrdp 的密码校验在服务端由 PAM 完成，RDP 文件无法携带密码（password 51:b 是 Windows
+    DPAPI 块，macOS 客户端不认），因此只能由服务端把凭据写进 [Xorg] 段并打开 autorun。
+    凭据本来就以明文存放在 STATE/account.json（0600），这里只是复制到 xrdp 配置并收紧权限。
+    """
+    value=account()
+    if not re.search(r'(?m)^port=tcp://127\.0\.0\.1:\d+\s*$',text):
+        raise RuntimeError('xrdp 未限定监听回环地址，拒绝写入自动登录凭据。')
+    token='{base64}'+base64.b64encode(value['password'].encode()).decode()
+    text=xrdp_set(text,'Globals','autorun','Xorg')
+    text=xrdp_set(text,'Xorg','username',value['username'])
+    return xrdp_set(text,'Xorg','password',token)
+
 def setup_desktop(options):
     account();apt(['xfce4-session','xfwm4','xfce4-panel','xfdesktop4','xfce4-settings','xfce4-terminal','thunar','dbus-x11','xrdp','xorgxrdp','xauth','x11-utils','x11-xserver-utils','xinput','xdg-user-dirs','fonts-noto-cjk'])
     config=Path('/etc/xrdp/xrdp.ini');text=config.read_text()
     new,count=re.subn(r'(?m)^port=(?:3389|tcp://[^\n]+:3389)\s*$', 'port=tcp://127.0.0.1:3389',text,count=1)
     if count!=1:raise RuntimeError('无法安全识别 xrdp 监听设置，未修改配置。')
+    new=desktop_autologin(new)
     if not (STATE/'backup-xrdp.ini').exists():write(STATE/'backup-xrdp.ini',text,0o600)
-    write(config,new)
+    # xrdp.service 以 User=xrdp 运行并在启动时读取本文件，0600 会让服务直接起不来；
+    # 文件此时含明文凭据，因此授权给 xrdp 组而不是放开到所有人。
+    write(config,new,0o640)
+    try:shutil.chown(config,user='root',group='xrdp')
+    except (LookupError,PermissionError):config.chmod(0o644)
     config=Path('/etc/xrdp/sesman.ini');text=config.read_text()
     if not (STATE/'backup-sesman.ini').exists():write(STATE/'backup-sesman.ini',text,0o600)
     for key,value in {'AllowRootLogin':'false','MaxSessions':'1','KillDisconnected':'false','DisconnectedTimeLimit':'0','IdleTimeLimit':'0'}.items():

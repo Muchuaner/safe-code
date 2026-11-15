@@ -596,7 +596,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#host-alias').placeholder='例如 mac 或 local';
       $('#bridge-summary').textContent='当前附件仅有 Windows 适配器，macOS 暂不可用。';$('#bridge-state').textContent='暂不可用';$('#bridge-manage').disabled=true;
       $('#bridge-manage').title='取得可信的 macOS 适配器后再接入';
-      $('.window-controls').hidden=true;$('.window-controls').style.display='none';document.querySelector('.titlebar').style.paddingRight='18px';
+      $('.window-controls').hidden=true;$('.window-controls').style.display='none';const titleBar=document.querySelector('.titlebar');titleBar.style.paddingRight='18px';titleBar.style.paddingLeft='78px';titleBar.style.minHeight='32px';
     }
     window.safeCodeNativeReady=true;
   })();
