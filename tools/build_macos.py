@@ -16,7 +16,8 @@ run([a.dotnet,'publish','src/SafeCode.MacBackend','-c','Release','-r','osx-'+a.a
 for path in core.glob('*.pdb'):path.unlink()
 run(['swiftc','-swift-version','5','-parse-as-library','-O','-target',('arm64' if a.arch=='arm64' else 'x86_64')+'-apple-macos15.0','macos/SafeCode.swift','-o',macos/'SafeCode','-framework','AppKit','-framework','WebKit','-framework','Security'])
 for name in ['index.html','styles.css','app.js','native.js','qrcode.min.js','guide.html','guide.js']:shutil.copy2(root/name,web/name)
-(web/'assets').mkdir();shutil.copy2(root/'assets/safe-code-logo.png',web/'assets/safe-code-logo.png')
+(web/'assets').mkdir()
+for name in ['safe-code-logo.png','server-login-tutorial.png']:shutil.copy2(root/'assets'/name,web/'assets'/name)
 with tempfile.TemporaryDirectory(prefix='safecode-icon-') as temp:
  iconset=Path(temp)/'AppIcon.iconset';iconset.mkdir()
  for size in [16,32,128,256,512]:

@@ -1,4 +1,5 @@
 using Renci.SshNet;
+using Renci.SshNet.Common;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -62,10 +63,16 @@ public sealed partial class SshSession
                     if(hostTransport?.IsConnected==true&&hostForward?.IsStarted==true)
                     {using var probe=hostTransport.CreateCommand("true");probe.CommandTimeout=TimeSpan.FromSeconds(8);await probe.ExecuteAsync(ct);if(probe.ExitStatus!=0)throw new IOException("本机控制通道检查失败。");continue;}
                     if(mountTrustFailed){hostState="attention";hostMessage="服务器身份变化，已停止自动重连";continue;}
+                    if(mountAuthenticationFailed){hostState="attention";hostMessage="SSH 认证失败，请在主界面更新登录密码";continue;}
                     hostState="reconnecting";hostMessage="本机控制连接中断，正在重连";await ConnectHostTunnelAsync(ct);
                 }
                 catch(OperationCanceledException)when(ct.IsCancellationRequested){break;}
-                catch{CloseHostTunnel();hostState=mountTrustFailed?"attention":"reconnecting";hostMessage=mountTrustFailed?"服务器身份变化，请核对后重新启用":"连接中断，命令暂不可用；正在重连";}
+                catch(Exception error)
+                {
+                    CloseHostTunnel();if(error is SshAuthenticationException)mountAuthenticationFailed=true;
+                    hostState=mountTrustFailed||mountAuthenticationFailed?"attention":"reconnecting";
+                    hostMessage=mountTrustFailed?"服务器身份变化，请核对后重新启用":mountAuthenticationFailed?"SSH 认证失败，请在主界面更新登录密码":"连接中断，命令暂不可用；正在重连";
+                }
                 finally{hostGate.Release();}
             }
         }

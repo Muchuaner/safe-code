@@ -11,6 +11,7 @@ internal sealed class ClientPreferences(string directory)
 {
     internal static readonly DesktopResolution[] Resolutions=[new(1024,768),new(1280,800),new(1366,768),new(1600,900),new(1920,1080)];
     private string DraftPath(SshSession session)=>Path.Combine(directory,"account-drafts",Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(session.Host+":"+session.Port+":"+session.Fingerprint)))+(OperatingSystem.IsMacOS()?".aes":".dpapi"));
+    public bool RequiresAccountConfirmation(SshSession session)=>session.Server?.Statuses.GetValueOrDefault("account")==true||File.Exists(DraftPath(session)+".configured");
     public AccountDraft? ReadDraft(SshSession session)
     {
         string path=DraftPath(session);if(!File.Exists(path))return null;
@@ -23,7 +24,7 @@ internal sealed class ClientPreferences(string directory)
         if(!Regex.IsMatch(draft.Hostname,"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"))throw new ArgumentException("机器名称须为 1–63 位字母、数字或短横线。");
         if(draft.Password.Length>0&&(draft.Password.Length<12||draft.Password.Length>256||draft.Password.IndexOfAny(['\r','\n','\0'])>=0))throw new ArgumentException("工作密码须为 12–256 位，不能包含换行或空字符。");
         string path=DraftPath(session);Directory.CreateDirectory(Path.GetDirectoryName(path)!);byte[] data=JsonSerializer.SerializeToUtf8Bytes(draft,JsonDefaults.Options);
-        try{File.WriteAllBytes(path+".new",LocalSecrets.Protect(data));File.Move(path+".new",path,true);}finally{CryptographicOperations.ZeroMemory(data);}
+        try{File.WriteAllBytes(path+".new",LocalSecrets.Protect(data));File.Move(path+".new",path,true);File.WriteAllText(path+".configured","1");}finally{CryptographicOperations.ZeroMemory(data);}
     }
     public void ClearDraft(SshSession session)
     {

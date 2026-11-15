@@ -185,3 +185,41 @@ button.resource-link:hover{color:var(--green)}
 
 .unified-maintenance-cards .bridge-card{grid-column:1/-1;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:14px;padding:12px 16px;min-height:76px}.bridge-card .advanced-copy{margin:0;min-width:0;flex:1}.bridge-card-actions{display:flex;align-items:center;gap:14px;flex-shrink:0}.bridge-card-actions span{font-size:10px;color:#7b897f}.bridge-card-actions button{min-width:86px}.bridge-credit{color:#8d9a90!important;font-size:9px!important;margin:5px 0 0!important;line-height:1.6}.bridge-dialog .config-body{max-height:calc(100vh - 130px);overflow:auto}.bridge-dialog h2{font-size:16px;margin:0 0 12px}.bridge-fields{display:grid;grid-template-columns:1fr 110px;gap:12px;margin-top:16px}.bridge-fields input{margin-bottom:8px}.bridge-check{display:flex;align-items:flex-start;gap:9px;line-height:1.7;margin:15px 0}.bridge-check input{appearance:auto;flex:0 0 14px;width:14px;height:14px;margin:3px 0 0;padding:0}.bridge-check span{flex:1}.bridge-check small{display:block;font-size:10px;line-height:1.8;color:#8c978e;margin-top:4px}.bridge-config-buttons{display:flex;gap:8px;margin:10px 0}.bridge-config-buttons button{height:32px;padding:0 11px}.bridge-connect-info{display:flex;gap:10px;align-items:center;font-size:11px;padding-top:13px;border-top:1px solid var(--border)}.bridge-connect-info span{color:#819086}.bridge-connect-info code{font-family:Consolas,monospace;font-size:11px;overflow-wrap:anywhere}#bridge-config{width:100%;height:135px;border:1px solid var(--border);border-radius:4px;padding:10px;font:10px/1.7 Consolas,monospace;resize:vertical;color:#536359;background:#f7f9f6}#bridge-progress{font-size:11px;line-height:1.8;color:#68786d;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}#bridge-config-area[hidden],#bridge-start[hidden],#bridge-stop[hidden]{display:none!important}#bridge-form .config-footer button{width:auto;min-width:125px;padding:0 14px;height:34px}@media(max-width:520px){.bridge-card-actions{flex-direction:column;gap:6px}.bridge-fields{grid-template-columns:minmax(0,1fr) 88px}}
 .bridge-dialog .bridge-check{display:flex!important;align-items:flex-start;gap:9px}.bridge-dialog .bridge-check input{width:14px!important;height:14px!important;min-height:14px!important;margin:3px 0 0!important}.bridge-dialog .config-footer{position:sticky;bottom:0;z-index:1;background:#fff;padding-top:12px;padding-bottom:6px}
+
+/* 登录帮助与账户操作沿用现有绿色按钮。 */
+.login-help-actions{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:12px;margin-top:9px}
+.login-help-actions .primary{margin:0!important;width:100%}
+.login-help-button{border:0;background:transparent;color:var(--green);font:inherit;font-size:11px;padding:9px 0;cursor:pointer}
+.login-help-button:hover{text-decoration:underline;text-underline-offset:3px}
+.login-help-dialog{width:680px;max-width:calc(100vw - 28px)}
+.login-help-body{padding:16px 20px 18px}.login-help-body img{display:block;width:100%;height:auto;border:1px solid #e4e9e5;border-radius:4px}
+.login-help-body p{font-size:11px;color:#687b70;line-height:1.85;margin:12px 0 0}
+.step .locale-settings-button,.step.done .deploy-button.locale-settings-button{border:1px solid #c8d6cc;border-radius:4px;padding:7px 12px;min-width:70px;background:#fff;color:var(--green);font-size:10px;flex-shrink:0}
+.step .locale-settings-button:hover:not(:disabled){border-color:#86a991;background:#f5f9f5}
+.credential-entry{display:block;margin:8px auto 0;font-size:9px;color:var(--green)}.credential-entry.needs-credentials{border:1px solid #c89563;background:#fff8ee;border-radius:4px;color:#97622f;padding:4px 9px}
+.credential-target{font-size:12px;overflow-wrap:anywhere;color:var(--green);margin:0 0 18px}.credential-error{font-size:11px;line-height:1.8;color:#a65345;white-space:pre-line;margin:10px 0 0}
+#credential-form .config-footer .primary{min-width:112px}#app-message-dialog:has(#app-message-confirm:not(:empty)) .dialog-buttons{flex-wrap:wrap}
+
+.bridge-card .advanced-copy p.bridge-warning{color:#986744;font-size:10px;line-height:1.7;min-height:0;margin:6px 0 0}.bridge-risk-note{color:#986744;background:#fcf8f1;border:1px solid #eadfce;border-radius:4px;padding:10px 12px;font-size:11px;line-height:1.8;margin:14px 0}
+
+/* 登录页：统一轴线、等宽辅助操作与随窗口分配的底部留白。 */
+#login-screen{padding:22px 28px 18px;gap:0}
+#login-screen .login-heading{margin:0 0 16px}
+#login-screen .kicker{font-size:11px;color:#819087}
+#login-screen .login-heading h1{font-size:25px;line-height:1.25;letter-spacing:-.5px;margin:7px 0 7px;font-weight:600}
+#login-screen .login-heading p{font-size:11px;line-height:1.6;color:#88958c;margin:0}
+#login-form{width:100%;margin:0}
+#login-form label{font-size:11px;line-height:15px;color:#607368;margin-bottom:6px}
+#login-form input:not([type=checkbox]){height:40px;margin:0 0 12px;padding-left:12px;border-color:#dce4de;border-radius:5px;font-size:12px}
+#login-form .password-wrap input{margin-bottom:0;padding-right:40px}
+#login-form .password-wrap .reveal{top:0;height:40px}
+#login-form .connection-message{height:auto;min-height:0;font-size:10px;line-height:1.6;margin-top:8px;padding:0}
+#login-form .connection-message:empty{display:none}
+#login-form .rating-disclosure{font-size:9px;line-height:1.5;color:#8c9990;margin:12px 0 10px}
+#login-form #connect{height:40px;border-radius:5px;font-size:12px;font-weight:500}
+#login-form .login-help-actions{gap:10px;margin-top:10px}
+#login-form .login-help-actions>button{display:flex;align-items:center;justify-content:center;width:100%;height:38px;margin:0;padding:0 6px;border:1px solid #d6e2da;border-radius:5px;background:#f5f8f5;color:var(--green);font-size:11px;font-weight:500;text-decoration:none}
+#login-form .login-help-actions>button:hover{background:#eaf2ec;border-color:#a9c1b2}
+#login-screen>.back{align-self:center;margin:auto 0 0;padding:12px 8px 0;line-height:16px;font-size:10px;color:#8e9b92}
+#login-screen>.back:hover{color:var(--green)}
+@media(max-height:520px){#login-screen{padding-top:18px;padding-bottom:14px}#login-screen .login-heading{margin-bottom:10px}#login-form input:not([type=checkbox]){height:36px;margin-bottom:10px}#login-form .password-wrap input{margin-bottom:0}#login-form .password-wrap .reveal{height:36px}#login-form .rating-disclosure{margin-top:11px;margin-bottom:10px}#login-screen>.back{padding-top:8px}}

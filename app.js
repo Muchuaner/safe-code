@@ -141,7 +141,7 @@ function renderTasks(){
       checkbox.onchange=()=>{if(checkbox.checked)selectedTasks.add(i);else selectedTasks.delete(i);updateBatchControls();};
       row.append(checkbox);if(states[i]==='done')row.classList.add('unselectable');
     }
-    if(i===0||i===1){const settings=document.createElement('button');settings.className='text-button locale-settings-button';settings.textContent='自定义';settings.setAttribute('aria-label',i===0?'自定义工作用户和机器名称':'自定义本土化');settings.disabled=busy;settings.onclick=i===1?openLocalization:()=>openAccountSettings();row.append(number,copy,settings,button);}else row.append(number,copy,button);return row;
+    if(i===0||i===1){const settings=document.createElement('button');settings.className='deploy-button locale-settings-button';settings.textContent='自定义';settings.setAttribute('aria-label',i===0?'自定义工作用户和机器名称':'自定义本土化');settings.disabled=busy;settings.onclick=i===1?openLocalization:()=>openAccountSettings();row.append(number,copy,settings,button);}else row.append(number,copy,button);return row;
   }));
   const completed=states.filter(state=>state==='done').length;
   $('#overall-status').textContent=completed===tasks.length?'全部配置完成':completed+' / '+tasks.length+' 已完成';
@@ -543,3 +543,8 @@ function initGuideDialog(){
 initGuideDialog();
 
 if(!window.__safeCodeDesktop)showScreen('notice');
+
+// 登录信息教程也可在普通浏览器预览。
+$('#login-help').onclick=()=>$('#login-help-dialog').showModal();
+$('#advanced-connect').onclick=()=>$('#advanced-dialog').showModal();
+$('#advanced-form').onsubmit=event=>{event.preventDefault();$('#advanced-dialog').close();};
