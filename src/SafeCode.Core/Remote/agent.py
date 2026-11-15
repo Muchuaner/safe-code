@@ -510,22 +510,27 @@ def setup_account(options):
             if any(os.path.ismount(p) for p in Path('/mnt/safe-code').glob('*/*/*')):
                 raise RuntimeError('更换用户名需要先卸载目录；原账户与项目不会被删除。')
         else:
+            # 先完成不会修改密码的操作，避免机器名设置失败后密码已悄悄改变。
+            run(['hostnamectl','set-hostname',hostname])
             if password:
                 run(['chpasswd'],stdin=user+':'+password+'\n')
-            run(['hostnamectl','set-hostname',hostname])
-            write(STATE/'account.json',json.dumps({'username':user,'password':password or existing['password'],'hostname':hostname}),0o600)
+            try:write(STATE/'account.json',json.dumps({'username':user,'password':password or existing['password'],'hostname':hostname}),0o600)
+            except Exception as error:
+                if password:raise RuntimeError('工作用户密码已更新，但账户记录保存失败。请使用刚设置的新工作密码；服务器登录账户密码未修改。修复配置目录权限或磁盘空间后，可重新应用账户设置。') from error
+                raise
             log('工作账户设置已应用。');return
     if run(['id',user],False).returncode==0:raise RuntimeError('此用户已存在，拒绝覆盖其密码。请选择新工作用户名。')
     if existing and Path('/etc/systemd/system/safe-code-cloudcli.service').exists():
         run(['systemctl','disable','--now','safe-code-cloudcli'])
         log('旧工作用户的 CloudCLI 已停止；可为新用户重新安装。')
     password=password or secrets.token_urlsafe(20)
+    run(['hostnamectl','set-hostname',hostname])
     run(['useradd','-m','-s','/bin/bash',user])
     run(['chpasswd'],stdin=user+':'+password+'\n')
-    write(STATE/'account.json',json.dumps({'username':user,'password':password,'hostname':hostname}),0o600)
+    try:write(STATE/'account.json',json.dumps({'username':user,'password':password,'hostname':hostname}),0o600)
+    except Exception as error:raise RuntimeError('工作用户已创建并设置密码，但账户记录保存失败。请保留刚设置的工作用户名和密码，通过服务器控制台检查配置目录权限或磁盘空间；服务器登录账户密码未修改。') from error
     user_write('workspace/.keep','')
     if package_installed('xfce4-session'):setup_xsession()
-    run(['hostnamectl','set-hostname',hostname or 'safe-'+secrets.token_hex(4)])
     log('工作账户、机器名称与项目目录已创建。')
 
 def list_directories(options):
@@ -634,6 +639,44 @@ def file_sha256(file):
     digest=hashlib.sha256()
     for block in iter(lambda:file.read(1024*1024),b''):digest.update(block)
     return digest.hexdigest()
+
+def download_claude():
+    import platform,socket,urllib.request,urllib.error
+    target_platform={'x86_64':'linux-x64','aarch64':'linux-arm64'}.get(platform.machine())
+    if not target_platform:raise RuntimeError('Claude Code 当前仅支持 x86_64 或 ARM64 Ubuntu。')
+    base='https://downloads.claude.ai/claude-code-releases'
+    target=Path(__file__).resolve().parent/('claude-payload-'+secrets.token_hex(16))
+    def fetch(url):return urllib.request.urlopen(url,timeout=45)
+    try:
+        log('正在通过 VPS 网络获取 Claude Code 官方版本和校验信息…')
+        with fetch(base+'/stable') as response:release=response.read(128).decode().strip()
+        if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',release):raise RuntimeError('Claude Code 官方版本信息无效。')
+        with fetch(base+'/'+release+'/manifest.json') as response:manifest=json.loads(response.read(1024*1024))
+        digest=manifest['platforms'][target_platform]['checksum']
+        if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest):raise RuntimeError('Claude Code 官方校验信息无效。')
+        received=0;progress=time.monotonic();started=progress
+        with fetch(base+'/'+release+'/'+target_platform+'/claude') as response, target.open('xb') as output:
+            target.chmod(0o600)
+            while True:
+                block=response.read(1024*1024)
+                if not block:break
+                received+=len(block)
+                if received>1024**3:raise RuntimeError('Claude Code 下载文件异常过大，已停止安装。')
+                if time.monotonic()-started>600:raise TimeoutError('下载超时')
+                output.write(block)
+                if time.monotonic()-progress>=10:
+                    log('VPS 正在下载 Claude Code：已接收 '+str(received//1024//1024)+' MB…');progress=time.monotonic()
+        with target.open('rb') as source:
+            if file_sha256(source)!=digest:raise RuntimeError('Claude Code 下载文件校验失败，未执行安装。')
+        log('VPS 下载完成，官方 Claude Code 文件校验通过。')
+        return {'claudePayload':str(target),'claudeSha256':digest,'claudeVersion':release}
+    except Exception as error:
+        target.unlink(missing_ok=True)
+        if isinstance(error,(TimeoutError,socket.timeout)):raise OperationError('timeout','VPS 下载 Claude Code 官方文件超时。') from error
+        if isinstance(error,urllib.error.URLError):
+            dns=isinstance(error.reason,socket.gaierror)
+            raise OperationError('dns_failure' if dns else 'package_fetch_failed','VPS 无法连接 Claude Code 官方下载服务'+('：DNS 域名解析失败。' if dns else '。')) from error
+        raise
 
 def setup_claude(options):
     a=account();apt(['curl','ca-certificates','git','tmux'])
@@ -1062,6 +1105,9 @@ def poll_job(job,offset):
 def main():
     global JOB_DIR
     require_ubuntu() # 必须先检查系统，再创建任何目录或写入配置。
+    if sys.argv[1]=='--claude-download':
+        if os.geteuid()!=0:raise RuntimeError('需要安装管理员权限。')
+        result(download_claude());return
     if sys.argv[1]=='--list-directories':
         if os.geteuid()!=0:raise RuntimeError('需要安装管理员权限。')
         result(list_directories(json.loads(base64.b64decode(sys.argv[2]))));return

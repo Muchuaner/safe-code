@@ -43,7 +43,7 @@ Check(Equals(id,Field("mountClientId").GetValue(session))&&Equals(remotePort,Fie
 Check(((ConnectionSettings)Field("connection").GetValue(session)!).Password=="fixture-new","New credentials not installed");
 await session.RequestAsync<ServerInfo>("inspect");await session.UnmountAsync();Check(!session.HasMounts,"Safe unmount failed after password recovery");
 Console.WriteLine("ROOT_PASSWORD_ROTATION_WRONG_PASSWORD_PRESERVATION_SAME_BRIDGE_PORT_AND_SAFE_UNMOUNT_PASSED");
-Field("trustedKey").SetValue(session,new byte[key.Length]);
+var changedKey=key.ToArray();changedKey[^1]^=1;Field("trustedKey").SetValue(session,changedKey);
 try{await session.ReauthenticateAsync("fixture-new");throw new Exception("Changed host identity accepted");}catch(SshConnectionException){}
 Check(session.IsConnected,"Host identity rejection closed old connection");Console.WriteLine("CHANGED_HOST_IDENTITY_REJECTED_PASSED");
 

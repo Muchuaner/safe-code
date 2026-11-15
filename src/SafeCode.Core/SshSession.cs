@@ -113,6 +113,7 @@ public sealed partial class SshSession : IDisposable
     {
         settings ??= connection ?? throw new InvalidOperationException("尚未连接服务器。");
         var sftp = new SftpClient(settings.Host, settings.Port, settings.Username, settings.Password);
+        PinHostKeyAlgorithms(sftp.ConnectionInfo);
         sftp.HostKeyReceived += (_, e) => e.CanTrust = trustedKey != null && CryptographicOperations.FixedTimeEquals(trustedKey, e.HostKey);
         return sftp;
     }
@@ -273,6 +274,7 @@ public sealed partial class SshSession : IDisposable
     {
         CreateWorkspaceKey(); var account = await RequestAsync<AccountInfo>("account_info", null, ct);
         using var work = new SshClient(Host, Port, account.Username, new PrivateKeyFile(KeyPath));
+        PinHostKeyAlgorithms(work.ConnectionInfo);
         work.HostKeyReceived += (_, e) => e.CanTrust = trustedKey != null && CryptographicOperations.FixedTimeEquals(trustedKey, e.HostKey);
         await work.ConnectAsync(ct); using var command = work.CreateCommand("id -un"); await command.ExecuteAsync(ct);
         if (command.Result.Trim() != account.Username) throw new InvalidOperationException("工作用户公钥登录验证失败。");

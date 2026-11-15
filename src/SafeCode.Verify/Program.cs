@@ -2,6 +2,34 @@ using SafeCode.Core;
 using System.Net.Sockets;
 using System.Text.Json;
 
+if(args.Length>1&&args[0]=="algorithm-fixture"){
+    using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;
+    string directory=c.GetProperty("directory").GetString()!,mode=c.GetProperty("mode").GetString()!;
+    var settings=new ConnectionSettings("127.0.0.1","fixture","fixture-only",c.GetProperty("port").GetInt32());
+    using var initial=new Renci.SshNet.SshClient(settings.Host,settings.Port,settings.Username,settings.Password);
+    byte[]? key=null;initial.HostKeyReceived+=(_,e)=>{key=e.HostKey.ToArray();e.CanTrust=true;};await initial.ConnectAsync(default);
+    using var session=new SshSession(directory);var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+    typeof(SshSession).GetField("trustedKey",flags)!.SetValue(session,key);
+    typeof(SshSession).GetField("connection",flags)!.SetValue(session,settings);
+    File.WriteAllText(mode,"expanded");
+    async Task Check(bool changed){
+        using var sftp=(Renci.SshNet.SftpClient)typeof(SshSession).GetMethod("MakeSftp",flags)!.Invoke(session,new object?[]{null})!;
+        using var tunnel=(Renci.SshNet.SshClient)typeof(SshSession).GetMethod("NewMountConnection",flags)!.Invoke(session,new object?[]{null})!;
+        foreach(var connection in new Renci.SshNet.BaseClient[]{sftp,tunnel}){
+            bool rejected=false;try{await connection.ConnectAsync(default);}catch(Renci.SshNet.Common.SshConnectionException){rejected=true;}
+            if(rejected!=changed)throw new Exception(changed?"替换密钥未被拒绝。":"服务器新增密钥类型导致已信任连接失败。");
+        }
+    }
+    await Check(false);
+    typeof(SshSession).GetField("client",flags)!.SetValue(session,initial);
+    typeof(SshSession).GetField("remoteDirectory",flags)!.SetValue(session,"/tmp/fixture");
+    typeof(SshSession).GetProperty("Server")!.SetValue(session,new ServerInfo{Architecture="x86_64"});
+    var download=(Task<(object Options,string Path)>)typeof(SshSession).GetMethod("PrepareClaudePayloadAsync",flags)!.Invoke(session,new object[]{CancellationToken.None})!;
+    var prepared=await download;if(prepared.Path!="/tmp/fixture/claude-payload-fixture")throw new Exception("未优先使用 VPS 下载结果。");
+    Console.WriteLine("CLAUDE_VPS_DOWNLOAD_PRECEDES_LOCAL_HTTP_PASSED");
+    File.WriteAllText(mode,"changed");await Check(true);
+    Console.WriteLine("ADDED_HOST_KEY_TYPE_PRESERVES_SFTP_AND_TUNNEL; REPLACED_KEY_REJECTED");return 0;
+}
 if(args.Length>1&&args[0]=="mount-fixture"){
     using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string directory=c.GetProperty("directory").GetString()!;int port=c.GetProperty("port").GetInt32();
     using var client=new Renci.SshNet.SshClient("127.0.0.1",port,"fixture","fixture-only");client.HostKeyReceived+=(_,e)=>e.CanTrust=Convert.ToBase64String(e.HostKey)==c.GetProperty("key").GetString();await client.ConnectAsync(default);
