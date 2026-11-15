@@ -89,7 +89,7 @@ public sealed class MainWindow : Window
             {
                 e.Cancel=true;if(exitInProgress)return;exitInProgress=true;
                 try{if(claudeBridge?.Running==true)await claudeBridge.StopAsync(lifetime.Token);if(hostControl?.Enabled==true)await hostControl.DisableAsync(lifetime.Token);if(session?.HasMounts==true)await Task.Run(()=>session.UnmountAsync(lifetime.Token));closingApproved=true;Close();}
-                catch(Exception error){exitRequested=false;ShowMainWindow();MessageBox.Show(this,"尚未确认所有文件同步完成，已保留挂载守护。请恢复连接或关闭远端正在使用的文件后重试。\n"+error.Message,"暂未退出",MessageBoxButton.OK,MessageBoxImage.Warning);}
+                catch(Exception error){exitRequested=false;ShowMainWindow();MessageBox.Show(this,"尚未确认所有文件同步完成，已保留挂载守护。若更改过服务器密码，请点击主界面的“更新登录密码”后重试；也请关闭远端正在使用的文件。\n"+error.Message,"暂未退出",MessageBoxButton.OK,MessageBoxImage.Warning);}
                 finally{exitInProgress=false;}
                 return;
             }
@@ -166,7 +166,7 @@ public sealed class MainWindow : Window
             if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","RPC "+operation+"\n");
             var args = root.TryGetProperty("args", out var value) ? value : default;
             if(installingUpdate)throw new InvalidOperationException("正在准备安装更新，请稍候。");
-            bool maintenance=operation is "cloud.install" or "cloud.expose" or "mount.install" or "mount.apply" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "bridge.start" or "bridge.stop";
+            bool maintenance=operation is "cloud.install" or "cloud.expose" or "mount.install" or "mount.apply" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "bridge.start" or "bridge.stop" or "connection.reauthenticate";
             if(maintenance)maintenanceOperations++;
             if(!IsAcceptance&&services.DiagnosticsAllowed)
             {
@@ -244,6 +244,19 @@ public sealed class MainWindow : Window
                 Process.Start(new ProcessStartInfo(downloadedUpdate.Path){UseShellExecute=true});closingApproved=true;Close();return true;}
                 catch{installingUpdate=false;throw;}
             case "login.load": return LocalSecrets.Load();
+            case "connection.info": return session==null?null:new{host=session.Host,port=session.Port,username=session.LoginUsername};
+            case "connection.reauthenticate":
+                if(deploying||connectionPending||maintenanceOperations>1)throw new InvalidOperationException("请等待当前操作完成后更新登录密码。");
+                var recovering=session??throw new InvalidOperationException("请先登录服务器。");deploying=true;
+                try
+                {
+                    using var recoveryTimeout=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);recoveryTimeout.CancelAfter(TimeSpan.FromSeconds(90));
+                    await Task.Run(()=>recovering.ReauthenticateAsync(Read("password"),recoveryTimeout.Token));
+                    try{LocalSecrets.Save(new(recovering.Host,recovering.LoginUsername,Read("password"),recovering.Port));}catch{QueueLog("connection","新密码已验证，但登录记忆未能保存，下次请重新填写。");}
+                    return new{ready=true,mount=recovering.GetMountStatus()};
+                }
+                catch(Exception error){throw new InvalidOperationException(ConnectionErrors.Describe(error),error);}
+                finally{deploying=false;}
             case "pickFolder": var dialog = new OpenFolderDialog { Title = "选择要挂载到 VPS 的本地目录", InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
             case "acceptance.guide":
                 if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
@@ -332,6 +345,7 @@ public sealed class MainWindow : Window
                 try{browsing?.Cancel();}catch(ObjectDisposedException){}browsing=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                 using(var timeout=browsing){timeout.CancelAfter(TimeSpan.FromSeconds(12));try{return await RequireSession().ListDirectoriesAsync(Read("path"),timeout.Token);}catch(Exception error)when(error is OperationCanceledException or Renci.SshNet.Common.SshOperationTimeoutException){throw new TimeoutException("读取目录超时，请检查网络或挂载目录，稍后重试。",error);}}
             case "account.draft.get": return preferences.ReadDraft(RequireSession());
+            case "account.change.status": return new{requiresConfirmation=preferences.RequiresAccountConfirmation(RequireSession())};
             case "account.draft.save": preferences.SaveDraft(RequireSession(),new(Read("username"),Read("hostname"),Read("password")));return true;
             case "desktop.resolution.get": return preferences.ReadResolution();
             case "desktop.resolution.save": var resolution=new DesktopResolution(args.GetProperty("width").GetInt32(),args.GetProperty("height").GetInt32());preferences.SaveResolution(resolution);return clients.ResizeOpenDesktops(resolution);

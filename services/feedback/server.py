@@ -76,7 +76,7 @@ class Store:
         if not isinstance(data['version'],str) or not VERSION.fullmatch(data['version']):raise ValueError('版本格式错误')
         now=dt.datetime.now(dt.timezone.utc);day=now.date().isoformat()
         if kind=='usage':
-            if data['os']!='Windows' or data['eventType']!='launch':raise ValueError('事件不受支持')
+            if data['os'] not in ['Windows','macOS'] or data['eventType']!='launch':raise ValueError('事件不受支持')
         elif kind=='diagnostics':validate_diagnostic(data['report'],extended)
         elif not isinstance(data['message'],str) or not 5<=len(data['message'].strip())<=4000:raise ValueError('反馈长度无效')
         with self.connect() as db:

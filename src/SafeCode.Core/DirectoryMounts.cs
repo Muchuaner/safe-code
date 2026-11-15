@@ -1,4 +1,5 @@
 using Renci.SshNet;
+using Renci.SshNet.Common;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -6,7 +7,7 @@ using System.Text.Json;
 
 namespace SafeCode.Core;
 public sealed record MountResult(string ClientId,List<string> Paths,List<string>? ManagedPaths=null,string? CloudWarning=null);
-public sealed record MountStatus(int Count,string State,string Message,long DurationSeconds,long BytesToServer,long BytesToLocal,long CompletedFiles,int ActiveTransfers);
+public sealed record MountStatus(int Count,string State,string Message,long DurationSeconds,long BytesToServer,long BytesToLocal,long CompletedFiles,int ActiveTransfers,bool AuthenticationRequired=false);
 public sealed partial class SshSession
 {
     private WebDavServer? fileServer;
@@ -22,12 +23,13 @@ public sealed partial class SshSession
     private long previousToServer,previousToLocal,previousFiles;
     private string mountState="idle",mountMessage="未挂载目录";
     private bool mountTrustFailed;
+    private bool mountAuthenticationFailed;
     public TimeSpan MountGuardInterval {get;init;}=TimeSpan.FromSeconds(5);
     public bool HasMounts => fileServer!=null;
     public MountStatus GetMountStatus()
     {
         var stats=fileServer?.TransferStats??new(0,0,0,0);long since=Interlocked.Read(ref mountedAtTimestamp);
-        return new(guardedMappings.Count,mountState,mountMessage,since>0?(long)System.Diagnostics.Stopwatch.GetElapsedTime(since).TotalSeconds:0,Interlocked.Read(ref previousToServer)+stats.BytesToServer,Interlocked.Read(ref previousToLocal)+stats.BytesToLocal,Interlocked.Read(ref previousFiles)+stats.CompletedFiles,stats.ActiveTransfers);
+        return new(guardedMappings.Count,mountState,mountMessage,since>0?(long)System.Diagnostics.Stopwatch.GetElapsedTime(since).TotalSeconds:0,Interlocked.Read(ref previousToServer)+stats.BytesToServer,Interlocked.Read(ref previousToLocal)+stats.BytesToLocal,Interlocked.Read(ref previousFiles)+stats.CompletedFiles,stats.ActiveTransfers,mountAuthenticationFailed);
     }
     private static void DisposeMountResource(IDisposable? resource){try{resource?.Dispose();}catch{}}
     private sealed class MountSshClient(Renci.SshNet.ConnectionInfo info):SshClient(info)
@@ -35,10 +37,11 @@ public sealed partial class SshSession
         // 转发清理异常不能阻止关闭 SSH 会话，否则旧监听会阻塞后续重连。
         protected override void OnDisconnecting(){try{base.OnDisconnecting();}catch{}}
     }
-    private SshClient NewMountConnection()
+    private SshClient NewMountConnection(ConnectionSettings? settings=null)
     {
         if(connection==null||trustedKey==null)throw new InvalidOperationException("尚未确认服务器身份，不能建立挂载通道。");
-        var info=new PasswordConnectionInfo(connection.Host,connection.Port,connection.Username,connection.Password){Timeout=TimeSpan.FromSeconds(12),RetryAttempts=1};
+        settings??=connection;
+        var info=new PasswordConnectionInfo(settings.Host,settings.Port,settings.Username,settings.Password){Timeout=TimeSpan.FromSeconds(12),RetryAttempts=1};
         var transport=new MountSshClient(info){KeepAliveInterval=TimeSpan.FromSeconds(10)};
         transport.HostKeyReceived+=(_,e)=>{e.CanTrust=CryptographicOperations.FixedTimeEquals(trustedKey,e.HostKey);if(!e.CanTrust)mountTrustFailed=true;};
         return transport;
@@ -81,7 +84,7 @@ public sealed partial class SshSession
     }
     public async Task RecoverMountsAsync(CancellationToken ct=default)
     {
-        if(!HasMounts||mountTrustFailed||!await mountLifecycle.WaitAsync(0,ct))return;
+        if(!HasMounts||mountTrustFailed||mountAuthenticationFailed||!await mountLifecycle.WaitAsync(0,ct))return;
         bool channelValidated=false;
         try
         {
@@ -114,11 +117,12 @@ public sealed partial class SshSession
             mountState="connected";mountMessage="挂载守护中";
         }
         catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
-        catch
+        catch(Exception error)
         {
             if(!channelValidated){var stale=mountTransport;var port=fileForward;mountTransport=null;fileForward=null;DisposeMountResource(stale);DisposeMountResource(port);}
-            mountState=mountTrustFailed?"attention":"reconnecting";
-            mountMessage=mountTrustFailed?"服务器身份已变化，请先人工核对；未信任新密钥":"连接暂不可用，保留挂载和缓存并继续重试";
+            mountAuthenticationFailed=error is SshAuthenticationException;
+            mountState=mountTrustFailed||mountAuthenticationFailed?"attention":"reconnecting";
+            mountMessage=mountTrustFailed?"服务器身份已变化，请先人工核对；未信任新密钥":mountAuthenticationFailed?"SSH 登录认证失败；若已更改服务器密码，请点击“更新登录密码”。原挂载和缓存已保留，自动重试已暂停。":"连接暂不可用，保留挂载和缓存并继续重试";
         }
         finally{mountLifecycle.Release();}
     }
@@ -166,7 +170,7 @@ public sealed partial class SshSession
         try
         {
             if(!HasMounts)return;
-            if(!IsConnected)await RestoreMountControlAsync(ct);
+            await EnsureMountControlAsync(ct);
             // 只有远端确认同步卸载后才关闭文件桥，失败时保持守护，防止丢弃尚未上传的内容。
             await RequestAsync<MountResult>("mount_remove",new{clientId=mountClientId},ct);
             AccumulateTransfers();DisposeMountResource(fileForward);fileForward=null;DisposeMountResource(mountTransport);mountTransport=null;DisposeMountResource(fileServer);fileServer=null;

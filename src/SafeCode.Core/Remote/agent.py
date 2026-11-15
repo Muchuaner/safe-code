@@ -166,7 +166,8 @@ if operation=='host_bridge':
     if action!='configure':raise ValueError('本机控制操作无效。')
     alias=request['alias'];username=request['username'];port=request['port'];host_key=request['hostKey'];user_sid=request.get('userSid','')
     if not re.fullmatch('[a-z][a-z0-9_-]{0,31}',alias) or not re.fullmatch(r'[a-zA-Z0-9_.@\\-]{1,128}',username):raise ValueError('本机控制别名或用户名无效。')
-    if not re.fullmatch(r'S-1-[0-9]+(?:-[0-9]+){1,15}',user_sid):raise ValueError('本机 Windows 账户标识无效。')
+    is_mac=bool(re.fullmatch(r'macos:[1-9][0-9]{0,9}',user_sid))
+    if not is_mac and not re.fullmatch(r'S-1-[0-9]+(?:-[0-9]+){1,15}',user_sid):raise ValueError('本机账户标识无效。')
     if not isinstance(port,int) or not 1024<=port<=65535:raise ValueError('本机控制端口无效。')
     if not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]*)?',host_key):raise ValueError('本机 SSH 指纹材料无效。')
     if not target.is_file():raise ValueError('缺少专用连接密钥，请重新部署本机控制。')
@@ -181,11 +182,15 @@ if operation=='host_bridge':
     if completed.returncode:raise ValueError('本机 SSH 登录验证失败，请检查本机账户、OpenSSH 日志与授权。')
     identity=completed.stdout.strip().lower().replace('/','\\');expected=username.lower()
     if identity!=expected and not identity.endswith('\\'+expected):raise ValueError('本机登录账户不匹配，已拒绝生成可用状态。')
-    import base64
-    probe="$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"
-    encoded=base64.b64encode(probe.encode('utf-16le')).decode()
-    proof=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'powershell.exe','-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',encoded],capture_output=True,text=True,errors='replace',timeout=20)
-    if proof.returncode or proof.stdout.strip()!=user_sid:raise ValueError('本机 Windows 账户身份与授权不匹配，未生成可用状态。')
+    if is_mac:
+        proof=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'/usr/bin/uname -s && /usr/bin/id -u'],capture_output=True,text=True,timeout=20)
+        if proof.returncode or proof.stdout.strip().splitlines()!=['Darwin',user_sid.split(':',1)[1]]:raise ValueError('本机 macOS 账户身份与授权不匹配，未生成可用状态。')
+    else:
+        import base64
+        probe="$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"
+        encoded=base64.b64encode(probe.encode('utf-16le')).decode()
+        proof=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'powershell.exe','-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',encoded],capture_output=True,text=True,errors='replace',timeout=20)
+        if proof.returncode or proof.stdout.strip()!=user_sid:raise ValueError('本机 Windows 账户身份与授权不匹配，未生成可用状态。')
     import shlex
     print(json.dumps({'command':'ssh -F '+shlex.quote(str(config))+' '+alias,'verified':True}));sys.exit(0)
 if operation=='codex_bridge':
