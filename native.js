@@ -2,6 +2,10 @@
 if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__safeCodePlatform === 'macos' && location.protocol === 'file:'))) {
   (() => {
     const isMac=window.__safeCodePlatform==='macos';
+    if(!isMac){
+      for(const [value,label] of [['2560x1440','2560 × 1440'],['2560x1600','2560 × 1600']])$('#resolution-select').add(new Option(label,value));
+      $('#resolution-dialog .dialog-hint').textContent='设置初始窗口大小；连接后桌面随窗口自动适配。远程桌面顶部可切换全屏，快捷键 Ctrl+Alt+Enter。';
+    }
     const pending = new Map();
     let hostBusy=false,hostStatus=null,hostPolling=false;
     let bridgeBusy=false,bridgeStatus=null,bridgePolling=false;
