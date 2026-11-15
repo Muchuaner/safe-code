@@ -11,6 +11,7 @@ internal static class LocalSecrets
 {
     internal static string? DirectoryOverride {get;set;}
     private static string FilePath=>Path.Combine(DirectoryOverride??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode"),"login.dpapi");
+    public static byte[] Unprotect(byte[] bytes)=>ProtectedData.Unprotect(bytes,null,DataProtectionScope.CurrentUser);
     public static byte[] Protect(byte[] bytes)=>ProtectedData.Protect(bytes,null,DataProtectionScope.CurrentUser);
     public static void Save(ConnectionSettings settings)
     {

@@ -24,7 +24,7 @@ public sealed partial class SshSession
     }
     public async Task<HostControlStatus> StartHostControlAsync(string clientId,uint localPort,string username,string userSid,string hostKey,string alias,CancellationToken ct=default)
     {
-        if(!Regex.IsMatch(clientId,"\\A[a-f0-9]{20}\\z")||!Regex.IsMatch(alias,"\\A[a-z][a-z0-9_-]{0,31}\\z")||localPort<1024||localPort>65535)throw new ArgumentException("本机控制连接参数无效。");
+        if(!Regex.IsMatch(clientId,"\\A[a-f0-9]{20}\\z")||!Regex.IsMatch(alias,"\\A[a-z][a-z0-9_-]{0,31}\\z")||(localPort<1024&&!(localPort==22&&userSid.StartsWith("macos:")))||localPort>65535)throw new ArgumentException("本机控制连接参数无效。");
         await hostGate.WaitAsync(ct);
         try
         {

@@ -10,11 +10,11 @@ public sealed record DesktopResolution(int Width=1280,int Height=800);
 internal sealed class ClientPreferences(string directory)
 {
     internal static readonly DesktopResolution[] Resolutions=[new(1024,768),new(1280,800),new(1366,768),new(1600,900),new(1920,1080)];
-    private string DraftPath(SshSession session)=>Path.Combine(directory,"account-drafts",Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(session.Host+":"+session.Port+":"+session.Fingerprint)))+".dpapi");
+    private string DraftPath(SshSession session)=>Path.Combine(directory,"account-drafts",Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(session.Host+":"+session.Port+":"+session.Fingerprint)))+(OperatingSystem.IsMacOS()?".aes":".dpapi"));
     public AccountDraft? ReadDraft(SshSession session)
     {
         string path=DraftPath(session);if(!File.Exists(path))return null;
-        byte[] data=ProtectedData.Unprotect(File.ReadAllBytes(path),null,DataProtectionScope.CurrentUser);
+        byte[] data=LocalSecrets.Unprotect(File.ReadAllBytes(path));
         try{return JsonSerializer.Deserialize<AccountDraft>(data,JsonDefaults.Options);}finally{CryptographicOperations.ZeroMemory(data);}
     }
     public void SaveDraft(SshSession session,AccountDraft draft)
