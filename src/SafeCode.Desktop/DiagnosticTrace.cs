@@ -25,7 +25,7 @@ internal sealed class DiagnosticTrace(string operation,int generation)
         string? value=rpc switch{
             "deploy"=>args.ValueKind==JsonValueKind.Object&&args.TryGetProperty("step",out var step)&&step.ValueKind==JsonValueKind.String?step.GetString():null,
             "job.resume"=>args.ValueKind==JsonValueKind.Object&&args.TryGetProperty("operation",out var op)&&op.ValueKind==JsonValueKind.String?op.GetString():null,
-            "folder.list"=>"directory_list","cloud.install"=>"cloud","mount.install"=>"mount_install","mount.apply"=>"mount_apply","connect"=>"connection","ip.apply"=>"ip_policy",_=>null};
+            "folder.list"=>"directory_list","cloud.install"=>"cloud","mount.install"=>"mount_install","mount.apply"=>"mount_apply","connect" or "connection.reauthenticate"=>"connection","ip.apply"=>"ip_policy",_=>null};
         return Operations.Contains(value)?value:null;
     }
     private int Seconds=>(int)Math.Clamp(clock.Elapsed.TotalSeconds,0,86400);

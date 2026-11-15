@@ -21,3 +21,5 @@ Net.Coffee 为可选 IP 情报来源，评分不是 Anthropic 官方结论。VPS
 本机远程控制完整测试包附带 Microsoft PowerShell/Win32-OpenSSH 的未修改 OpenSSH-Win64.zip，版本 10.4.0.0p1-Preview，官方来源：https://github.com/PowerShell/Win32-OpenSSH/releases/tag/10.4.0.0p1-Preview 。OpenSSH 及所含组件按包内 LICENSE.txt / NOTICE.txt 分别授权，构建时同时提取到 licenses。启用前校验固定 SHA256，管理员安装时核验 Microsoft 数字签名；未运行其会覆盖系统服务的 install-sshd.ps1。
 
 Codex 接入 Claude 测试组件基于用户提供的《Claude-Codex-VPS迁移包.zip》，保留其 MIT LICENSE.txt、Node.js THIRD_PARTY_LICENSES.txt 和 UPSTREAM.txt。包内声明的上游为 https://github.com/EthanSK/claude-in-codex ，提交 9ad1632ffeeed6b35d89b3476f337d22e15c8ddd（MIT）；Windows 适配器由提供者构建且未数字签名，并非本项目或 OpenAI / Anthropic 官方构建。原始 Windows EXE 固定 SHA256 c8b2353f14afeef2a04c759d0da64d4aca301127a9e0fcdb82a8032026acd070；服务器五个 mjs 文件保留原内容，见 third_party/claude-codex-vps/SOURCE.json。界面另留作者致谢位置，待用户补充，不替代许可证原作者信息。
+
+macOS 开发包使用系统 AppKit / WKWebView、Keychain、OpenSSH 与 Terminal，不重新分发 Apple 系统组件；自包含 .NET macOS 运行时的 LICENSE.TXT / THIRD-PARTY-NOTICES.TXT 随包保留。Mac 包不含 Windows WebView2、Win32-OpenSSH 或用户附件的 Windows 模型适配器。

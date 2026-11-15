@@ -27,6 +27,7 @@ internal sealed class ClientServices : IDisposable
     private const string Repository="Muchuaner/safe-code";
     private readonly string preferencesPath;
     private readonly string directory;
+    private readonly string updateAssetSuffix;
     private readonly Uri? endpoint;
     private readonly HttpClient http;
     private readonly HttpMessageHandler? downloadTransport;
@@ -48,9 +49,9 @@ internal sealed class ClientServices : IDisposable
     private DateTimeOffset lastCheck;
     private UpdateInfo? lastUpdate;
     public static string Version=>Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]??Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)??"0.4.3";
-    public ClientServices(string directory,HttpMessageHandler? transport=null,HttpMessageHandler? downloadTransport=null)
+    public ClientServices(string directory,HttpMessageHandler? transport=null,HttpMessageHandler? downloadTransport=null,string? updateAssetSuffix=null)
     {
-        http=transport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(transport);http.MaxResponseContentBufferSize=1048576;http.Timeout=TimeSpan.FromSeconds(15);this.downloadTransport=downloadTransport;
+        http=transport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(transport);http.MaxResponseContentBufferSize=1048576;http.Timeout=TimeSpan.FromSeconds(15);this.downloadTransport=downloadTransport;this.updateAssetSuffix=updateAssetSuffix??AssetSuffix;
         this.directory=directory;Directory.CreateDirectory(directory);preferencesPath=Path.Combine(directory,"usage-preferences.json");
         try{preferences=JsonSerializer.Deserialize<UsagePreferences>(File.ReadAllText(preferencesPath),JsonDefaults.Options)??new();}catch(IOException){preferences=new();}catch(JsonException){preferences=new();}
         http.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+Version);
@@ -122,7 +123,7 @@ internal sealed class ClientServices : IDisposable
         if(!Guid.TryParse(preferences.InstallationId,out _)){preferences.InstallationId=Guid.NewGuid().ToString();Save();}
         counted=true;var token=reporting.Token;
         // 固定字段白名单：无 VPS 地址、登录名、机器名、密码或项目路径。
-        var body=new{schema=1,eventId,installationId=preferences.InstallationId,version=Version,os="Windows",eventType="launch"};
+        var body=new{schema=1,eventId,installationId=preferences.InstallationId,version=Version,os=OperatingSystem.IsMacOS()?"macOS":"Windows",eventType="launch"};
         for(int attempt=0;attempt<3;attempt++){
             if(token.IsCancellationRequested||!preferences.Enabled)return;
             try{using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/usage"),body,JsonDefaults.Options,token);if(response.IsSuccessStatusCode||((int)response.StatusCode<500&&response.StatusCode!=HttpStatusCode.TooManyRequests))return;}
@@ -148,18 +149,19 @@ internal sealed class ClientServices : IDisposable
         if(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)throw new IOException("GitHub 暂时限制了查询频率，请稍后重试。");
         response.EnsureSuccessStatusCode();using var doc=JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));var root=doc.RootElement;
         if(betaChannel){JsonElement? best=null;ReleaseNumber? bestNumber=null;foreach(var candidate in root.EnumerateArray()){if(candidate.GetProperty("draft").GetBoolean())continue;var number=ReleaseNumber.Parse(candidate.GetProperty("tag_name").GetString()??"");if(number==null||(candidate.GetProperty("prerelease").GetBoolean()&&!number.Beta))continue;if(bestNumber==null||number.CompareTo(bestNumber)>0){best=candidate;bestNumber=number;}}if(best==null)return lastUpdate=new(Version,null,"尚未发布测试版本",null);root=best.Value;}
-        var update=ParseRelease(root,Version);release=null;
-        if(update.CanInstall){string name="SafeCode-"+update.Version+"-Setup-x64.exe";var asset=root.GetProperty("assets").EnumerateArray().First(x=>x.GetProperty("name").GetString()==name);release=(update.Version!,asset.GetProperty("browser_download_url").GetString()!,asset.GetProperty("digest").GetString()![7..],asset.GetProperty("size").GetInt64());}
+        var update=ParseRelease(root,Version,updateAssetSuffix);release=null;
+        if(update.CanInstall){string name="SafeCode-"+update.Version+"-"+updateAssetSuffix;var asset=root.GetProperty("assets").EnumerateArray().First(x=>x.GetProperty("name").GetString()==name);release=(update.Version!,asset.GetProperty("browser_download_url").GetString()!,asset.GetProperty("digest").GetString()![7..],asset.GetProperty("size").GetInt64());}
         return lastUpdate=update;
     }
-    internal static UpdateInfo ParseRelease(JsonElement root,string current)
+    private static string AssetSuffix=>OperatingSystem.IsMacOS()?(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture==System.Runtime.InteropServices.Architecture.Arm64?"macOS-arm64.dmg":"macOS-x64.dmg"):"Setup-x64.exe";
+    internal static UpdateInfo ParseRelease(JsonElement root,string current,string assetSuffix="Setup-x64.exe")
     {
         string tag=root.GetProperty("tag_name").GetString()??"";string version=tag.StartsWith('v')?tag[1..]:tag;
         var latest=ReleaseNumber.Parse(version);var installed=ReleaseNumber.Parse(current);
         if(latest==null||installed==null||root.GetProperty("draft").GetBoolean()||(root.GetProperty("prerelease").GetBoolean()&&(!installed.Beta||!latest.Beta)))throw new IOException("GitHub 返回的版本信息无效。");
         string page="https://github.com/"+Repository+"/releases/tag/"+Uri.EscapeDataString(tag);
         if(latest.CompareTo(installed)<=0)return new(current,null,"已是最新版本",page);
-        string name="SafeCode-"+version+"-Setup-x64.exe";bool valid=false;
+        string name="SafeCode-"+version+"-"+assetSuffix;bool valid=false;
         foreach(var asset in root.GetProperty("assets").EnumerateArray()){
             if(asset.GetProperty("name").GetString()!=name)continue;
             string digest=asset.TryGetProperty("digest",out var d)?d.GetString()??"":"";string url=asset.GetProperty("browser_download_url").GetString()??"";
@@ -172,7 +174,7 @@ internal sealed class ClientServices : IDisposable
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromMinutes(20));var downloadToken=deadline.Token;
         var item=release??throw new InvalidOperationException("请先检查新版本；没有可验证的安装包时可打开 GitHub 下载页。");
         string folder=Path.Combine(directory,"Updates",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
-        string file=Path.Combine(folder,"SafeCode-"+item.Version+"-Setup-x64.exe");
+        string file=Path.Combine(folder,"SafeCode-"+item.Version+"-"+updateAssetSuffix);
         using var download=downloadTransport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(downloadTransport,false);download.Timeout=TimeSpan.FromMinutes(20);download.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+Version);
         Uri uri=new(item.Url);
         try{
