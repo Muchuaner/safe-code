@@ -1,0 +1,15 @@
+{
+  "archiveSha256": "5aa7eac204d3a8273ceb25924520d62f6d705d2004a29d38aa5f6d63751b8348",
+  "windowsExeSha256": "c8b2353f14afeef2a04c759d0da64d4aca301127a9e0fcdb82a8032026acd070",
+  "upstream": "https://github.com/EthanSK/claude-in-codex",
+  "upstreamCommit": "9ad1632ffeeed6b35d89b3476f337d22e15c8ddd",
+  "credit": "作者待补充",
+  "files": {
+    "LICENSE": "f8e420686c5e49ba3ed6aa5671b29f19075ff365d5dbd207a19a46b61ef07cc9",
+    "src/vps/mcpRelay.mjs": "0cbd82be7b59d7247e44a8f98b7bd3da6edad19b28f227faaf75947d1150ebf0",
+    "src/vps/processControl.mjs": "5cef74a4faf4592d456934c7d343856b6e027692775cbb6aca3d37f3eb80b644",
+    "src/vps/daemon.mjs": "afb342957c5627e4042fe5b7316eeca751e19f3194f6370261c5fe0a12ee6f2b",
+    "src/vps/connect.mjs": "f68b5d5dd6c8364b43a73470db2e6d3f501d72ccf4f11a2535c87246584db21d",
+    "src/shared/frame.mjs": "7814d913b1d2e09698d9b55dc006db63a3b3ab81f8d19e4ee9043e255e266568"
+  }
+}
