@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.3.4"><img src="https://img.shields.io/badge/下载-Beta--0.4.3.4-c2566f?style=for-the-badge" alt="下载 Beta-0.4.3.4"></a>
+  <a href="https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.3.5"><img src="https://img.shields.io/badge/下载-Beta--0.4.3.5-c2566f?style=for-the-badge" alt="下载 Beta-0.4.3.5"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-e07b2a?style=for-the-badge" alt="Windows 10 / 11">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-6b4a3a?style=for-the-badge" alt="MIT License"></a>
 </p>

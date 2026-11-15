@@ -50,7 +50,7 @@ internal sealed class MacBackend : IDisposable
         try
         {
             using var doc=JsonDocument.Parse(line);var root=doc.RootElement;id=root.GetProperty("id").GetString()??"";operation=root.GetProperty("op").GetString()??"";var args=root.GetProperty("args");
-            bool modifies=operation is "deploy" or "job.resume" or "mount.apply" or "mount.install" or "cloud.install" or "cloud.expose" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "app.shutdown";
+            bool modifies=operation is "deploy" or "job.resume" or "mount.apply" or "mount.install" or "cloud.install" or "cloud.expose" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "app.shutdown" or "connection.reauthenticate";
             if(modifies){if(!await mutation.WaitAsync(0))throw new InvalidOperationException("已有任务正在执行，请等待完成。");gate=true;Interlocked.Increment(ref activeMutations);}
             var diagnosticOperation=DiagnosticTrace.OperationFor(operation,args);
             if(diagnosticOperation!=null&&services.DiagnosticsAllowed){trace=new(diagnosticOperation,services.DiagnosticGeneration);traces[diagnosticOperation]=trace;}
@@ -107,6 +107,17 @@ internal sealed class MacBackend : IDisposable
                 if(update==null)throw new InvalidOperationException("请先下载并校验 macOS 安装镜像。");
                 await ClientServices.VerifyInstallerAsync(update,ct);await EmitAsync(new{type="openFile",path=update.Path});return true;
             case "login.load":return LocalSecrets.Load();
+            case "connection.info":return session==null?null:new{host=session.Host,port=session.Port,username=session.LoginUsername};
+            case "connection.reauthenticate":
+                if(connectionPending!=0)throw new InvalidOperationException("请等待当前连接完成。");
+                var recovering=session??throw new InvalidOperationException("请先登录服务器。");
+                using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(90));
+                    try{await recovering.ReauthenticateAsync(Read("password"),timeout.Token);}catch(Exception error){throw new InvalidOperationException(ConnectionErrors.Describe(error),error);}
+                    try{LocalSecrets.Save(new(recovering.Host,recovering.LoginUsername,Read("password"),recovering.Port));}catch{Log("connection","新密码已验证，但登录记忆未能保存，下次请重新填写。");}
+                }
+                return new{ready=true,mount=recovering.GetMountStatus()};
             case "notice.state":return new{accepted=File.Exists(Path.Combine(directory,"notice-accepted-v2"))||services.NoticeWasConfirmed};
             case "notice.accept":File.WriteAllText(Path.Combine(directory,"notice-accepted-v2"),DateTimeOffset.UtcNow.ToString("O"));return true;
             case "connection.cancel":connecting?.Cancel();challenge=null;return true;
@@ -145,6 +156,7 @@ internal sealed class MacBackend : IDisposable
                 try{browsing?.Cancel();}catch(ObjectDisposedException){}var browse=CancellationTokenSource.CreateLinkedTokenSource(ct);browsing=browse;
                 using(browse){browse.CancelAfter(TimeSpan.FromSeconds(12));try{return await RequireSession().ListDirectoriesAsync(Read("path"),browse.Token);}catch(OperationCanceledException){throw new TimeoutException("读取目录超时，请检查网络后重试。");}}
             case "account.draft.get":return preferences.ReadDraft(RequireSession());
+            case "account.change.status":return new{requiresConfirmation=preferences.RequiresAccountConfirmation(RequireSession())};
             case "account.draft.save":preferences.SaveDraft(RequireSession(),new(Read("username"),Read("hostname"),Read("password")));return true;
             case "account":return await RequireSession().RequestAsync<AccountInfo>("account_info",null,ct);
             case "desktop.resolution.get":return preferences.ReadResolution();

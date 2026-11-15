@@ -26,6 +26,7 @@ public sealed partial class SshSession : IDisposable
     public string Fingerprint { get; private set; } = "";
     public string Host => connection?.Host ?? "";
     public int Port => connection?.Port ?? 22;
+    public string LoginUsername => connection?.Username ?? "";
     public string KeyPath { get; private set; } = "";
     public string KnownHostsPath => Path.Combine(dataDirectory, "known_hosts");
     public event Action<string>? Log;
@@ -108,10 +109,10 @@ public sealed partial class SshSession : IDisposable
         lines.Add(host + " " + hostKeyName + " " + Convert.ToBase64String(trustedKey!));
         File.WriteAllLines(KnownHostsPath, lines);
     }
-    private SftpClient MakeSftp()
+    private SftpClient MakeSftp(ConnectionSettings? settings = null)
     {
-        if (connection == null) throw new InvalidOperationException("尚未连接服务器。");
-        var sftp = new SftpClient(connection.Host, connection.Port, connection.Username, connection.Password);
+        settings ??= connection ?? throw new InvalidOperationException("尚未连接服务器。");
+        var sftp = new SftpClient(settings.Host, settings.Port, settings.Username, settings.Password);
         sftp.HostKeyReceived += (_, e) => e.CanTrust = trustedKey != null && CryptographicOperations.FixedTimeEquals(trustedKey, e.HostKey);
         return sftp;
     }

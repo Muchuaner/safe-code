@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='safe-code-sandbox-') as d:
    if message.get('id')==id:return message
   raise TimeoutError(op)
  try:
-  for op in ['connect','deploy','mount.apply','host.enable','bridge.start','cloud.open','ip.apply','terminal','desktop','feedback.send','updates.download','updates.install','ip.info']:
+  for op in ['connect','connection.reauthenticate','deploy','mount.apply','host.enable','bridge.start','cloud.open','ip.apply','terminal','desktop','feedback.send','updates.download','updates.install','ip.info']:
    reply=rpc(op,{'host':'production.invalid','username':'fixture','password':'fixture-only'});assert '隔离预览' in reply['error'],(op,reply)
   prefs=rpc('services.preferences')['result'];assert prefs['enabled'] is False and prefs['serviceAvailable'] is False
   assert rpc('login.load')['result'] is None;assert rpc('mount.status')['result']['count']==0
@@ -26,4 +26,4 @@ with tempfile.TemporaryDirectory(prefix='safe-code-sandbox-') as d:
  finally:
   p.stdin.close();p.wait(timeout=10)
  assert p.returncode==0,p.stderr.read()
-print('OFFLINE_SANDBOX_BLOCKS_13_NETWORK_AND_MUTATION_OPERATIONS_WITH_DISPOSABLE_STATE')
+print('OFFLINE_SANDBOX_BLOCKS_14_NETWORK_AND_MUTATION_OPERATIONS_WITH_DISPOSABLE_STATE')

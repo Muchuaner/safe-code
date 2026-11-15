@@ -15,7 +15,7 @@ with sync_playwright() as p:
  }}};
  ''')
  page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady');page.evaluate("showScreen('workspace');switchMode('maintenance');document.querySelector('#bridge-manage').onclick()")
- assert '作者待补充' in page.locator('#bridge-credit').inner_text();assert not page.locator('#bridge-consent').is_checked();assert not page.locator('#bridge-write').is_checked();assert page.locator('#bridge-start').is_disabled()
+ assert '亚撒西の空白' in page.locator('#bridge-credit').inner_text();assert page.locator('.unified-maintenance-cards > :last-child').get_attribute('class')=='advanced-card bridge-card';assert '未经本人测试' in page.locator('.bridge-card .bridge-warning').inner_text();assert '自行承担后果' in page.locator('#bridge-dialog .bridge-warning').inner_text();assert not page.locator('#bridge-consent').is_checked();assert not page.locator('#bridge-write').is_checked();assert page.locator('#bridge-start').is_disabled()
  page.evaluate("document.querySelector('#bridge-form').onsubmit({preventDefault(){}})");assert page.evaluate('bridgeCalls.length')==0
  page.locator('#bridge-consent').check();page.locator('#bridge-start').click();page.wait_for_function('bridgeCalls.length===1');assert page.evaluate('bridgeCalls[0].args.writable') is False;assert page.evaluate('bridgeCalls[0].args.thirdPartyAccepted') is True
  assert page.locator('#bridge-close').is_disabled();page.keyboard.press('Escape');assert page.locator('#bridge-dialog').is_visible()

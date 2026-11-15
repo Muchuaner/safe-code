@@ -32,7 +32,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       else if(advancedOperation&&!advancedOperation.done&&step===advancedOperation.key){appendOperationLog(line);}
     };
     window.safeCodeNativeLogs=lines=>{for(const entry of lines)window.safeCodeNativeLog(entry.step,entry.line);};
-    const nativeStyle=document.createElement('style');nativeStyle.textContent=`html,body{overflow:hidden!important;height:100%!important;margin:0!important;padding:0!important;scrollbar-width:none!important;-ms-overflow-style:none!important}*::-webkit-scrollbar,html::-webkit-scrollbar,body::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}*{scrollbar-width:none!important;-ms-overflow-style:none!important}body{padding:0;display:block;background:white;min-height:100vh}.window,.window.wide,.window.maximized{width:100%;height:100vh;max-width:none;border:0;border-radius:0;box-shadow:none;transition:none;overflow:hidden!important}.screen{height:calc(100% - 43px);overflow:hidden!important}.header-controls{width:112px}.maintenance-panel .advanced-actions>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%}.connection-message{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}#login-screen{padding:18px 28px 12px;overflow:hidden!important}.login-heading{margin-top:0;margin-bottom:10px}.login-heading h1{font-size:22px;margin:6px 0 4px}.login-heading p{font-size:10.5px;margin:0}#login-form label{margin-bottom:4px;font-size:10.5px}#login-form input:not([type=checkbox]){height:34px;margin-bottom:9px}#login-form .password-wrap input{margin-bottom:0}#login-form .connection-message{height:18px;padding-top:2px;font-size:10px}.rating-disclosure{margin:0 0 8px;font-size:8px;line-height:1.4}#login-form .primary{height:35px}#login-form .plain{margin:5px auto 0;padding:3px 8px}#login-screen>.back{margin-top:6px;padding:3px 8px}.native-log-note{white-space:normal;line-height:1.6;color:#99a599;font-size:9px}`;document.head.append(nativeStyle);
+    document.documentElement.classList.add('native-client');
+    const nativeStyle=document.createElement('style');nativeStyle.textContent=`html,body{overflow:hidden!important;height:100%!important;margin:0!important;padding:0!important;scrollbar-width:none!important;-ms-overflow-style:none!important}*::-webkit-scrollbar,html::-webkit-scrollbar,body::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}*{scrollbar-width:none!important;-ms-overflow-style:none!important}body{padding:0;display:block;background:white;min-height:100vh}.window,.window.wide,.window.maximized{width:100%;height:100vh;max-width:none;border:0;border-radius:0;box-shadow:none;transition:none;overflow:hidden!important}.screen{height:calc(100% - 43px);overflow:hidden!important}.header-controls{width:112px}.maintenance-panel .advanced-actions>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%}.connection-message{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.native-log-note{white-space:normal;line-height:1.6;color:#99a599;font-size:9px}`;document.head.append(nativeStyle);
     window.openGuideDialog=async onConfirm=>{try{if(await native('guide.open',{connecting:typeof onConfirm==='function'})&&typeof onConfirm==='function')await onConfirm();}catch(error){await showAppMessage(error.message);}};
     $('#minimize').onclick=()=>native('window.minimize');
     $('#maximize').onclick=()=>native('window.maximize');
@@ -40,12 +41,13 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('.titlebar').addEventListener('mousedown',e=>{if(e.button===0&&!e.target.closest('button'))native('window.drag');});
     $('.titlebar').addEventListener('dblclick',e=>{if(!e.target.closest('button'))native('window.maximize');});
     const originalShowScreen=showScreen;showScreen=function(name){originalShowScreen(name);native('window.resize',{wide:name==='workspace'});};
-    const advanced=document.createElement('button');advanced.type='button';advanced.className='plain';advanced.textContent='高级连接';advanced.style.marginTop='5px';
+    const advanced=$('#advanced-connect');
     advanced.onclick=()=>{$('#ssh-port').value=String(sshPort);$('#advanced-dialog').showModal();$('#ssh-port').focus();};
     $('#advanced-form').onsubmit=e=>{e.preventDefault();if(!$('#advanced-form').reportValidity())return;sshPort=Number($('#ssh-port').value);$('#advanced-dialog').close();};
-    $('#login-form').append(advanced);
+    $('#login-help').onclick=async()=>{await native('window.resize',{wide:true});$('#login-help-dialog').showModal();};
+    $('#login-help-dialog').addEventListener('close',()=>{if(!$('#login-screen').hidden)native('window.resize',{wide:false});});
     function applyServer(server){
-      nativeServer=server;$('#host-manage').disabled=!server.statuses?.account;$('#bridge-manage').disabled=isMac||!server.statuses?.account;states=ids.map(id=>server.statuses?.[id]?'done':'pending');
+      nativeServer=server;$('#update-login-password').hidden=false;$('#host-manage').disabled=!server.statuses?.account;$('#bridge-manage').disabled=isMac||!server.statuses?.account;states=ids.map(id=>server.statuses?.[id]?'done':'pending');
       if(currentTask>=0&&states[currentTask]!=='done')states[currentTask]='running';
       const desired=currentLocale();if(desired&&(server.timezone!==desired.timezone||server.systemLocale!==desired.locale))states[1]='pending';
       if(server.ipPolicy){ipPolicy=server.ipPolicy;$('#ip-policy-state').textContent=server.ipPolicyHealthy?(ipPolicy.lockIngress&&ipPolicy.lockEgress?'已锁定':ipPolicy.lockIngress||ipPolicy.lockEgress?'部分锁定':'未锁定'):'待检查';}
@@ -83,7 +85,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     function lockWorkspace(locked){for(const id of ['deployment-panel','maintenance-panel'])$( '#'+id).inert=locked;$('#workspace-screen').classList.toggle('is-connecting',locked);$('#maintenance-mode').disabled=locked;}
     function connectionProgress(text,failed=false){$('#connection-progress').hidden=false;$('#connection-progress').classList.toggle('failed',failed);$('#connection-progress-text').textContent=text;$('#cancel-connect').hidden=failed;$('#retry-connect').hidden=!failed;$('#edit-connection').hidden=!failed;if(failed){busy=false;renderTasks();const values=$$('.network-top strong');for(const value of values)value.textContent='—';$('#rating-state').textContent='未连接';$('#ip-location').textContent='等待连接服务器';$('#server-address').textContent='待确认';}}
     function prepareWorkspace(settings){
-      clearInterval(metricsTimer);nativeServer=null;connectionReady=false;connectionInFlight=true;busy=false;currentTask=-1;accountOptions={};accountDraftPending=false;detectedRegion=null;ipPolicy={lockIngress:false,lockEgress:false};
+      clearInterval(metricsTimer);$('#update-login-password').hidden=true;nativeServer=null;connectionReady=false;connectionInFlight=true;busy=false;currentTask=-1;accountOptions={};accountDraftPending=false;detectedRegion=null;ipPolicy={lockIngress:false,lockEgress:false};
       states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('等待连接完成。');selectedTasks.clear();selecting=false;renderTasks();
       serverConnection={ingressIp:settings.host,egressIp:''};$('#server-ingress').textContent=settings.host;$('#server-address').textContent='正在检查…';$('#server-user').textContent=settings.username;
       const user=$('#server-user');$('.server-metadata').replaceChildren(user,document.createTextNode(' / 系统待检查 / SSH'));
@@ -278,6 +280,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     };
     window.safeCodeMountStatus=status=>{
       const button=$('#mount-guard-status');button.textContent=status.count?'挂载 '+status.count+' 个目录 · '+(status.state==='connected'?'守护中':status.state==='attention'?'需要处理':'重连中'):'挂载守护 · 未挂载';button.title=status.message;
+      if(status.authenticationRequired)$('#update-login-password').classList.add('needs-credentials');else $('#update-login-password').classList.remove('needs-credentials');
       if(status.count)$('#mount-summary').textContent='已挂载 '+status.count+' 个目录，'+(status.state==='connected'?'断线自动恢复。':status.message+'。');
     };
     $('#mount-guard-status').onclick=()=>native('mount.status.open').catch(error=>showAppMessage(error.message));
@@ -288,12 +291,50 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     openAccountSettings=async function(){
       try{const draft=await native('account.draft.get');accountOptions=draft||{};accountDraftPending=!!draft;
         $('#custom-hostname').value=draft?.hostname||nativeServer?.hostname||'safe-workstation';$('#custom-username').value=draft?.username||nativeServer?.username||'workspace';$('#custom-password').type='password';$('#custom-password').value=draft?.password||'';setEye($('#account-settings [data-reveal]'),false);
-        $('#account-custom-hint').textContent='这里只保存本机参数，点击该步骤的“开始部署”或“更新”后才应用。更换用户名会创建新环境，保留旧账户与项目，需先注销旧桌面并卸载目录，旧 CloudCLI 将停止。';$('#account-settings').showModal();
+        $('#account-custom-hint').textContent='工作密码用于工作用户和远程桌面，不会修改 root 的登录密码。首次保存后请点击“开始部署”；再次更改确认后直接应用。更换用户名会创建新环境，保留旧项目，需先注销旧桌面并卸载目录，旧 CloudCLI 将停止。';$('#account-settings').showModal();
       }catch(e){showAppMessage(e.message);}
     };
+    let accountSaving=false;
     $('#account-settings-form').onsubmit=async e=>{
-      e.preventDefault();if(busy)return;const draft={username:$('#custom-username').value.trim(),hostname:$('#custom-hostname').value.trim(),password:$('#custom-password').value};
-      try{await native('account.draft.save',draft);accountOptions=draft;accountDraftPending=true;$('#custom-password').value='';$('#account-settings').close();taskLogs[0]='参数已保存，等待'+(states[0]==='done'?'更新':'开始部署')+'后应用。';renderTasks();}catch(e){showAppMessage(e.message);}
+      e.preventDefault();if(busy||accountSaving||!$('#account-settings-form').reportValidity())return;
+      accountSaving=true;const save=$('#account-settings-form [type=submit]');save.disabled=true;
+      const draft={username:$('#custom-username').value.trim(),hostname:$('#custom-hostname').value.trim(),password:$('#custom-password').value};
+      try{
+        const status=await native('account.change.status');
+        if(status?.requiresConfirmation){
+          const confirmed=await appDialog('频繁更改工作用户名或密码，可能导致远程桌面、SSH 或正在使用的服务连接失败。请确认你了解更改的影响。\n\n这里修改的是工作用户，不是 root 的服务器登录密码。',{
+            title:'确认更改工作账户',cancel:'我不改了',confirm:'我知道自己在做什么，更改并应用'});
+          if(!confirmed)return;
+        }
+        await native('account.draft.save',draft);accountOptions=draft;accountDraftPending=true;$('#custom-password').value='';$('#account-settings').close();
+        taskLogs[0]='参数已保存，等待'+(states[0]==='done'?'更新':'开始部署')+'后应用。';renderTasks();
+        if(status?.requiresConfirmation)await deployOne(0);
+      }catch(e){await showAppMessage(e.message);}
+      finally{accountSaving=false;save.disabled=false;}
+    };
+    let credentialSaving=false;
+    $('#update-login-password').onclick=async()=>{
+      if(busy||credentialSaving)return;
+      try{const info=await native('connection.info');if(!info)throw new Error('请先登录服务器。');
+        $('#credential-target').textContent=info.username+' @ '+info.host+':'+info.port;
+        $('#credential-password').value='';$('#credential-password').type='password';setEye($('#credential-form [data-reveal]'),false);$('#credential-error').textContent='';$('#credential-dialog').showModal();$('#credential-password').focus();
+      }catch(error){showAppMessage(error.message);}
+    };
+    $('#close-credential').onclick=()=>{if(!credentialSaving)$('#credential-dialog').close();};
+    $('#credential-dialog').addEventListener('cancel',event=>{if(credentialSaving)event.preventDefault();});
+    $('#credential-dialog').addEventListener('close',()=>{$('#credential-password').value='';});
+    $('#credential-form').onsubmit=async event=>{
+      event.preventDefault();if(credentialSaving||busy||!$('#credential-form').reportValidity())return;
+      credentialSaving=true;busy=true;renderTasks();
+      const controls=[...$('#credential-form').querySelectorAll('input,button'),$('#close-credential')];for(const control of controls)control.disabled=true;
+      $('#credential-error').textContent='正在验证新密码并恢复连接…';
+      try{
+        const password=$('#credential-password').value;$('#credential-password').value='';
+        const result=await native('connection.reauthenticate',{password});if(lastSettings)lastSettings.password=password;
+        window.safeCodeMountStatus(result.mount);$('#credential-dialog').close();
+        await showAppMessage(result.mount.authenticationRequired?'新密码已验证；挂载仍需处理，请查看挂载守护状态。':'新密码已验证，登录信息已更新。'+(result.mount.count?'挂载状态：'+result.mount.message+'。':''),{title:'登录密码已更新'});
+      }catch(error){$('#credential-error').textContent=error.message+' 原挂载和缓存已保留，可重新输入密码。';}
+      finally{credentialSaving=false;busy=false;for(const control of controls)control.disabled=false;renderTasks();}
     };
     $('#desktop-resolution').onclick=async()=>{try{const value=await native('desktop.resolution.get');$('#resolution-select').value=value.width+'x'+value.height;$('#resolution-dialog').showModal();}catch(e){showAppMessage(e.message);}};
     $('#resolution-form').onsubmit=async e=>{e.preventDefault();const [width,height]=$('#resolution-select').value.split('x').map(Number);try{const result=await native('desktop.resolution.save',{width,height});$('#resolution-dialog').close();if(result.deferred>0)showAppMessage('窗口大小已调整。当前服务器未接受在线分辨率切换，新像素分辨率将在下次打开桌面时使用。');}catch(e){showAppMessage(e.message);}};
@@ -533,8 +574,12 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     window.safeCodeRunMaintenanceAcceptance=async()=>{
       try{
         await startupReady;const result=await native('acceptance.connect-current');$('#username').value=result.username;nativeServer=result.server;connectionReady=true;busy=false;showScreen('workspace');lockWorkspace(false);applyServer(result.server);
-        const before=await native('acceptance.hostname');await openAccountSettings();$('#custom-hostname').value='safe-draft-verification';$('#custom-username').value=result.server.username;$('#custom-password').value='fixture-password-1234';await $('#account-settings-form').onsubmit({preventDefault(){}});
-        if(!accountDraftPending||states[0]!=='done'||$('#steps .step:first-child .deploy-button').textContent!=='更新'||$('#steps .step:first-child .deploy-button').disabled)throw new Error('已完成步骤未提供更新');
+        const before=await native('acceptance.hostname');await openAccountSettings();$('#custom-hostname').value='safe-draft-verification';$('#custom-username').value=result.server.username;$('#custom-password').value='fixture-password-1234';
+        const saving=$('#account-settings-form').onsubmit({preventDefault(){}});const warningDeadline=Date.now()+5000;while(!$('#app-message-dialog').open&&Date.now()<warningDeadline)await new Promise(resolve=>setTimeout(resolve,20));if(!$('#app-message-dialog').open)throw new Error('再次更改账户未弹出确认');$('#app-message-cancel').click();await saving;
+        if(await native('acceptance.hostname')!==before)throw new Error('取消更改仍修改了服务器');
+        // 后续只验证草稿存储；真实应用流程由隔离 UI 夹具覆盖，不将示例密码应用到验收服务器。
+        await native('account.draft.save',{username:result.server.username,hostname:'safe-draft-verification',password:'fixture-password-1234'});accountOptions={username:result.server.username,hostname:'safe-draft-verification',password:'fixture-password-1234'};accountDraftPending=true;$('#custom-password').value='';$('#account-settings').close();renderTasks();
+        if(!accountDraftPending||states[0]!=='done'||$('#steps .step:first-child > .deploy-button:not(.locale-settings-button)').textContent!=='更新'||$('#steps .step:first-child > .deploy-button:not(.locale-settings-button)').disabled)throw new Error('已完成步骤未提供更新');
         if(await native('acceptance.hostname')!==before)throw new Error('保存参数修改了服务器');
         await openAccountSettings();if($('#custom-hostname').value!=='safe-draft-verification'||$('#account-settings-form button[type=submit]').textContent!=='保存')throw new Error('参数保存或按钮文案错误');await native('acceptance.capture',{tag:'draft'});$('#account-settings').close();await native('account.draft.save',{username:result.server.username,hostname:before,password:''});accountOptions={username:result.server.username,hostname:before,password:''};accountDraftPending=true;await deployOne(0);if(accountDraftPending||states[0]!=='done'||await native('acceptance.hostname')!==before)throw new Error('账户更新应用未通过或更改了测试服务器名称');
         switchMode('maintenance');await native('acceptance.capture',{tag:'maintenance'});$('#desktop-resolution').click();await new Promise(r=>setTimeout(r,300));$('#resolution-select').value='1920x1080';await $('#resolution-form').onsubmit({preventDefault(){}});const setting=await native('desktop.resolution.get');if(setting.width!==1920||setting.height!==1080)throw new Error('分辨率未保存');await $('#desktop-resolution').onclick();await native('acceptance.capture',{tag:'resolution'});$('#resolution-dialog').close();await native('desktop.resolution.save',{width:1280,height:800});
