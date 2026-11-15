@@ -38,7 +38,7 @@ public sealed record DeploymentStep(string Id, string Title, string Description)
 public static class DeploymentCatalog
 {
     public static readonly DeploymentStep[] Steps = [
-        new("account", "设置工作用户和机器名称", "创建日常开发账户，配置独立密码和项目目录。"),
+        new("account", "更新系统并设置工作用户", "先完成系统更新，再创建开发账户和配置机器名称。"),
         new("localization", "本土化设置", "按出口所在地配置时区与系统语言。"),
         new("desktop", "安装虚拟桌面", "安装 XFCE 与 xrdp，通过加密隧道访问。"),
         new("chrome", "安装 Chrome", "使用 Google 官方软件源安装浏览器。"),
@@ -78,6 +78,12 @@ public sealed record IpPrepareResult(string Token,IpPolicySettings Policy);
 public sealed record IpCommitResult(IpPolicySettings Policy,string ObservedEgress,bool Committed);
 
 public sealed record RemoteJob(string JobId,string Operation);
-public sealed class JobPoll { public List<string> Lines{get;set;}=[]; public long NextOffset{get;set;} public bool Done{get;set;} public JsonElement? Value{get;set;} public string? Error{get;set;} }
+public sealed class JobPoll { public List<string> Lines{get;set;}=[]; public long NextOffset{get;set;} public bool Done{get;set;} public JsonElement? Value{get;set;} public string? Error{get;set;} public string? ErrorCode{get;set;} }
 
 public sealed record EgressProbe(string Ip);
+
+public sealed class RemoteOperationException(string message,string? code) : InvalidOperationException(code=="json_invalid"?"服务器配置或任务结果无法解析，请提交反馈。":message)
+{
+    public string Code {get;}=Allowed.Contains(code??"")?code!:"operation_failed";
+    private static readonly HashSet<string> Allowed=["json_invalid","package_lock_wait","package_fetch_failed","dns_failure","disk_full","package_interrupted","mount_failed","mount_timeout","mount_target_invalid","deployment_busy","access_denied","timeout","operation_failed"];
+}

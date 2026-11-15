@@ -1,4 +1,4 @@
-import http.client,json,tempfile,threading,unittest,uuid
+import http.client,json,tempfile,threading,unittest,uuid,subprocess,sys
 from pathlib import Path
 from server import Server,Store
 
@@ -33,6 +33,47 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='Beta-0.4.3.1',message='Beta test feedback')),202)
     def diagnostic(self):
         return dict(schema=1,eventId=str(uuid.uuid4()),version='Beta-0.4.3.3',report=dict(operation='chrome',outcome='failure',errorKind='package_lock_wait',failureSite='remote_task',durationSeconds=180,signals=[dict(seconds=2,code='job_started'),dict(seconds=180,code='package_lock_wait')],omittedLines=27))
+    def diagnostic_v2(self):
+        event=self.diagnostic();event['schema']=2
+        event['context']={key:str(uuid.uuid4()) for key in ['installationId','sessionId','operationId']}
+        event['context']['operationId']=event['eventId'];event['report']['stage']='job_started'
+        event['report']['errorKind']='json_invalid'
+        return event
+    def test_v2_correlation_feedback_and_legacy_coexist(self):
+        event=self.diagnostic_v2();self.assertEqual(self.post('/v1/diagnostics',event),202)
+        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='最近一次操作失败',context=dict(correlation=event['context'],report=event['report']))
+        self.assertEqual(self.post('/v1/feedback',feedback),202)
+        self.assertEqual(self.post('/v1/diagnostics',self.diagnostic()),202)
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM report_context').fetchone()[0],2)
+            stored=json.loads(db.execute('SELECT context FROM report_context WHERE event_id=?',(feedback['eventId'],)).fetchone()[0])
+            self.assertEqual(stored['correlation'],event['context']);self.assertEqual(stored['report']['stage'],'job_started')
+        feedback['eventId']=str(uuid.uuid4());feedback['context']=None
+        self.assertEqual(self.post('/v1/feedback',feedback),202)
+    def test_v2_reject_private_metadata_invalid_stages_and_mismatched_ids(self):
+        for mutation in ['extra','id','stage','raw','feedback_raw']:
+            event=self.diagnostic_v2();path='/v1/diagnostics'
+            if mutation=='extra':event['context']['hostname']='private'
+            elif mutation=='id':event['context']['operationId']=str(uuid.uuid4())
+            elif mutation=='stage':event['report']['stage']='private path'
+            elif mutation=='raw':event['report']['message']='secret'
+            else:
+                event=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='用户主动描述',context=dict(correlation=event['context'],report=event['report'],logs='secret'));path='/v1/feedback'
+            self.assertEqual(self.post(path,event),400)
+        with self.store.connect() as db:self.assertEqual(db.execute('SELECT count(*) FROM report_context').fetchone()[0],0)
+    def test_report_queries_correlated_issue_and_full_summary(self):
+        event=self.diagnostic_v2();self.store.insert('diagnostics',event)
+        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='最近一次操作失败',context=dict(correlation=event['context'],report=event['report']))
+        self.store.insert('feedback',feedback)
+        def report(*args):return json.loads(subprocess.check_output([sys.executable,str(Path(__file__).with_name('report.py')),self.store.path,*args],text=True))
+        self.assertEqual(report('--feedback','--issue',event['eventId'])[0]['event_id'],feedback['eventId'])
+        self.assertEqual(report('--diagnostics','--issue',event['eventId'])[0]['context'],event['context'])
+        self.assertEqual(report('--summary')[0]['reports'],1)
+    def test_context_retention_follows_parent(self):
+        event=self.diagnostic_v2();self.store.insert('diagnostics',event)
+        with self.store.connect() as db:db.execute("UPDATE diagnostics SET created_at='2000-01-01' WHERE event_id=?",(event['eventId'],))
+        self.store.insert('diagnostics',self.diagnostic())
+        with self.store.connect() as db:self.assertEqual(db.execute('SELECT count(*) FROM report_context').fetchone()[0],0)
     def test_diagnostics_retry_deduplication_and_fixed_fields(self):
         event=self.diagnostic()
         self.assertEqual(self.post('/v1/diagnostics',event),202);self.assertEqual(self.post('/v1/diagnostics',event),202)

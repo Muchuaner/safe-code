@@ -15,15 +15,18 @@ import time
 import uuid
 
 VERSION=re.compile(r'^(?:Beta-)?\d{1,4}\.\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$')
-OPERATIONS={'account','localization','desktop','chrome','input','claude','ssh','cloud','mount_install','mount_apply','connection','ip_policy'}
+OPERATIONS={'account','localization','desktop','chrome','input','claude','ssh','cloud','mount_install','mount_apply','connection','ip_policy','directory_list'}
 SIGNALS={'package_lock_wait','dns_failure','disk_full','package_fetch_failed','package_interrupted','remote_started','packages_present','request_uploaded','job_started','ssh_authenticated','agent_ready','package_unpacking','package_configuring'}
-ERRORS={'none','cancelled','directory_not_found','file_not_found','access_denied','timeout','crypto_error','http_error','io_error','invalid_argument','operation_failed'}|SIGNALS
+ERRORS={'ssh_auth_failed','ssh_timeout','ssh_connection_failed','network_error','json_invalid','mount_failed','mount_timeout','mount_target_invalid','deployment_busy','none','cancelled','directory_not_found','file_not_found','access_denied','timeout','crypto_error','http_error','io_error','invalid_argument','operation_failed'}|SIGNALS
 SITES={'unknown','account_draft_clear','account_draft_save','account_draft_read','remote_task','directory_mount','connection'}
-def validate_diagnostic(report):
+def validate_diagnostic(report,extended=False):
     fields={'operation','outcome','errorKind','failureSite','durationSeconds','signals','omittedLines'}
+    if extended:fields.add('stage')
+    if extended and (not isinstance(report,dict) or report.get('stage') not in SIGNALS|{'started'}):raise ValueError('诊断阶段无效')
     if not isinstance(report,dict) or set(report)!=fields:raise ValueError('诊断字段不受支持')
     for key,allowed in [('operation',OPERATIONS),('outcome',{'success','failure','cancelled'}),('errorKind',ERRORS),('failureSite',SITES)]:
         if not isinstance(report[key],str) or report[key] not in allowed:raise ValueError('诊断值不受支持')
+    if not extended and report['errorKind'] in {'ssh_auth_failed','ssh_timeout','ssh_connection_failed','network_error','json_invalid','mount_failed','mount_timeout','mount_target_invalid','deployment_busy'}:raise ValueError('旧版诊断错误码无效')
     for key,maximum in [('durationSeconds',86400),('omittedLines',1000000)]:
         if type(report[key]) is not int or not 0<=report[key]<=maximum:raise ValueError('诊断数值无效')
     if (report['outcome']=='success')!=(report['errorKind']=='none'):raise ValueError('诊断结果不一致')
@@ -35,6 +38,17 @@ def validate_diagnostic(report):
         if type(signal['seconds']) is not int or not previous<=signal['seconds']<=report['durationSeconds']:raise ValueError('诊断日志时间无效')
         previous=signal['seconds']
 
+def validate_context(context):
+    if not isinstance(context,dict) or set(context)!={'installationId','sessionId','operationId'}:raise ValueError('关联字段无效')
+    for value in context.values():
+        if not isinstance(value,str) or str(uuid.UUID(value))!=value:raise ValueError('关联编号无效')
+
+def validate_feedback_context(context):
+    if context is None:return
+    if not isinstance(context,dict) or set(context)!={'correlation','report'}:raise ValueError('反馈关联字段无效')
+    validate_context(context['correlation']);validate_diagnostic(context['report'],True)
+    if context['report']['outcome']!='failure':raise ValueError('反馈仅关联失败操作')
+
 class Store:
     def __init__(self,path):
         self.path=str(path)
@@ -42,19 +56,28 @@ class Store:
             db.executescript('''CREATE TABLE IF NOT EXISTS usage(event_id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, day TEXT NOT NULL, version TEXT NOT NULL, os TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
             CREATE TABLE IF NOT EXISTS feedback(event_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, version TEXT NOT NULL, message TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS diagnostics(event_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, version TEXT NOT NULL, report TEXT NOT NULL);''')
+            CREATE TABLE IF NOT EXISTS diagnostics(event_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, version TEXT NOT NULL, report TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS report_context(event_id TEXT PRIMARY KEY, context TEXT NOT NULL);''')
     def connect(self):
         db=sqlite3.connect(self.path,timeout=5);db.execute('PRAGMA busy_timeout=5000');db.execute('PRAGMA max_page_count=32768');return db
     def insert(self,kind,data):
         required={'schema','eventId','version','installationId','os','eventType'} if kind=='usage' else {'schema','eventId','version','report'} if kind=='diagnostics' else {'schema','eventId','version','message'}
-        if not isinstance(data,dict) or set(data)!=required or data.get('schema')!=1:raise ValueError('字段不受支持')
+        if not isinstance(data,dict):raise ValueError('字段不受支持')
+        extended=type(data.get('schema')) is int and data['schema']==2 and kind in ['feedback','diagnostics']
+        if extended:required.add('context')
+        if set(data)!=required or type(data.get('schema')) is not int or data['schema'] not in ([1,2] if kind in ['feedback','diagnostics'] else [1]):raise ValueError('字段不受支持')
+        if extended:
+            if kind=='diagnostics':
+                validate_context(data['context'])
+                if data['context']['operationId']!=data['eventId']:raise ValueError('问题编号不一致')
+            else:validate_feedback_context(data['context'])
         for key in ['eventId']+(['installationId'] if kind=='usage' else []):
             if not isinstance(data[key],str) or str(uuid.UUID(data[key]))!=data[key]:raise ValueError('标识格式错误')
         if not isinstance(data['version'],str) or not VERSION.fullmatch(data['version']):raise ValueError('版本格式错误')
         now=dt.datetime.now(dt.timezone.utc);day=now.date().isoformat()
         if kind=='usage':
             if data['os']!='Windows' or data['eventType']!='launch':raise ValueError('事件不受支持')
-        elif kind=='diagnostics':validate_diagnostic(data['report'])
+        elif kind=='diagnostics':validate_diagnostic(data['report'],extended)
         elif not isinstance(data['message'],str) or not 5<=len(data['message'].strip())<=4000:raise ValueError('反馈长度无效')
         with self.connect() as db:
             db.execute('DELETE FROM usage WHERE day < ?',((now.date()-dt.timedelta(days=90)).isoformat(),))
@@ -63,6 +86,8 @@ class Store:
             if kind=='usage':db.execute('INSERT OR IGNORE INTO usage VALUES(?,?,?,?,?)',(data['eventId'],data['installationId'],day,data['version'],data['os']))
             elif kind=='diagnostics':db.execute('INSERT OR IGNORE INTO diagnostics VALUES(?,?,?,?)',(data['eventId'],now.isoformat(),data['version'],json.dumps(data['report'],ensure_ascii=False,separators=(',',':'))))
             else:db.execute('INSERT OR IGNORE INTO feedback VALUES(?,?,?,?)',(data['eventId'],now.isoformat(),data['version'],data['message'].strip()))
+            if extended and data['context'] is not None:db.execute('INSERT OR IGNORE INTO report_context VALUES(?,?)',(data['eventId'],json.dumps(data['context'],ensure_ascii=False,separators=(',',':'))))
+            db.execute('DELETE FROM report_context WHERE event_id NOT IN (SELECT event_id FROM feedback UNION SELECT event_id FROM diagnostics)')
 
 class RateLimit:
     def __init__(self):self.salt=secrets.token_bytes(32);self.items={};self.lock=threading.Lock()

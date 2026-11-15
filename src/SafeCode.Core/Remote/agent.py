@@ -5,6 +5,16 @@ from pathlib import Path
 STATE=Path('/var/lib/safe-code')
 REDACTIONS=[]
 JOB_DIR=None
+class OperationError(RuntimeError):
+    def __init__(self,code,message):super().__init__(message);self.code=code
+
+def error_code(error):
+    if isinstance(error,OperationError):return error.code
+    if isinstance(error,json.JSONDecodeError):return 'json_invalid'
+    if isinstance(error,PermissionError):return 'access_denied'
+    if isinstance(error,subprocess.TimeoutExpired):return 'timeout'
+    return 'operation_failed'
+
 LONG_OPERATIONS={'account','localization','desktop','chrome','input','claude','ssh','cloud','mount_install'}
 TASKS=['account','localization','desktop','chrome','input','claude','ssh']
 def os_info():
@@ -32,16 +42,33 @@ def log(message):
     if STATE.exists():
         with (STATE/'events.log').open('a') as f:f.write(line+'\n')
 
-def run(args,check=True,env=None,stdin=None):
-    p=subprocess.run(args,text=True,capture_output=True,input=stdin,env=env,timeout=180)
-    if check and p.returncode:raise RuntimeError((p.stderr or p.stdout or '命令执行失败')[-1600:])
+def run(args,check=True,env=None,stdin=None,timeout=180):
+    p=subprocess.run(args,text=True,capture_output=True,input=stdin,env=env,timeout=timeout)
+    if check and p.returncode:
+        detail=p.stderr or p.stdout or ''
+        if 'curl'==Path(args[0]).name:
+            host=next((x.split('/')[2] for x in args if isinstance(x,str) and x.startswith('https://')),'下载服务')
+            if p.returncode in (5,6) or 'resolving timed out' in detail.lower():
+                raise OperationError('dns_failure','无法连接 '+host+'：DNS 域名解析失败，请检查服务器 DNS 或网络后重试。')
+            raise OperationError('package_fetch_failed','无法从 '+host+' 下载文件（状态码 '+str(p.returncode)+'），请检查网络后重试。')
+        raise RuntimeError(detail[-1600:] or '命令执行失败')
     return p
 
 def stream(args,env=None):
     p=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,env=env,bufsize=1)
+    reason=None
     for line in p.stdout:
         if line.strip():log(line.rstrip())
-    if p.wait():raise RuntimeError('安装命令退出，状态码 '+str(p.returncode))
+        lower=line.lower()
+        if 'could not resolve' in lower or 'temporary failure resolving' in lower:reason='dns_failure'
+        elif 'no space left on device' in lower:reason='disk_full'
+        elif 'dpkg was interrupted' in lower:reason='package_interrupted'
+        elif 'failed to fetch' in lower and reason not in ['dns_failure','disk_full']:reason='package_fetch_failed'
+        elif ('lock-frontend' in lower or 'waiting for cache lock' in lower or 'could not get lock' in lower) and reason is None:reason='package_lock_wait'
+    if p.wait():
+        hints={'package_lock_wait':'系统包管理器正被占用，请稍后重试。','dns_failure':'服务器无法解析下载域名，请检查 DNS 后重试。','package_fetch_failed':'软件包下载失败，请检查服务器网络后重试。','disk_full':'服务器磁盘空间不足，请清理后重试。','package_interrupted':'上次软件包安装被中断，请修复 dpkg 后重试。'}
+        hint=hints.get(reason,'可能是系统正在更新，请稍后重试；如果仍有问题，请提交反馈。' if p.returncode==100 else '请提交反馈。')
+        raise OperationError(reason or 'operation_failed','安装命令退出，状态码 '+str(p.returncode)+'。'+hint)
 
 def write(path,content,mode=0o644):
     path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
@@ -67,6 +94,214 @@ target=base/relative;operation=request['operation']
 checked=target.parent.resolve() if operation in ['alias','check_alias','remove_alias'] else target.resolve()
 if not checked.is_relative_to(base):raise ValueError('用户配置路径指向主目录之外，已拒绝操作。')
 os.umask(0o077)
+if operation=='mkdir':
+    if not target.parent.is_dir():raise ValueError('上级文件夹不存在，请重新选择。')
+    try:target.mkdir(mode=0o700)
+    except FileExistsError:raise ValueError('同名文件或文件夹已存在，请换一个名称。')
+    print(json.dumps({'path':str(target),'name':target.name}));sys.exit(0)
+if operation=='cloud_onboarding':
+    import sqlite3
+    if not target.is_file():raise ValueError('CloudCLI 网页数据库尚未初始化，请稍后重试。')
+    connection=sqlite3.connect(str(target),timeout=15)
+    try:
+        required={'id','git_name','git_email','has_completed_onboarding','is_active'}
+        if not required.issubset({row[1] for row in connection.execute('PRAGMA table_info(users)')}):raise ValueError('CloudCLI 初始化数据结构不兼容，未修改账号。')
+        connection.execute('BEGIN IMMEDIATE')
+        previous=[dict(zip(['id','git_name','git_email','has_completed_onboarding'],row)) for row in connection.execute('SELECT id,git_name,git_email,has_completed_onboarding FROM users WHERE is_active=1')]
+        backup=target.with_name('onboarding-before-safe-code.json')
+        if not backup.exists():
+            with backup.open('x') as f:json.dump(previous,f,ensure_ascii=False)
+            backup.chmod(0o600)
+        name=request['gitName'];email=request['gitEmail']
+        connection.execute("UPDATE users SET git_name=CASE WHEN trim(COALESCE(git_name,''))='' THEN ? ELSE git_name END,git_email=CASE WHEN trim(COALESCE(git_email,''))='' THEN ? ELSE git_email END,has_completed_onboarding=1 WHERE is_active=1",(name,email))
+        quoted_name=connection.execute('SELECT quote(?)',(name,)).fetchone()[0]
+        quoted_email=connection.execute('SELECT quote(?)',(email,)).fetchone()[0]
+        connection.execute('DROP TRIGGER IF EXISTS safe_code_cloudcli_onboarding')
+        connection.execute("CREATE TRIGGER safe_code_cloudcli_onboarding AFTER INSERT ON users WHEN NEW.is_active=1 BEGIN UPDATE users SET git_name=CASE WHEN trim(COALESCE(git_name,''))='' THEN "+quoted_name+" ELSE git_name END,git_email=CASE WHEN trim(COALESCE(git_email,''))='' THEN "+quoted_email+" ELSE git_email END,has_completed_onboarding=1 WHERE id=NEW.id; END")
+        connection.commit();print(json.dumps({'configuredUsers':len(previous)}))
+    finally:connection.close()
+    sys.exit(0)
+if operation=='cloud_projects':
+    import sqlite3,uuid
+    if not target.is_file():
+        print(json.dumps({'ready':False,'changed':False}));sys.exit(0)
+    projects=request['projects']
+    connection=sqlite3.connect('file:'+str(target)+'?mode=rw',uri=True,timeout=15)
+    try:
+        required={'project_id','project_path','custom_project_name','isStarred','isArchived'}
+        if not required.issubset({row[1] for row in connection.execute('PRAGMA table_info(projects)')}):raise ValueError('CloudCLI 项目数据结构不兼容，未修改项目。')
+        connection.execute('BEGIN IMMEDIATE')
+        connection.execute('CREATE TABLE IF NOT EXISTS safe_code_mount_projects (project_id TEXT PRIMARY KEY, project_path TEXT NOT NULL UNIQUE)')
+        changed=False;active=set()
+        for project in projects:
+            path=project['path'];active.add(path)
+            row=connection.execute('SELECT project_id,isArchived FROM projects WHERE project_path=?',(path,)).fetchone()
+            if row is None:
+                identifier=str(uuid.uuid4())
+                connection.execute('INSERT INTO projects(project_id,project_path,custom_project_name,isArchived) VALUES(?,?,?,0)',(identifier,path,project['name']))
+                connection.execute('INSERT OR REPLACE INTO safe_code_mount_projects VALUES(?,?)',(identifier,path));changed=True
+            elif row[1] and connection.execute('SELECT 1 FROM safe_code_mount_projects WHERE project_id=? AND project_path=?',(row[0],path)).fetchone():
+                connection.execute('UPDATE projects SET isArchived=0 WHERE project_id=?',(row[0],));changed=True
+        for identifier,path in connection.execute('SELECT project_id,project_path FROM safe_code_mount_projects').fetchall():
+            if path not in active:
+                cursor=connection.execute('UPDATE projects SET isArchived=1 WHERE project_id=? AND project_path=? AND isArchived=0',(identifier,path));changed=changed or cursor.rowcount>0
+        connection.commit();print(json.dumps({'ready':True,'changed':changed,'count':len(projects)}))
+    finally:connection.close()
+    sys.exit(0)
+if operation=='host_bridge':
+    import re,subprocess
+    client=request['clientId'];action=request['action']
+    if not re.fullmatch('[a-f0-9]{20}',client) or relative!=pathlib.Path('.ssh/safe-code-host/'+client+'/identity'):raise ValueError('本机控制标识无效。')
+    directory=target.parent;directory.mkdir(mode=0o700,parents=True,exist_ok=True);directory.chmod(0o700)
+    config=directory/'config';known=directory/'known_hosts';public=directory/'identity.pub'
+    marker='# Safe Code host bridge '+client+'\n'
+    if action=='prepare':
+        # A fresh dedicated identity for each explicit activation. Never export it.
+        for path in [target,public]:path.unlink(missing_ok=True)
+        subprocess.run(['/usr/bin/ssh-keygen','-q','-t','ed25519','-N','','-C','safe-code-host-'+client,'-f',str(target)],check=True,capture_output=True,timeout=15)
+        target.chmod(0o600);print(json.dumps({'publicKey':public.read_text().strip()}));sys.exit(0)
+    if action=='remove':
+        for path in [config,known,target,public]:path.unlink(missing_ok=True)
+        print(json.dumps({'removed':True}));sys.exit(0)
+    if action!='configure':raise ValueError('本机控制操作无效。')
+    alias=request['alias'];username=request['username'];port=request['port'];host_key=request['hostKey'];user_sid=request.get('userSid','')
+    if not re.fullmatch('[a-z][a-z0-9_-]{0,31}',alias) or not re.fullmatch(r'[a-zA-Z0-9_.@\\-]{1,128}',username):raise ValueError('本机控制别名或用户名无效。')
+    if not re.fullmatch(r'S-1-[0-9]+(?:-[0-9]+){1,15}',user_sid):raise ValueError('本机 Windows 账户标识无效。')
+    if not isinstance(port,int) or not 1024<=port<=65535:raise ValueError('本机控制端口无效。')
+    if not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]*)?',host_key):raise ValueError('本机 SSH 指纹材料无效。')
+    if not target.is_file():raise ValueError('缺少专用连接密钥，请重新部署本机控制。')
+    if config.exists() and not config.read_text().startswith(marker):raise ValueError('本机控制配置被修改，未覆盖。')
+    host_alias='safe-code-host-'+client
+    body=marker+'Host '+alias+'\n  HostName 127.0.0.1\n  Port '+str(port)+'\n  User '+username+'\n  IdentityFile '+str(target)+'\n  IdentitiesOnly yes\n  BatchMode yes\n  PasswordAuthentication no\n  KbdInteractiveAuthentication no\n  StrictHostKeyChecking yes\n  HostKeyAlias '+host_alias+'\n  UserKnownHostsFile '+str(known)+'\n  GlobalKnownHostsFile /dev/null\n  ForwardAgent no\n  ClearAllForwardings yes\n  ProxyCommand none\n  ProxyJump none\n  PermitLocalCommand no\n  ConnectTimeout 10\n  ServerAliveInterval 15\n  ServerAliveCountMax 2\n'
+    def atomic(path,value):
+        with tempfile.NamedTemporaryFile('w',dir=directory,delete=False) as f:f.write(value);temporary=pathlib.Path(f.name)
+        temporary.chmod(0o600);os.replace(temporary,path)
+    atomic(known,host_alias+' '+' '.join(host_key.split()[:2])+'\n');atomic(config,body)
+    completed=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'whoami'],capture_output=True,text=True,timeout=20)
+    if completed.returncode:raise ValueError('本机 SSH 登录验证失败，请检查本机账户、OpenSSH 日志与授权。')
+    identity=completed.stdout.strip().lower().replace('/','\\');expected=username.lower()
+    if identity!=expected and not identity.endswith('\\'+expected):raise ValueError('本机登录账户不匹配，已拒绝生成可用状态。')
+    import base64
+    probe="$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"
+    encoded=base64.b64encode(probe.encode('utf-16le')).decode()
+    proof=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'powershell.exe','-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',encoded],capture_output=True,text=True,errors='replace',timeout=20)
+    if proof.returncode or proof.stdout.strip()!=user_sid:raise ValueError('本机 Windows 账户身份与授权不匹配，未生成可用状态。')
+    import shlex
+    print(json.dumps({'command':'ssh -F '+shlex.quote(str(config))+' '+alias,'verified':True}));sys.exit(0)
+if operation=='codex_bridge':
+    import base64,fcntl,hashlib,re,shlex,socket,struct,subprocess,time
+    if relative!=pathlib.Path('.local/state/safe-code/codex-bridge'):raise ValueError('适配器管理路径无效。')
+    key=request.get('publicKey','').strip();parts=key.split();key_id=request.get('keyId','');client=request.get('clientId','')
+    if len(parts)<2 or parts[0] not in ['ssh-rsa','ssh-ed25519'] or not re.fullmatch('[A-Za-z0-9+/=]{40,2048}',parts[1]):raise ValueError('适配器公钥无效。')
+    if key_id!=hashlib.sha256(parts[1].encode()).hexdigest()[:20] or not re.fullmatch(r'c_[a-f0-9]{24}',client):raise ValueError('适配器客户端标识无效。')
+    action=request['action'];state=target;marker=state/'safe-code-component.json';ssh=base/'.ssh';auth=ssh/'authorized_keys'
+    if action not in ['install','remove']:raise ValueError('适配器操作无效。')
+    for path in [state,ssh,auth]:
+        if not path.resolve().is_relative_to(base):raise ValueError('适配器配置路径越界，已拒绝。')
+    if auth.is_symlink():raise ValueError('SSH 授权文件为链接，未修改。')
+    if state.exists() and any(state.iterdir()) and not marker.is_file():raise ValueError('适配器状态目录已有未知内容，未覆盖。')
+    if action=='remove' and not state.exists():print(json.dumps({'ready':False,'warning':None}));sys.exit(0)
+    if marker.exists() and (marker.is_symlink() or json.loads(marker.read_text()).get('managedBy')!='safe-code'):raise ValueError('适配器目录标记不属于 Safe Code，未覆盖。')
+    state.mkdir(mode=0o700,parents=True,exist_ok=True);state.chmod(0o700)
+    def atomic(path,content,mode=0o600):
+        path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+        if not path.parent.resolve().is_relative_to(base) or path.is_symlink():raise ValueError('适配器文件路径异常，未写入。')
+        with tempfile.NamedTemporaryFile('w',dir=path.parent,delete=False) as f:f.write(content);tmp=pathlib.Path(f.name)
+        tmp.chmod(mode);os.replace(tmp,path)
+    if action=='install' and not marker.exists():atomic(marker,json.dumps({'managedBy':'safe-code','sourceHash':request['sourceHash']}))
+    owner=state/'clients'/(key_id+'.json');tag='safe-code-codex-'+key_id;warning=None
+    with (state/'install.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        previous=auth.read_text() if auth.exists() else ''
+        saved=json.loads(owner.read_text()) if owner.exists() else None
+        if saved and (saved.get('body')!=parts[1] or saved.get('clientId')!=client):raise ValueError('适配器授权记录不匹配。')
+        if action=='remove':
+            if saved:
+                lines=[line for line in previous.splitlines() if not any(field==parts[1] for field in line.split())]
+                if len(lines)!=len(previous.splitlines()):atomic(auth,'\n'.join(lines)+'\n')
+                sock_path=state/'run/daemon.sock'
+                if sock_path.exists():
+                    conn=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);conn.settimeout(12)
+                    def send(value):
+                        data=json.dumps(value).encode();conn.sendall(struct.pack('>II',len(data),0)+data)
+                    def read_n(count):
+                        data=b''
+                        while len(data)<count:
+                            chunk=conn.recv(count-len(data))
+                            if not chunk:raise OSError('组件连接已结束。')
+                            data+=chunk
+                        return data
+                    def frame():
+                        head,body=struct.unpack('>II',read_n(8))
+                        if head>16*1024*1024 or body>4*1024*1024:raise ValueError('适配器状态帧过大。')
+                        value=json.loads(read_n(head));read_n(body);return value
+                    try:
+                        conn.connect(str(sock_path));send({'op':'hello','role':'client','v':1,'clientId':client,'resume':[]})
+                        hello=frame()
+                        if hello.get('op')!='hello.ok':raise ValueError('适配器未确认客户端状态。')
+                        pending={t['turnId'] for t in hello.get('turns',[]) if not t.get('exited')}
+                        for turn in pending:send({'op':'turn.cancel','turnId':turn,'reason':'safe-code-stop'})
+                        deadline=time.monotonic()+12
+                        while pending and time.monotonic()<deadline:
+                            event=frame()
+                            if event.get('op')=='turn.exit':pending.discard(event.get('turnId'))
+                        if pending:warning='本机入口与专用授权已关闭，部分远端任务尚未确认结束。'
+                    except Exception:warning='本机入口与专用授权已关闭；远端任务停止未确认，需重连后重试清理。'
+                    finally:conn.close()
+                if not warning:owner.unlink(missing_ok=True)
+            print(json.dumps({'ready':False,'warning':warning}));sys.exit(0)
+        if action!='install':raise ValueError('适配器操作无效。')
+        digest=request['sourceHash'];node=request['node'];claude=request['claude']
+        if not re.fullmatch('[a-f0-9]{64}',digest):raise ValueError('适配器版本信息无效。')
+        for executable in [node,claude]:
+            if not pathlib.Path(executable).is_absolute() or not os.access(executable,os.X_OK):raise ValueError('适配器运行环境不完整，请先部署 Claude Code。')
+        help_result=subprocess.run([claude,'--help'],capture_output=True,text=True,errors='replace',timeout=20)
+        if help_result.returncode or not all(flag in help_result.stdout+help_result.stderr for flag in ['--tools','--strict-mcp-config']):raise ValueError('Claude Code 不支持所需工具限制，请先更新 Claude Code。')
+        if marker.exists() and json.loads(marker.read_text()).get('sourceHash')!=digest and (state/'run/daemon.sock').exists():raise ValueError('旧适配器组件仍在使用，请先结束相关会话再更新。')
+        library=base/'.local/share/safe-code/codex-bridge'/digest[:16]
+        if not library.resolve().is_relative_to(base):raise ValueError('适配器程序目录越界。')
+        for name,encoded in request['files'].items():
+            rel=pathlib.Path(name)
+            if rel.is_absolute() or '..' in rel.parts:raise ValueError('适配器文件名无效。')
+            destination=library/rel;data=base64.b64decode(encoded)
+            if destination.exists():
+                if destination.is_symlink() or destination.read_bytes()!=data:raise ValueError('适配器程序已有不同内容，未覆盖。')
+            else:atomic(destination,data.decode('utf-8-sig'))
+        wrapper=state/'bin/connect';command=shlex.quote(str(wrapper))
+        script='#!/bin/sh\nif [ "${SSH_ORIGINAL_COMMAND:-}" = "ccw-ping" ]; then echo codex-claude-win-ok; exit 0; fi\nunset SSH_CLIENT SSH_CONNECTION SSH_TTY SSH_AUTH_SOCK SSH_ORIGINAL_COMMAND SSH_USER_AUTH\nexport PATH='+shlex.quote(str(pathlib.Path(node).parent)+':'+str(base/'.local/bin')+':/usr/local/bin:/usr/bin:/bin')+'\nexport CODEX_CLAUDE_WIN_HOME='+shlex.quote(str(state))+'\nexec '+shlex.quote(node)+' '+shlex.quote(str(library/'src/vps/connect.mjs'))+'\n'
+        atomic(wrapper,script,0o700)
+        policy={'claudePath':claude,'allowedNativeTools':['none','web'],'maxBlobCacheBytes':268435456,'detachGraceMs':30000,'maxConcurrentTurns':4}
+        policy_file=state/'policy.json'
+        if not policy_file.exists():atomic(policy_file,json.dumps(policy))
+        else:
+            existing=json.loads(policy_file.read_text())
+            if existing.get('claudePath')!=claude or set(existing.get('allowedNativeTools',[]))-{'none','web'}:raise ValueError('适配器策略已被修改，未自动覆盖。')
+        ssh.mkdir(mode=0o700,exist_ok=True);ssh.chmod(0o700)
+        line='restrict,command="'+command.replace('\\','\\\\').replace('"','\\"')+'" '+parts[0]+' '+parts[1]+' '+tag
+        matches=[item for item in previous.splitlines() if parts[1] in item.split()]
+        if matches and any(item!=line for item in matches):raise ValueError('此公钥已有不同授权，未放宽或覆盖。')
+        if not matches:
+            if previous and not (state/'authorized-keys-before-first-install').exists():atomic(state/'authorized-keys-before-first-install',previous)
+            atomic(auth,previous.rstrip()+'\n'+line+'\n')
+        atomic(owner,json.dumps({'body':parts[1],'clientId':client}));atomic(marker,json.dumps({'managedBy':'safe-code','sourceHash':digest}))
+        print(json.dumps({'ready':True,'username':request['username'],'connectCommand':command,'warning':None}));sys.exit(0)
+if operation=='install_claude':
+    import shutil
+    directory=base/'.local/share/claude/versions'
+    if not directory.resolve().is_relative_to(base):raise ValueError('Claude Code 安装路径指向主目录之外。')
+    directory.mkdir(parents=True,exist_ok=True)
+    destination=directory/request['release']
+    with tempfile.NamedTemporaryFile(dir=directory,delete=False) as f:
+        temporary=pathlib.Path(f.name)
+        with open(request['source'],'rb') as source:shutil.copyfileobj(source,f)
+    try:
+        temporary.chmod(0o755);os.replace(temporary,destination)
+        target.parent.mkdir(parents=True,exist_ok=True)
+        link=target.with_name('.claude-link-'+str(os.getpid()))
+        try:link.symlink_to(destination);os.replace(link,target)
+        finally:link.unlink(missing_ok=True)
+    finally:temporary.unlink(missing_ok=True)
+    sys.exit(0)
 if operation=='read':
     if not target.is_file():print(json.dumps(''));sys.exit(0)
     with target.open() as f:value=f.read(1048577)
@@ -103,7 +338,18 @@ def user_files(operation,relative,**parameters):
     a=account();entry=pwd.getpwnam(a['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
     request={'operation':operation,'relative':str(relative),**parameters}
-    completed=run(['runuser','-u',a['username'],'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin','LANG=C.UTF-8','python3','-I','-c',USER_FILES],check=False,stdin=json.dumps(request))
+    command=['runuser','-u',a['username'],'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin','LANG=C.UTF-8','python3','-I','-c',USER_FILES]
+    try:
+        if operation=='mkdir':
+            process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
+            try:output,error=process.communicate(json.dumps(request),timeout=10)
+            except subprocess.TimeoutExpired:
+                try:os.killpg(process.pid,9)
+                except ProcessLookupError:pass
+                process.communicate();raise
+            completed=subprocess.CompletedProcess(command,process.returncode,output,error)
+        else:completed=run(command,check=False,stdin=json.dumps(request))
+    except subprocess.TimeoutExpired:raise OperationError('timeout','工作用户目录操作超时，请检查服务器连接或挂载状态后重试。')
     if completed.returncode:
         detail=(completed.stderr or completed.stdout or '用户目录操作失败').strip().splitlines()[-1]
         if detail.startswith('ValueError: '):detail=detail[len('ValueError: '):]
@@ -130,11 +376,51 @@ def package_installed(name):
     r=run(['dpkg-query','-W','-f=${db:Status-Status}',name],False)
     return r.returncode==0 and r.stdout=='installed'
 
+def package_environment():
+    return {**os.environ,'DEBIAN_FRONTEND':'noninteractive','NEEDRESTART_MODE':'l','LC_ALL':'C.UTF-8'}
+
+def package_options():
+    return ['apt-get','-o','DPkg::Lock::Timeout=900','-o','Acquire::Retries=3','-o','APT::Update::Error-Mode=any','-o','Dpkg::Options::=--force-confdef','-o','Dpkg::Options::=--force-confold']
+
+def wait_package_manager(timeout=900):
+    deadline=time.monotonic()+timeout
+    paths=['/var/lib/dpkg/lock-frontend','/var/lib/dpkg/lock','/var/lib/apt/lists/lock','/var/cache/apt/archives/lock']
+    while True:
+        busy=False
+        for path in paths:
+            try:
+                with open(path,'a') as lock:
+                    fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    fcntl.lockf(lock,fcntl.LOCK_UN)
+            except BlockingIOError:busy=True;break
+        if not busy:return
+        if time.monotonic()>=deadline:
+            raise OperationError('package_lock_wait','系统更新仍在运行，已等待 15 分钟。请等待其完成后重试；不会强行停止更新或删除锁文件。')
+        log('系统正在更新，正在等待包管理器完成，请勿关闭服务器…')
+        time.sleep(15)
+
+def prepare_system():
+    marker=STATE/'system-prepared.json'
+    if marker.exists():return
+    log('安装前准备：先等待系统更新完成，再更新软件源和系统软件包。')
+    wait_package_manager()
+    env=package_environment();opts=package_options()
+    audit=run(['dpkg','--audit'])
+    if audit.stdout.strip():
+        log('检测到未完成的软件包配置，正在继续完成…')
+        stream(['dpkg','--configure','-a'],env)
+    log('正在更新软件源，请稍候…');stream(opts+['update'],env)
+    log('正在更新系统软件包，首次安装可能需要较长时间…')
+    stream(opts+['upgrade','-y','--with-new-pkgs','--no-remove'],env)
+    write(marker,json.dumps({'completedAt':int(time.time())}),0o600)
+    log('系统准备完成，继续安装所选组件。')
+    if Path('/var/run/reboot-required').exists():log('系统更新提示稍后需要重启；本次不会自动重启服务器。')
+
 def apt(packages):
     missing=[p for p in packages if not package_installed(p)]
     if not missing:log('所需组件已安装，跳过重复下载。');return
-    env={**os.environ,'DEBIAN_FRONTEND':'noninteractive','NEEDRESTART_MODE':'l'}
-    opts=['apt-get','-o','DPkg::Lock::Timeout=180','-o','Acquire::Retries=3']
+    wait_package_manager()
+    env=package_environment();opts=package_options()
     stream(opts+['update'],env)
     stream(opts+['install','-y','--no-install-recommends']+missing,env)
 
@@ -264,6 +550,13 @@ print(json.dumps({'path':str(p),'parent':str(p.parent),'directories':sorted(item
     log('目录读取完成。')
     return json.loads(output.stdout)
 
+def create_directory(options):
+    name=options.get('name','').strip();parent=options.get('path','') or str(home()/'workspace')
+    if not name or len(name)>128 or name in ('.','..') or any(c in name for c in '/\\\0\r\n'):raise RuntimeError('文件夹名称须为 1–128 个字符，不能包含路径分隔符或换行。')
+    target=Path(parent)/name
+    if not Path(parent).is_absolute() or '..' in Path(parent).parts or not target.is_relative_to(home()):raise RuntimeError('请在工作用户主目录内新建文件夹。')
+    return json.loads(user_files('mkdir',str(target.relative_to(home()))).stdout)
+
 def locale_packages(locale):
     language=locale.split('_',1)[0]
     if not re.fullmatch('[a-z]{2}',language):raise RuntimeError('系统语言无效。')
@@ -332,13 +625,37 @@ def setup_input(options):
     user_write('.config/autostart/fcitx5.desktop','[Desktop Entry]\nType=Application\nName=Fcitx5\nExec=fcitx5 -d\nTerminal=false\n')
     log('拼音与中文字体已就绪，重新登录桌面后生效。')
 
+def file_sha256(file):
+    digest=hashlib.sha256()
+    for block in iter(lambda:file.read(1024*1024),b''):digest.update(block)
+    return digest.hexdigest()
+
 def setup_claude(options):
     a=account();apt(['curl','ca-certificates','git','tmux'])
-    target=Path('/opt/safe-code/install-claude.sh')
-    script=run(['curl','-fsSL','--retry','3','https://claude.ai/install.sh']).stdout
-    write(target,script,0o755)
-    log('使用官方原生安装器为普通工作用户安装 Claude Code。')
-    stream(['runuser','-u',a['username'],'--','env','-i','HOME='+str(home()),'PATH=/usr/local/bin:/usr/bin:/bin','LANG=C.UTF-8','bash',str(target),'stable'])
+    payload=options.get('claudePayload')
+    if payload:
+        source=Path(payload);expected=options.get('claudeSha256','');release=options.get('claudeVersion','')
+        if source.parent!=Path(__file__).resolve().parent or source.is_symlink() or not re.fullmatch('claude-payload-[a-f0-9]{32}',source.name):raise RuntimeError('Claude Code 安装文件路径无效。')
+        if not re.fullmatch('[a-f0-9]{64}',expected) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',release):raise RuntimeError('Claude Code 校验信息无效。')
+        with source.open('rb') as f:
+            if file_sha256(f)!=expected:raise RuntimeError('Claude Code 文件校验失败，未执行安装。')
+        staged=Path('/opt/safe-code')/('claude-verified-'+expected)
+        with tempfile.NamedTemporaryFile(dir='/opt/safe-code',delete=False) as f:
+            temporary=Path(f.name)
+            with source.open('rb') as original:shutil.copyfileobj(original,f)
+        try:
+            with temporary.open('rb') as f:
+                if file_sha256(f)!=expected:raise RuntimeError('Claude Code 文件校验失败，未执行安装。')
+            temporary.chmod(0o555);os.replace(temporary,staged)
+            log('官方 Claude Code 文件校验通过，正在为工作用户安装…')
+            user_files('install_claude','.local/bin/claude',source=str(staged),release=release)
+        finally:temporary.unlink(missing_ok=True);staged.unlink(missing_ok=True);source.unlink(missing_ok=True)
+    else:
+        target=Path('/opt/safe-code/install-claude.sh')
+        script=run(['curl','-fsSL','--connect-timeout','10','--max-time','60','--retry','2','https://claude.ai/install.sh']).stdout
+        write(target,script,0o755)
+        log('使用官方原生安装器为普通工作用户安装 Claude Code。')
+        stream(['runuser','-u',a['username'],'--','env','-i','HOME='+str(home()),'PATH=/usr/local/bin:/usr/bin:/bin','LANG=C.UTF-8','bash',str(target),'stable'])
     value=version(home()/'.local/bin/claude')
     if not value:raise RuntimeError('Claude Code 安装后未找到有效程序。')
     user_files('append_unique','.profile',content='export PATH="$HOME/.local/bin:$PATH"',mode=0o644)
@@ -353,9 +670,33 @@ def setup_ssh(options):
 
 def install_mount(options):apt(['davfs2','fuse3']);log('目录挂载组件已安装。')
 
+def setup_git_identity():
+    a=account();entry=pwd.getpwnam(a['username'])
+    if entry.pw_uid==0:raise RuntimeError('Git 身份必须配置在普通工作用户下。')
+    if not shutil.which('git'):raise RuntimeError('尚未安装 Git，请先安装 Claude Code 或重新安装 CloudCLI。')
+    command=['runuser','-u',a['username'],'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin','LANG=C.UTF-8','git','config','--global']
+    identity={}
+    for key,default in [('user.name',a['username']),('user.email',a['username']+'@safe-code.invalid')]:
+        existing=run(command+['--get',key],check=False)
+        if existing.returncode not in (0,1):raise RuntimeError('无法读取工作用户的 Git 配置，请检查文件权限。')
+        value=existing.stdout.strip()
+        if not value:
+            run(command+[key,default]);value=default
+            log('已补全本地 Git 默认身份，可在 CloudCLI 设置中修改。')
+        identity[key]=value
+    return identity
+
+def setup_cloud_onboarding(options):
+    identity=setup_git_identity()
+    report=json.loads(user_files('cloud_onboarding','.local/state/safe-code-cloud/auth.db',gitName=identity['user.name'],gitEmail=identity['user.email']).stdout)
+    log('CloudCLI 首次设置已完成，保留现有账号与 Git 身份；可直接进入主界面。')
+    sync_cloud_mount_projects()
+    return report
+
 def setup_cloud(options):
     secure_root_directory('/mnt/safe-code',0o755)
-    a=account();apt(['curl','xz-utils','ca-certificates'])
+    a=account();apt(['curl','xz-utils','ca-certificates','git'])
+    setup_git_identity()
     # Node 独立放置，避免覆盖用户已有运行时。
     node_root=Path('/opt/safe-code/node')
     if not (node_root/'bin/node').exists():
@@ -383,7 +724,185 @@ def setup_cloud(options):
     if changed:run(['systemctl','restart','safe-code-cloudcli'])
     time.sleep(3)
     if not active('safe-code-cloudcli'):raise RuntimeError('CloudCLI 启动失败，请检查专属服务日志。')
-    log('CloudCLI 已通过回环端口启动。请经 SSH 隧道打开并创建网页账户。')
+    setup_cloud_onboarding(options)
+    log('CloudCLI 已就绪。首次创建网页账户后可直接进入主界面，Claude 账号授权由本人完成。')
+
+def setup_cloud_public(options):
+    require_ubuntu()
+    service_path=Path('/etc/systemd/system/safe-code-cloudcli.service')
+    if not service_path.exists() or not active('safe-code-cloudcli'):
+        log('正在准备 CloudCLI 基础服务…')
+        setup_cloud(options)
+    log('正在配置 CloudCLI 允许公网访问 (0.0.0.0:3001)…')
+    content=service_path.read_text()
+    if 'Environment=HOST=127.0.0.1' in content:
+        content=content.replace('Environment=HOST=127.0.0.1','Environment=HOST=0.0.0.0')
+        write(service_path,content)
+        run(['systemctl','daemon-reload'])
+        log('正在重启 CloudCLI 服务以应用配置…')
+        run(['systemctl','restart','safe-code-cloudcli'])
+        time.sleep(3)
+    elif not active('safe-code-cloudcli'):
+        run(['systemctl','restart','safe-code-cloudcli'])
+        time.sleep(3)
+    if not active('safe-code-cloudcli'):
+        raise RuntimeError('CloudCLI 启动失败，请检查专属服务日志。')
+    log('正在检查防火墙配置…')
+    if shutil.which('ufw'):
+        try:
+            status=run(['ufw','status'],False).stdout
+            if 'Status: active' in status:
+                run(['ufw','allow','3001/tcp'],False)
+                log('已在 UFW 防火墙放行 TCP 3001 端口。')
+        except Exception:
+            pass
+    log('正在获取公网访问地址…')
+    ip=(options or {}).get('host') or (options or {}).get('ip')
+    if not ip or ip in ['127.0.0.1','localhost']:
+        try:
+            ip=run(['curl','--noproxy','*','-4','-fsS','--connect-timeout','4','--max-time','8','https://api.ipify.org'],False).stdout.strip()
+        except Exception:
+            pass
+    if not ip:
+        for link in json.loads(run(['ip','-j','-4','address','show'],False).stdout or '[]'):
+            for addr in link.get('addr_info',[]):
+                if addr.get('scope')=='global':
+                    ip=addr['local']
+                    break
+            if ip:break
+    url=f'http://{ip}:3001'
+    log(f'CloudCLI 已成功开放公网访问：{url}')
+    log('提示：请确保网页密码安全。')
+    return {'url':url,'ip':ip,'port':3001,'cloudReady':True}
+
+# A small companion to the installed CloudCLI frontend. Reuse its normal refresh
+# event instead of reloading the page or fabricating a session. Only /ws is used;
+# terminal sockets and streamed model messages are left alone.
+CLOUD_MOUNT_REFRESH = r"""(() => {
+  if (window.__safeCodeMountRefresh) return;
+  window.__safeCodeMountRefresh = true;
+  const sockets = new Set(), NativeWebSocket = window.WebSocket;
+  window.WebSocket = new Proxy(NativeWebSocket, {
+    construct(Target, args) {
+      const socket = new Target(...args);
+      if (new URL(args[0], location.href).pathname === '/ws') {
+        sockets.add(socket);
+        socket.addEventListener('close', () => sockets.delete(socket), {once:true});
+      }
+      return socket;
+    }
+  });
+  let revision, checking = false;
+  async function check() {
+    if (checking || document.hidden) return;
+    checking = true;
+    try {
+      const response = await fetch('/safe-code-mount-revision.json', {cache:'no-store'});
+      if (!response.ok) return;
+      const value = await response.json();
+      if (typeof value.revision !== 'string') return;
+      if (revision !== value.revision) {
+        let delivered = false;
+        for (const socket of sockets) {
+          if (socket.readyState !== NativeWebSocket.OPEN) continue;
+          socket.dispatchEvent(new MessageEvent('message', {data:JSON.stringify({kind:'websocket_reconnected'})}));
+          delivered = true;
+        }
+        if (!delivered) return;
+      }
+      revision = value.revision;
+    } catch {} finally { checking = false; }
+  }
+  setInterval(check, 3000);
+  document.addEventListener('visibilitychange', check);
+  check();
+})();
+"""
+
+def cloud_project_targets():
+    """Read mountinfo and trusted records without traversing a disconnected FUSE."""
+    mounted={line.split()[4] for line in Path('/proc/self/mountinfo').read_text().splitlines()}
+    managed=Path('/mnt/safe-code')/account()['username'];projects={}
+    for record in STATE.glob('mount-*.json'):
+        if not re.fullmatch(r'mount-[a-f0-9]{20}\.json',record.name):continue
+        data=json.loads(record.read_text())
+        for alias,path in zip(data.get('aliases',[]),data.get('paths',[])):
+            # Records belonging to a different work user are never registered.
+            if path not in mounted or '..' in Path(path).parts or not Path(path).is_relative_to(managed):continue
+            alias=Path(alias)
+            if not alias.is_absolute() or '..' in alias.parts or not alias.is_relative_to(home()) or alias==home():continue
+            projects[path]={'path':path,'name':alias.name}
+    return list(projects.values())
+
+def sync_cloud_mount_projects():
+    """Best effort: project discovery must never tear down a working file bridge."""
+    app=Path('/opt/safe-code/cloudcli/node_modules/@cloudcli-ai/cloudcli')
+    if not app.exists():return None
+    try:
+        # Scope the integration to the API/event format shipped by our installer.
+        if not (app/'dist-server/server/modules/database/repositories/projects.db.js').is_file():raise RuntimeError('CloudCLI 版本暂不支持项目联动，请更新后重新打开。')
+        index=app/'dist/index.html'
+        if index.is_symlink() or not index.is_file():raise RuntimeError('CloudCLI 网页入口异常，未修改网页。')
+        report=json.loads(user_files('cloud_projects','.local/state/safe-code-cloud/auth.db',projects=cloud_project_targets()).stdout)
+        if not report['ready']:return None
+        script=app/'dist/safe-code-mounts.js';revision=app/'dist/safe-code-mount-revision.json'
+        # These assets contain no paths, account data or authentication tokens.
+        write(script,CLOUD_MOUNT_REFRESH)
+        html=index.read_text();tag='<script src="/safe-code-mounts.js" data-safe-code-mounts></script>'
+        if 'data-safe-code-mounts' not in html:
+            if '<head>' not in html:raise RuntimeError('CloudCLI 网页入口不兼容，未修改网页。')
+            backup=index.with_name('index.before-safe-code-mounts.html')
+            if not backup.exists():write(backup,html)
+            write(index,html.replace('<head>','<head>\n    '+tag,1))
+        if report['changed'] or not revision.exists():write(revision,json.dumps({'revision':secrets.token_hex(16)}))
+        log('CloudCLI 已同步挂载项目；网页项目列表会自动刷新。')
+        return None
+    except Exception as error:
+        warning='目录挂载保持正常，CloudCLI 项目联动未完成：'+str(error)
+        log(warning);return warning
+
+CODEX_BRIDGE_SOURCE_HASH='3d6c8d98604e7301bd92046b00ead3b08eddefa157e1c5661d2c9599aefe58c3'
+def codex_bridge(options):
+    action=options.get('action','');a=account();parameters={k:options[k] for k in ['publicKey','keyId','clientId']}
+    if action=='install':
+        import zipfile
+        payload=Path(options.get('payload',''))
+        if payload.parent!=Path(__file__).resolve().parent or payload.is_symlink() or not re.fullmatch(r'codex-bridge-[a-f0-9]{32}\.zip',payload.name):raise RuntimeError('适配器源码包路径无效。')
+        data=payload.read_bytes()
+        if hashlib.sha256(data).hexdigest()!=CODEX_BRIDGE_SOURCE_HASH:raise RuntimeError('适配器源码包校验失败，未安装。')
+        node=Path('/opt/safe-code/node/bin/node')
+        if not node.exists():
+            candidate=shutil.which('node')
+            if candidate and int(run([candidate,'-p','process.versions.node.split(".")[0]']).stdout.strip())>=20:node=Path(candidate)
+            else:
+                apt(['curl','xz-utils','ca-certificates'])
+                index=json.loads(run(['curl','-fsSL','https://nodejs.org/dist/index.json']).stdout);release=next(x for x in index if x['version'].startswith('v22.') and x.get('lts'))
+                version=release['version'];arch={'x86_64':'x64','aarch64':'arm64'}.get(os.uname().machine)
+                if not arch or not re.fullmatch(r'v22\.[0-9]+\.[0-9]+',version):raise RuntimeError('当前架构或 Node.js 版本不支持适配器自动安装。')
+                name='node-'+version+'-linux-'+arch+'.tar.xz';url='https://nodejs.org/dist/'+version+'/'
+                expected=next(line.split()[0] for line in run(['curl','-fsSL',url+'SHASUMS256.txt']).stdout.splitlines() if line.split()[-1]==name)
+                archive=Path('/opt/safe-code')/name;stream(['curl','-fL','--retry','3',url+name,'-o',str(archive)])
+                if hashlib.sha256(archive.read_bytes()).hexdigest()!=expected:raise RuntimeError('Node.js 文件校验失败。')
+                with tempfile.TemporaryDirectory(prefix='node-bridge-',dir='/opt/safe-code') as stage:
+                    run(['tar','-xJf',str(archive),'-C',stage]);candidate=Path(stage)/name[:-7]
+                    run([str(candidate/'bin/node'),'--version']);os.rename(candidate,node.parent.parent)
+        if int(run([str(node),'-p','process.versions.node.split(".")[0]']).stdout.strip())<20:raise RuntimeError('适配器需要 Node.js 20 或更高版本。')
+        claude=home()/'.local/bin/claude'
+        if not claude.exists():raise RuntimeError('请先为工作用户部署 Claude Code，并自行完成 Claude 登录。')
+        with zipfile.ZipFile(payload) as archive:
+            files={name:base64.b64encode(archive.read(name)).decode() for name in archive.namelist()}
+        parameters.update({'files':files,'node':str(node),'claude':str(claude),'sourceHash':CODEX_BRIDGE_SOURCE_HASH,'username':a['username']})
+    return json.loads(user_files('codex_bridge','.local/state/safe-code/codex-bridge',action=action,**parameters).stdout)
+
+def host_bridge(options):
+    client=options.get('clientId','');action=options.get('action','')
+    if not re.fullmatch('[a-f0-9]{20}',client):raise RuntimeError('本机控制标识无效。')
+    if action=='configure':
+        port=options.get('port')
+        if not isinstance(port,int) or not 1024<=port<=65535:raise RuntimeError('本机控制端口无效。')
+        listeners=run(['ss','-H','-lnt','sport = :'+str(port)]).stdout
+        if '127.0.0.1:'+str(port) not in listeners or any(x in listeners for x in ['0.0.0.0:'+str(port),'*:'+str(port),'[::]:'+str(port)]):raise RuntimeError('本机控制必须只绑定服务器回环地址。')
+    return json.loads(user_files('host_bridge','.ssh/safe-code-host/'+client+'/identity',**options).stdout)
 
 def mount_client(options):
     client=options.get('clientId','')
@@ -408,9 +927,18 @@ def remove_mounts(options):
         urls=set(previous.get('urls',[]))
         lines=[line for line in lines if not any(line.startswith(url+' ') for url in urls) and line!='# safe-code-'+client]
         write(secrets_file,'\n'.join(lines)+'\n',0o600)
-    record.unlink();return {'clientId':client,'paths':[]}
+    record.unlink();warning=sync_cloud_mount_projects() if options.get('syncProjects',True) else None
+    return {'clientId':client,'paths':[],'cloudWarning':warning}
 
-def apply_mounts(options):
+def mount_project_paths(client,aliases,previous_targets):
+    managed=Path('/mnt/safe-code')/account()['username']/client
+    registry=STATE/('mount-project-paths-'+client+'.json')
+    saved=json.loads(registry.read_text()) if registry.exists() else {}
+    targets=[previous_targets.get(alias,saved.get(alias,str(managed/('p'+hashlib.sha256(alias.encode()).hexdigest()[:20])))) for alias in aliases]
+    if len(set(targets))!=len(targets) or any(Path(path).parent!=managed or not re.fullmatch(r'm[0-9]+|p[a-f0-9]{20}',Path(path).name) for path in targets):raise RuntimeError('挂载项目路径记录异常，已保留现有挂载。')
+    return targets,registry,{**saved,**dict(zip(aliases,targets))}
+
+def apply_mounts(options,recover=False):
     a=account();client=mount_client(options)
     if not package_installed('davfs2'):raise RuntimeError('请先安装目录挂载组件。')
     port=options.get('port');user=options.get('username');password=options.get('password','');mappings=options.get('mappings',[])
@@ -432,39 +960,56 @@ def apply_mounts(options):
         if any(target.is_relative_to(Path(alias)) or Path(alias).is_relative_to(target) for alias in aliases):raise RuntimeError('挂载目录不能相互包含，请选择独立的目录。')
         user_files('check_alias',str(target.relative_to(home())),destination=previous_targets.get(str(target),''))
         aliases.append(str(target))
-    remove_mounts({'clientId':client})
+    targets,path_registry,remembered_paths=mount_project_paths(client,aliases,previous_targets)
+    if not recover:remove_mounts({'clientId':client,'syncProjects':False})
     managed=Path('/mnt/safe-code');secure_root_directory(managed,0o755);managed=managed/a['username'];secure_root_directory(managed,0o755);managed=managed/client;secure_root_directory(managed,0o755)
-    targets=[str(managed/('m'+str(i))) for i in range(len(aliases))]
-    for target in targets:secure_root_directory(target,0o755)
+    existing_mounts={line.split()[4] for line in Path('/proc/self/mountinfo').read_text().splitlines()}
+    if recover and (not previous or previous.get('aliases')!=aliases or not set(previous.get('paths',[])).issubset(set(targets))):raise RuntimeError('原挂载记录不一致，已保留现有挂载，请检查后重新保存。')
+    for target in targets:
+        if target not in existing_mounts:secure_root_directory(target,0o755)
     if not Path('/dev/fuse').exists():run(['modprobe','fuse'])
     directory=STATE/('mount-'+client);directory.mkdir(mode=0o700,exist_ok=True)
     config=directory/'davfs2.conf'
-    write(config,'use_locks 0\ndelay_upload 0\ncache_size 20\n',0o600)
+    write(config,'use_locks 0\ndelay_upload 0\ncache_size 1024\nconnect_timeout 10\nread_timeout 120\nretry 5\nmax_retry 30\nmax_upload_attempts 1000000\n',0o600)
     uid=pwd.getpwnam(a['username']).pw_uid;gid=pwd.getpwnam(a['username']).pw_gid
     urls=['http://127.0.0.1:'+str(port)+'/m'+str(i)+'/' for i in range(len(targets))]
-    path=Path('/etc/davfs2/secrets');old=path.read_text() if path.exists() else ''
-    write(path,old.rstrip()+'\n# safe-code-'+client+'\n'+'\n'.join(url+' '+user+' '+password for url in urls)+'\n',0o600)
-    record=STATE/('mount-'+client+'.json');write(record,json.dumps({'paths':[],'urls':urls,'aliases':aliases}),0o600)
-    mounted=[]
+    if recover and previous.get('urls')!=urls:raise RuntimeError('原挂载通道已变化，未卸载现有目录，请人工检查。')
+    if not recover:
+        path=Path('/etc/davfs2/secrets');old=path.read_text() if path.exists() else ''
+        write(path,old.rstrip()+'\n# safe-code-'+client+'\n'+'\n'.join(url+' '+user+' '+password for url in urls)+'\n',0o600)
+    record=STATE/('mount-'+client+'.json')
+    if not recover:write(record,json.dumps({'paths':[],'urls':urls,'aliases':aliases}),0o600)
+    mounted=[x for x in targets if x in existing_mounts] if recover else []
     try:
         for target,url,alias in zip(targets,urls,aliases):
+            if target in mounted:continue
             target=Path(target)
             log('建立加密文件通道：'+str(target))
             try:completed=subprocess.run(['mount','-t','davfs',url,str(target),'-o','conf='+str(config)+',uid='+str(uid)+',gid='+str(gid)+',file_mode=0600,dir_mode=0700,noexec,nosuid,nodev'],input='',text=True,capture_output=True,timeout=75)
-            except subprocess.TimeoutExpired:raise RuntimeError('建立目录挂载超时，请检查 SSH 文件通道后重试。')
-            if completed.returncode:raise RuntimeError('目录挂载失败：'+completed.stderr[-800:])
+            except subprocess.TimeoutExpired:raise OperationError('mount_timeout','建立目录挂载超时，请检查 SSH 文件通道后重试。')
+            if completed.returncode:raise OperationError('mount_failed','目录挂载失败：'+completed.stderr[-800:])
             if not os.path.ismount(target):raise RuntimeError('目标未成为实际挂载点。')
-            mounted.append(str(target));write(record,json.dumps({'paths':mounted,'urls':urls,'aliases':aliases}),0o600)
+            mounted.append(str(target));write(record,json.dumps({'paths':[x for x in targets if x in mounted],'urls':urls,'aliases':aliases}),0o600)
             user_files('alias',str(Path(alias).relative_to(home())),destination=str(target))
-        return {'clientId':client,'paths':aliases,'managedPaths':mounted}
+        # Keep legacy m0/m1 paths after unmount too, so upgrading retains IDs.
+        write(path_registry,json.dumps(remembered_paths),0o600)
+        warning=sync_cloud_mount_projects()
+        return {'clientId':client,'paths':aliases,'managedPaths':mounted,'cloudWarning':warning}
     except Exception:
-        remove_mounts({'clientId':client});raise
+        if not recover:remove_mounts({'clientId':client})
+        raise
 
 def start_job(request):
     operation=request.get('op')
     if operation not in LONG_OPERATIONS:raise RuntimeError('此操作不能作为后台安装任务。')
     job=secrets.token_hex(16);directory=STATE/'jobs'/job;directory.mkdir(mode=0o700,parents=True)
     request={**request,'background':False,'jobId':job}
+    options=request.get('options') or {}
+    if operation=='claude' and options.get('claudePayload'):
+        source=Path(options['claudePayload'])
+        if source.parent!=Path(__file__).resolve().parent or source.is_symlink() or not re.fullmatch('claude-payload-[a-f0-9]{32}',source.name):raise RuntimeError('Claude Code 安装文件路径无效。')
+        target=directory/source.name;shutil.copyfile(source,target);target.chmod(0o600)
+        request={**request,'options':{**options,'claudePayload':str(target)}}
     write(directory/'request.json',json.dumps(request),0o600)
     write(directory/'metadata.json',json.dumps({'jobId':job,'operation':operation,'created':time.time()}),0o600)
     for name in ['agent.py','network.py']:
@@ -499,14 +1044,15 @@ def poll_job(job,offset):
         complete=data.rfind(b'\n')+1
         if complete:
             data=data[:complete];next_offset=offset+len(data)
-            lines=[x for x in data.decode('utf-8',errors='replace').splitlines() if not x.startswith(('SC_RESULT:','SC_ERROR:','SC_ERROR_JSON:'))]
+            lines=[x for x in data.decode('utf-8',errors='replace').splitlines() if not x.startswith(('SC_RESULT:','SC_ERROR:','SC_ERROR_JSON:','SC_ERROR_CODE:'))]
     value=json.loads((directory/'result.json').read_text()) if (directory/'result.json').exists() else None
-    error=json.loads((directory/'error.json').read_text()).get('error') if (directory/'error.json').exists() else None
+    failure=json.loads((directory/'error.json').read_text()) if (directory/'error.json').exists() else {}
+    error=failure.get('error')
     if value is None and error is None:
         status=run(['systemctl','is-active','safe-code-job-'+job+'.service'],False).stdout.strip()
         age=time.time()-json.loads((directory/'metadata.json').read_text())['created']
         if status not in ['active','activating'] and age>3:error='远端任务意外结束，重连后可检查实际安装状态。'
-    return {'lines':lines,'nextOffset':next_offset,'done':value is not None or error is not None,'value':value,'error':error}
+    return {'lines':lines,'nextOffset':next_offset,'done':value is not None or error is not None,'value':value,'error':error,'errorCode':failure.get('code')}
 
 def main():
     global JOB_DIR
@@ -527,6 +1073,7 @@ def main():
     if os.geteuid()!=0:raise RuntimeError('安装需要 root 或免密 sudo 权限。')
     if op=='account_info':result(account());return
     if op=='list_directories':result(list_directories(request.get('options') or {}));return
+    if op=='create_directory':result(create_directory(request.get('options') or {}));return
     if op=='desktop_login_probe':
         options=request.get('options') or {};path=Path('/var/log/xrdp-sesman.log');size=path.stat().st_size
         offset=options.get('offset',size)
@@ -543,7 +1090,7 @@ def main():
         result(start_job(request));return
     with (STATE/'install.lock').open('w') as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except BlockingIOError:raise RuntimeError('另一个部署正在运行，请等待完成。')
+        except BlockingIOError:raise OperationError('deployment_busy','另一个部署正在运行，请等待完成。')
         options=request.get('options') or {}
         if options.get('password'):REDACTIONS.append(options['password'])
         if op.startswith('ip_'):
@@ -554,11 +1101,15 @@ def main():
             if op=='ip_commit':result(network.commit(options['token']));return
             if op=='ip_rollback':result(network.rollback(options['token']));return
             raise RuntimeError('未知网络操作。')
+        if op=='codex_bridge':result(codex_bridge(options));return
+        if op=='host_bridge':result(host_bridge(options));return
         if op=='mount_apply':result(apply_mounts(options));return
+        if op=='mount_recover':result(apply_mounts(options,recover=True));return
         if op=='mount_remove':result(remove_mounts(options));return
-        mapping={'account':setup_account,'localization':setup_locale,'desktop':setup_desktop,'chrome':setup_chrome,'input':setup_input,'claude':setup_claude,'ssh':setup_ssh,'mount_install':install_mount,'cloud':setup_cloud}
+        mapping={'account':setup_account,'localization':setup_locale,'desktop':setup_desktop,'chrome':setup_chrome,'input':setup_input,'claude':setup_claude,'ssh':setup_ssh,'mount_install':install_mount,'cloud':setup_cloud,'cloud_public':setup_cloud_public,'cloud_setup':setup_cloud_onboarding}
         if op not in mapping:raise RuntimeError('未知部署操作。')
         log('开始部署：'+op)
+        if (op=='account' and not read_config()) or op in ['localization','desktop','chrome','input','claude','cloud','mount_install']:prepare_system()
         mapping[op](options)
         result(inspect())
 
@@ -568,5 +1119,6 @@ if __name__=='__main__':
         message=str(error)
         for secret in REDACTIONS:
             if secret:message=message.replace(secret,'[已隐藏]')
-        if JOB_DIR is not None:write(JOB_DIR/'error.json',json.dumps({'error':message},ensure_ascii=False),0o600)
+        if JOB_DIR is not None:write(JOB_DIR/'error.json',json.dumps({'error':message,'code':error_code(error)},ensure_ascii=False),0o600)
+        print('SC_ERROR_CODE:'+error_code(error),flush=True)
         print('SC_ERROR_JSON:'+json.dumps(message,ensure_ascii=False),flush=True);sys.exit(1)

@@ -18,7 +18,7 @@ with sync_playwright() as p:
     page.route('**/*',route)
     page.add_init_script('''
       window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;
-      window.fixturePrefs={enabled:false,confirmed:true,diagnosticsEnabled:true,serviceAvailable:true,recipient:'collector.invalid'};
+      window.fixturePrefs={enabled:false,confirmed:true,diagnosticsEnabled:true,serviceAvailable:true,recipient:'collector.invalid',issueId:'12345678-1234-4234-8234-123456789abc'};
       window.diagnosticConsentCalls=[];
       window.chrome={webview:{postMessage(message){
         let result=null;
@@ -36,6 +36,9 @@ with sync_playwright() as p:
     output=root/'.local/evidence';output.mkdir(parents=True,exist_ok=True)
     page.screenshot(path=str(output/'diagnostics-notice.png'))
     page.locator('[data-open-services]:visible').first.click()
+    assert page.locator('#services-dialog .diagnostic-notice').count()==1
+    assert '12345678-1234-4234-8234-123456789abc' in page.locator('#feedback-status').inner_text()
+    assert page.locator('#services-dialog .config-body').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
     toggle=page.locator('#settings-diagnostics-consent')
     assert toggle.is_checked()
     toggle.uncheck();page.wait_for_function('window.diagnosticConsentCalls.length===1')

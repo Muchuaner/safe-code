@@ -7,7 +7,7 @@ using SafeCode.Desktop;
 void Assert(bool value,string message){if(!value)throw new Exception(message);}
 if(args.Length==2&&args[0]=="--diagnostic-fixture"){
  var trace=new DiagnosticTrace("chrome",0);trace.Observe("Waiting for cache lock: password=must-not-upload 203.0.113.7");
- File.WriteAllText(args[1],JsonSerializer.Serialize(new{schema=1,eventId=Guid.NewGuid().ToString(),version=ClientServices.Version,report=trace.Finish(new InvalidOperationException("Waiting for cache lock /var/lib/dpkg/lock-frontend"))},SafeCode.Core.JsonDefaults.Options));return;
+ File.WriteAllText(args[1],JsonSerializer.Serialize(new{schema=2,eventId=trace.Id,version=ClientServices.Version,context=new{installationId=Guid.NewGuid().ToString(),sessionId=Guid.NewGuid().ToString(),operationId=trace.Id},report=trace.Finish(new InvalidOperationException("Waiting for cache lock /var/lib/dpkg/lock-frontend"))},SafeCode.Core.JsonDefaults.Options));return;
 }
 var directory=Path.Combine(Path.GetTempPath(),"safe-code-services-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
 string config=Path.Combine(AppContext.BaseDirectory,"service-endpoints.json");File.WriteAllText(config,"{\"feedbackBaseUrl\":\"https://collector.invalid/\"}");
@@ -57,7 +57,7 @@ try{
   await diagnosticClient.SendDiagnosticAsync(trace,new DirectoryNotFoundException("private file path super-secret"),default);
   Assert(diagnosticHandler.Bodies.Count==1,"explicit diagnostics opt-in failed with usage disabled");
   string payload=diagnosticHandler.Bodies[0];using var packet=JsonDocument.Parse(payload);
-  Assert(packet.RootElement.EnumerateObject().Select(x=>x.Name).Order().SequenceEqual(new[]{"schema","eventId","version","report"}.Order()),"unexpected diagnostic fields");
+  Assert(packet.RootElement.EnumerateObject().Select(x=>x.Name).Order().SequenceEqual(new[]{"schema","eventId","version","report","context"}.Order()),"unexpected diagnostic fields");
   foreach(string secret in new[]{"super-secret","sk-private-key","203.0.113.7","user@example.com","PRIVATEKEY","private.invalid","private file path"})Assert(!payload.Contains(secret),"private text entered diagnostic payload");
   Assert(packet.RootElement.GetProperty("report").GetProperty("errorKind").GetString()=="directory_not_found","exception category missing");
   Assert(packet.RootElement.GetProperty("report").GetProperty("signals")[0].GetProperty("code").GetString()=="package_lock_wait","lock diagnostic missing");
@@ -68,9 +68,39 @@ try{
   diagnosticClient.SetDiagnosticConsent(false);
  }
  using(var restarted=new ClientServices(diagnosticDirectory,new FakeHandler()))Assert(!restarted.DiagnosticsAllowed&&!JsonSerializer.Serialize(restarted.Preferences()).Contains("\"diagnosticsEnabled\":true"),"diagnostic optout not persisted");
+ Assert(DiagnosticTrace.ErrorKind(new InvalidOperationException("中文提示",new Renci.SshNet.Common.SshAuthenticationException("private")))=="ssh_auth_failed","friendly wrapper hid SSH cause");
+ Assert(DiagnosticTrace.ErrorKind(new JsonException("private"))=="json_invalid","JSON error unclassified");
+ Assert(DiagnosticTrace.ErrorKind(new Renci.SshNet.Common.SshAuthenticationException("private"))=="ssh_auth_failed","SSH auth unclassified");
+ Assert(DiagnosticTrace.ErrorKind(new Renci.SshNet.Common.SshOperationTimeoutException("private"))=="ssh_timeout","SSH timeout unclassified");
+ Assert(DiagnosticTrace.ErrorKind(new SafeCode.Core.RemoteOperationException("private","mount_failed"))=="mount_failed","remote error lost");
+ var priorityHandler=new FakeHandler();var priorityDirectory=Path.Combine(directory,"priority");
+ using(var priority=new ClientServices(priorityDirectory,priorityHandler)){
+  await priority.SetConsentAsync(false,true);
+  for(int i=0;i<25;i++)await priority.SendDiagnosticAsync(new DiagnosticTrace("chrome",priority.DiagnosticGeneration),null,default);
+  Assert(priorityHandler.Bodies.Count==2,"success reports consumed failure budget");
+  var failure=new DiagnosticTrace("mount_apply",priority.DiagnosticGeneration);failure.Observe("任务请求已上传，正在启动远端操作…");
+  string? issue=priority.RecordFailure(failure,new SafeCode.Core.RemoteOperationException("private","mount_failed"));
+  await priority.SendDiagnosticAsync(failure,new SafeCode.Core.RemoteOperationException("private","mount_failed"),default);
+  await priority.SendFeedbackAsync("用户描述最近失败",default);
+  using var diagnosticPacket=JsonDocument.Parse(priorityHandler.Bodies[2]);using var feedbackPacket=JsonDocument.Parse(priorityHandler.Bodies[3]);
+  var correlation=diagnosticPacket.RootElement.GetProperty("context");
+  Assert(issue==correlation.GetProperty("operationId").GetString(),"displayed issue lost");
+  Assert(JsonElement.DeepEquals(feedbackPacket.RootElement.GetProperty("context").GetProperty("correlation"),correlation),"feedback not linked to diagnostic");
+  Assert(feedbackPacket.RootElement.GetProperty("context").GetProperty("report").GetProperty("stage").GetString()=="request_uploaded","failure stage lost");
+  string install=correlation.GetProperty("installationId").GetString()!;
+  using(var reload=new ClientServices(priorityDirectory,new FakeHandler())){
+   await reload.SetConsentAsync(false,true);var h=new DiagnosticTrace("chrome",reload.DiagnosticGeneration);
+   // 标识持久化由偏好文件核验，会话编号每次启动变化。
+   using var prefs=JsonDocument.Parse(File.ReadAllText(Path.Combine(priorityDirectory,"usage-preferences.json")));
+   Assert(prefs.RootElement.GetProperty("diagnosticInstallationId").GetString()==install,"diagnostic installation not persisted");
+  }
+  priority.SetDiagnosticConsent(false);await priority.SendFeedbackAsync("关闭诊断后的反馈",default);
+  using var optedOut=JsonDocument.Parse(priorityHandler.Bodies[4]);Assert(optedOut.RootElement.GetProperty("context").ValueKind==JsonValueKind.Null,"optout feedback leaked correlation");
+  using var cleared=JsonDocument.Parse(File.ReadAllText(Path.Combine(priorityDirectory,"usage-preferences.json")));Assert(cleared.RootElement.GetProperty("diagnosticInstallationId").GetString()=="","optout retained diagnostic identifier");
+ }
  var migratedDirectory=Path.Combine(directory,"diagnostic-migration");Directory.CreateDirectory(migratedDirectory);
  File.WriteAllText(Path.Combine(migratedDirectory,"usage-preferences.json"),"{\"enabled\":false,\"confirmed\":true}");
- using(var migrated=new ClientServices(migratedDirectory,new FakeHandler()))Assert(migrated.DiagnosticsAllowed,"missing diagnostic preference should default to checked");
+ using(var migrated=new ClientServices(migratedDirectory,new FakeHandler()))Assert(!migrated.DiagnosticsAllowed&&!migrated.NoticeWasConfirmed&&JsonSerializer.Serialize(migrated.Preferences()).Contains("\"diagnosticsEnabled\":true"),"migration must retain selection and await updated notice");
  var saveFailureDirectory=Path.Combine(directory,"diagnostic-save-failure");
  using(var saveFailure=new ClientServices(saveFailureDirectory,new FakeHandler()))
  {
