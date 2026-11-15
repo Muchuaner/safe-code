@@ -26,10 +26,13 @@ public sealed partial class SshSession
                 if(!Convert.ToHexString(await SHA256.HashDataAsync(file,ct)).Equals(bundledHash,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("随包 Claude Code 文件校验失败，未上传或执行，请重新获取完整软件包。");
             return await UploadClaudePayloadAsync(bundledFile,bundledHash,bundledVersion,ct);
         }
+        try{return await DownloadClaudeOnServerAsync(ct);}
+        catch(RemoteOperationException error) when(error.Code is "dns_failure" or "package_fetch_failed" or "timeout")
+        {Log?.Invoke("VPS 无法下载 Claude Code 官方文件，正在尝试本机网络…");}
         using var http=new HttpClient {Timeout=TimeSpan.FromMinutes(10)};
         try
         {
-            Log?.Invoke("正在由客户端获取 Claude Code 官方稳定版，服务器无需解析 claude.ai…");
+            Log?.Invoke("正在由客户端备用网络获取 Claude Code 官方稳定版…");
             string release=(await http.GetStringAsync(ClaudeReleaseBase+"/stable",ct)).Trim();
             if(!Regex.IsMatch(release,@"\A[0-9]+\.[0-9]+\.[0-9]+\z"))throw new InvalidDataException("Claude Code 官方版本信息无效，请稍后重试。");
             using var manifest=JsonDocument.Parse(await http.GetStringAsync($"{ClaudeReleaseBase}/{release}/manifest.json",ct));
@@ -77,6 +80,25 @@ public sealed partial class SshSession
         }
         catch(TaskCanceledException) when(!ct.IsCancellationRequested)
         {throw new TimeoutException("下载 Claude Code 官方文件超时，请检查本机网络后重试。");}
+    }
+    private async Task<(object Options,string Path)> DownloadClaudeOnServerAsync(CancellationToken ct)
+    {
+        Log?.Invoke("正在通过 VPS 网络下载并校验 Claude Code 官方稳定版…");
+        using var command=(client??throw new InvalidOperationException("服务器未连接。")).CreateCommand(prefix+"python3 -u "+Quote(remoteDirectory+"/agent.py")+" --claude-download");
+        command.CommandTimeout=TimeSpan.FromMinutes(12);
+        var execution=command.ExecuteAsync(ct);string? json=null,error=null,code=null;
+        using var reader=new StreamReader(command.OutputStream);
+        while(await reader.ReadLineAsync(ct) is {} line)
+        {
+            if(line.StartsWith("SC_RESULT:"))json=line[10..];
+            else if(line.StartsWith("SC_ERROR_CODE:"))code=line[14..];
+            else if(line.StartsWith("SC_ERROR_JSON:"))error=JsonSerializer.Deserialize<string>(line[14..]);
+            else Log?.Invoke(line);
+        }
+        await execution;
+        if(command.ExitStatus!=0||json==null)throw new RemoteOperationException(error??"VPS 下载任务未返回结果，请检查服务器连接。",code);
+        var options=JsonSerializer.Deserialize<JsonElement>(json);
+        return (options,options.GetProperty("claudePayload").GetString()!);
     }
     private async Task<(object Options,string Path)> UploadClaudePayloadAsync(string payload,string digest,string release,CancellationToken ct)
     {

@@ -3,7 +3,7 @@ import WebKit
 import Security
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "Beta-0.4.4.1"
+private let safeCodeVersion = "Beta-0.4.4.2"
 private enum AppError: LocalizedError {
     case message(String)
     var errorDescription: String? { if case .message(let text) = self { return text }; return nil }

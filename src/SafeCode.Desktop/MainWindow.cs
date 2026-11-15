@@ -178,7 +178,7 @@ public sealed class MainWindow : Window
             await FlushLogsAsync();
             await RespondAsync(id, answer, null);
         }
-        catch (Exception error) { diagnosticError=error;string? issue=diagnostic==null?null:services.RecordFailure(diagnostic,error);await RespondAsync(id, null, error.Message+(issue==null?"":"\n问题编号："+issue)); }
+        catch (Exception error) { diagnosticError=error;string? issue=diagnostic==null?null:services.RecordFailure(diagnostic,error);await RespondAsync(id, null, ConnectionErrors.DescribeOperation(error)+(issue==null?"":"\n问题编号："+issue)); }
         finally
         {
             if(diagnostic!=null)
