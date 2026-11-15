@@ -10,6 +10,12 @@ Windows 在 Mac 上交叉发布自包含 x64 程序，在 214 生成 Inno Setup 
 
 macOS Apple Silicon 和 Intel 包分别构建，包内各 217 个清单文件哈希及签名封装核验通过，核心加密与更新平台筛选自检通过。Apple Silicon 原生与 Intel 包经 Rosetta 的隔离启动均验证原生桥接、独立指南、只读启动、未登录拒绝服务器操作，以及禁用 Windows 专用适配器。包使用临时本机签名，未做 Apple 公证；未将 Rosetta 验收表述为 Intel 实机验收。
 
-新增下载路径完成隔离测试与真实 SSH 协议夹具验证；本轮未在用户 VPS 安装或下载真实 Claude 大文件，未开启本机远程登录，未修改服务器服务，未发送模型请求。
+新增下载路径完成隔离测试与真实 SSH 协议夹具验证；本轮未在用户 VPS 安装或下载真实 Claude 大文件，未开启本机远程登录，未改动用户 VPS 服务，未发送模型请求。
 
 发行包默认不再内置 Claude 文件：VPS 优先下载，失败后客户端备用。Windows 保留原 OpenSSH、第三方适配器及许可；Mac 发布 arm64 和 x64 两种 DMG。安装包哈希、GitHub 资产摘要和公开下载验证保存在忽略目录 `.local/release-beta442/`。
+
+## 发布与接收端验收
+
+Beta-0.4.4.2 已公开预发布，发行源码为 `bbf3930df988b4205ea2ec7940d4c8541e7dea64`。9 个资产的大小与 GitHub SHA256 均已核对；4 个发行文件的匿名范围下载均返回 206，并核验 EXE/ZIP 文件头及 DMG 尾部格式。旧 Windows Beta-0.4.3.2 更新解析器与 Mac Beta-0.4.4.1 双架构筛选均从真实公开发布数据识别新版本，未执行安装。
+
+发布前发现线上统计接收端仍只接受 Windows，已备份脚本与 SQLite，仅更新 macOS 平台白名单并重启独立反馈服务。备份为 `/var/backups/safe-code-feedback/beta442-macos-20261115T134605Z`。Windows/macOS 合成启动事件返回 202，未知平台返回 400，测试记录精确删除，公网 HTTPS 健康检查通过。SSH、xrdp、CloudCLI 与外层登录服务 PID 保持，端点与 Nginx 配置不变。基础设施项目的 vpn-deployment-summary.html 已同步更新。
