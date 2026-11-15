@@ -1,0 +1,1 @@
+upstream: https://github.com/EthanSK/claude-in-codex @ 9ad1632ffeeed6b35d89b3476f337d22e15c8ddd (MIT)
