@@ -7,12 +7,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.3.5"><img src="https://img.shields.io/badge/下载-Beta--0.4.3.5-c2566f?style=for-the-badge" alt="下载 Beta-0.4.3.5"></a>
+  <a href="https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.4.2"><img src="https://img.shields.io/badge/下载-Beta--0.4.4.2-c2566f?style=for-the-badge" alt="下载 Beta-0.4.4.2"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-e07b2a?style=for-the-badge" alt="Windows 10 / 11">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-6b4a3a?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-macOS 原生开发版的安装、构建与验证范围见 [Mac 使用说明](docs/MACOS.md)。
+macOS 版提供 Apple Silicon 与 Intel 两种安装包，安装、构建与验证范围见 [Mac 使用说明](docs/MACOS.md)。
 
 ## ✨ 功能
 

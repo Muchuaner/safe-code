@@ -1,6 +1,6 @@
 # Safe Code for macOS
 
-首个开发版：Beta-0.4.4.1。分别构建 Apple Silicon（arm64）和 Intel（x64）应用，构建目标为 macOS 15 或以后版本。最低系统版本按 [.NET 10 支持列表](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md) 设定；macOS 14 已不在当前支持范围。实际验收系统、架构与限制见下方验证记录；交叉编译不代表已在 Intel 实机验收。
+当前修复版：Beta-0.4.4.2；首个开发版为 Beta-0.4.4.1。分别构建 Apple Silicon（arm64）和 Intel（x64）应用，构建目标为 macOS 15 或以后版本。最低系统版本按 [.NET 10 支持列表](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md) 设定；macOS 14 已不在当前支持范围。实际验收系统、架构与限制见下方验证记录；交叉编译不代表已在 Intel 实机验收。
 
 打开对应 DMG，将 Safe Code.app 拖入 Applications。应用自带 .NET 核心，不需要安装 Python、Node.js、.NET SDK、WebView2 或 Windows 模拟器。系统 WKWebView 承载界面，AppKit 提供窗口、文件夹选择器、剪贴板和菜单栏面板。
 
