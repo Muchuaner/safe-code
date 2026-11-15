@@ -5,7 +5,7 @@ using System.Text.Json;
 if(args.Length>1&&args[0]=="mount-fixture"){
     using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string directory=c.GetProperty("directory").GetString()!;int port=c.GetProperty("port").GetInt32();
     using var client=new Renci.SshNet.SshClient("127.0.0.1",port,"fixture","fixture-only");client.HostKeyReceived+=(_,e)=>e.CanTrust=Convert.ToBase64String(e.HostKey)==c.GetProperty("key").GetString();await client.ConnectAsync(default);
-    using var session=new SshSession(Path.Combine(directory,"settings"));var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+    using var session=new SshSession(Path.Combine(directory,"settings")){MountGuardInterval=TimeSpan.FromHours(1)};var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
     void Set(string name,object value)=>typeof(SshSession).GetField(name,flags)!.SetValue(session,value);
     Set("client",client);Set("connection",new ConnectionSettings("127.0.0.1","fixture","fixture-only",port));Set("trustedKey",Convert.FromBase64String(c.GetProperty("key").GetString()!));Set("remoteDirectory",directory);
     typeof(SshSession).GetProperty("Server")!.SetValue(session,new ServerInfo{MountReady=true});
@@ -157,6 +157,56 @@ try
         string mounts=await session.ExecuteTextAsync("findmnt -rn -t fuse.davfs -o TARGET || true");
         if(mountClientId.Length>0&&mounts.Contains(mountClientId))throw new Exception("退出后仍残留挂载。");
         Console.WriteLine("MOUNT_CLEANUP_OK");
+    }
+    if (phase == "mount-cloud")
+    {
+        if(!server.CloudReady||!server.MountReady)throw new Exception("联动验收需要已有 CloudCLI 和挂载组件。");
+        string fixture=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0]))!,"cloud-link-"+Guid.NewGuid().ToString("N")[..10]);Directory.CreateDirectory(fixture);
+        string one=Path.Combine(fixture,"one"),two=Path.Combine(fixture,"two");Directory.CreateDirectory(one);Directory.CreateDirectory(two);await File.WriteAllTextAsync(Path.Combine(one,"source.txt"),"cloud-link-local");
+        string remote=server.HomeDirectory+"/cloud-link-verify-"+Guid.NewGuid().ToString("N")[..10];string clientId="";List<string> paths=[];bool unmounted=false;
+        const string check="""
+import base64,hmac,hashlib,json,pathlib,sqlite3,time,urllib.request,sys
+home=pathlib.Path(sys.argv[1]);needle=sys.argv[2]
+c=sqlite3.connect('file:'+str(home/'.local/state/safe-code-cloud/auth.db')+'?mode=ro',uri=True)
+secret=c.execute("SELECT value FROM app_config WHERE key='jwt_secret'").fetchone()[0]
+user=c.execute('SELECT id FROM users WHERE is_active=1 LIMIT 1').fetchone()[0]
+def enc(value):return base64.urlsafe_b64encode(value).rstrip(b'=')
+head=enc(b'{"alg":"HS256","typ":"JWT"}');payload=enc(json.dumps({'userId':user,'iat':int(time.time()),'exp':int(time.time())+120}).encode());message=head+b'.'+payload;token=message+b'.'+enc(hmac.new(secret.encode(),message,hashlib.sha256).digest())
+request=urllib.request.Request('http://127.0.0.1:3001/api/projects',headers={'Authorization':'Bearer '+token.decode()})
+projects=json.load(urllib.request.urlopen(request,timeout=30))
+print(json.dumps({'projects':[{'id':p['projectId'],'name':p['displayName'],'path':p['fullPath']} for p in projects if needle in p['fullPath']],'stored':c.execute('SELECT project_id,project_path,isArchived FROM projects WHERE instr(project_path,?)>0 ORDER BY project_path',(needle,)).fetchall()}))
+""";
+        async Task<JsonElement> Check()=>JsonDocument.Parse(await session.ExecuteTextAsync("python3 -c "+SshSession.Quote(check)+" "+SshSession.Quote(server.HomeDirectory)+" "+SshSession.Quote(clientId))).RootElement.Clone();
+        try
+        {
+            var first=await session.ApplyMountsAsync([new(one,remote+"/one"),new(two,remote+"/two")]);clientId=first.ClientId;paths=first.ManagedPaths??[];
+            if(first.CloudWarning!=null||paths.Count!=2)throw new Exception(first.CloudWarning??"挂载路径缺失。");
+            if(await session.ExecuteTextAsync("cat "+SshSession.Quote(remote+"/one/source.txt"))!="cloud-link-local")throw new Exception("真实挂载读取失败。");
+            var before=await Check();if(before.GetProperty("projects").GetArrayLength()!=2)throw new Exception("原生 CloudCLI API 未列出两组目录。");
+            string ids=before.GetProperty("stored").GetRawText();
+            var second=await session.ApplyMountsAsync([new(two,remote+"/two"),new(one,remote+"/one")]);
+            if(second.CloudWarning!=null||!second.ManagedPaths!.SequenceEqual(paths.AsEnumerable().Reverse()))throw new Exception("改序改变了项目路径。");
+            var reordered=await Check();if(reordered.GetProperty("stored").GetRawText()!=ids)throw new Exception("重复挂载改变了项目 ID。");
+            await session.RequestAsync<ServerInfo>("cloud_setup");if((await Check()).GetProperty("stored").GetRawText()!=ids)throw new Exception("补登记生成重复项目。");
+            Console.WriteLine("CLOUD_NATIVE_API_TWO_PROJECTS_STABLE_IDS_REORDER_AND_OPEN_SYNC_OK");
+            await session.UnmountAsync();unmounted=true;var after=await Check();
+            if(after.GetProperty("projects").GetArrayLength()!=0||after.GetProperty("stored").EnumerateArray().Any(row=>row[2].GetInt32()!=1))throw new Exception("卸载后项目未归档。");
+            var remounted=await session.ApplyMountsAsync([new(one,remote+"/one"),new(two,remote+"/two")]);unmounted=false;
+            if(remounted.CloudWarning!=null||(await Check()).GetProperty("stored").GetRawText()!=ids)throw new Exception("重新挂载未恢复原项目。");
+            await session.UnmountAsync();unmounted=true;Console.WriteLine("CLOUD_UNMOUNT_ARCHIVE_AND_REMOUNT_SAME_IDS_OK");
+            uint refreshPort=await session.ForwardAsync(3001);using var http=new HttpClient();string html=await http.GetStringAsync("http://127.0.0.1:"+refreshPort);
+            if(!html.Contains("data-safe-code-mounts")||!(await http.GetStringAsync("http://127.0.0.1:"+refreshPort+"/safe-code-mounts.js")).Contains("websocket_reconnected"))throw new Exception("CloudCLI 未提供自动刷新组件。");
+            Console.WriteLine("CLOUD_HTTP_REFRESH_ASSETS_OK");
+        }
+        finally
+        {
+            if(!unmounted)await session.UnmountAsync();
+            if(paths.Count>0){
+                string cleanup="import json,sqlite3,sys;c=sqlite3.connect(sys.argv[1]);paths=json.loads(sys.argv[2]);c.execute('BEGIN IMMEDIATE');[(c.execute('DELETE FROM safe_code_mount_projects WHERE project_path=?',(p,)),c.execute('DELETE FROM projects WHERE project_path=? AND NOT EXISTS(SELECT 1 FROM sessions WHERE project_path=?)',(p,p))) for p in paths];c.commit()";
+                await session.ExecuteTextAsync("python3 -c "+SshSession.Quote(cleanup)+" "+SshSession.Quote(server.HomeDirectory+"/.local/state/safe-code-cloud/auth.db")+" "+SshSession.Quote(JsonSerializer.Serialize(paths)));
+            }
+            await session.ExecuteTextAsync("rmdir -- "+SshSession.Quote(remote+"/one")+" "+SshSession.Quote(remote+"/two")+" "+SshSession.Quote(remote));Directory.Delete(fixture,true);
+        }
     }
     if (phase == "cloud")
     {

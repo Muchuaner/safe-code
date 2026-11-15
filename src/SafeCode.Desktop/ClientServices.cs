@@ -14,8 +14,12 @@ internal sealed class UsagePreferences
     public bool Enabled {get;set;}=true;
     public bool DiagnosticsEnabled {get;set;}=true;
     public bool Confirmed {get;set;}
+    public int DiagnosticNoticeVersion {get;set;}
     public string InstallationId {get;set;}="";
+    public string DiagnosticInstallationId {get;set;}="";
 }
+internal sealed record DiagnosticContext(string InstallationId,string SessionId,string OperationId);
+internal sealed record FeedbackContext(DiagnosticContext Correlation,DiagnosticReport Report);
 internal sealed record DownloadedInstaller(string Path,string Digest);
 internal sealed record UpdateInfo(string CurrentVersion,string? Version,string Status,string? Page,bool CanInstall=false);
 internal sealed class ClientServices : IDisposable
@@ -31,7 +35,13 @@ internal sealed class ClientServices : IDisposable
     private bool counted;
     private CancellationTokenSource diagnosticReporting=new();
     private int diagnosticGeneration;
-    private int diagnosticCount;
+    private int diagnosticSuccessCount;
+    private int diagnosticFailureCount;
+    private readonly object diagnosticGate=new();
+    private string diagnosticSessionId=Guid.NewGuid().ToString();
+    private FeedbackContext? latestFailure;
+    private DateTimeOffset latestFailureAt;
+    private FeedbackContext? RecentFailure=>DiagnosticsAllowed&&DateTimeOffset.UtcNow-latestFailureAt<TimeSpan.FromHours(24)?latestFailure:null;
     private readonly SemaphoreSlim diagnosticSlots=new(2,2);
     private readonly string eventId=Guid.NewGuid().ToString();
     private (string Version,string Url,string Digest,long Size)? release;
@@ -47,39 +57,54 @@ internal sealed class ClientServices : IDisposable
         string config=Path.Combine(AppContext.BaseDirectory,"service-endpoints.json");
         try{if(File.Exists(config)){using var doc=JsonDocument.Parse(File.ReadAllText(config));if(doc.RootElement.TryGetProperty("feedbackBaseUrl",out var value)&&Uri.TryCreate(value.GetString(),UriKind.Absolute,out var uri)&&uri.Scheme=="https"&&!uri.IsLoopback&&string.IsNullOrEmpty(uri.UserInfo)&&uri.AbsolutePath=="/"&&string.IsNullOrEmpty(uri.Query)&&string.IsNullOrEmpty(uri.Fragment))endpoint=uri;}}catch(IOException){}catch(JsonException){}catch(InvalidOperationException){}
     }
-    public bool NoticeWasConfirmed=>preferences.Confirmed;
-    public object Preferences()=>new{enabled=preferences.Enabled,confirmed=preferences.Confirmed,diagnosticsEnabled=preferences.DiagnosticsEnabled,serviceAvailable=endpoint!=null,recipient=endpoint?.Host};
+    public bool NoticeWasConfirmed=>preferences.Confirmed&&preferences.DiagnosticNoticeVersion>=2;
+    public object Preferences()=>new{enabled=preferences.Enabled,confirmed=preferences.Confirmed,diagnosticsEnabled=preferences.DiagnosticsEnabled,serviceAvailable=endpoint!=null,recipient=endpoint?.Host,issueId=RecentFailure?.Correlation.OperationId};
     private void Save(){string temp=preferencesPath+".new";File.WriteAllText(temp,JsonSerializer.Serialize(preferences,JsonDefaults.Options));File.Move(temp,preferencesPath,true);}
     public async Task<object> SetConsentAsync(bool enabled,bool confirmed)
     {
         preferences.Enabled=enabled;preferences.Confirmed|=confirmed;
+        if(confirmed)preferences.DiagnosticNoticeVersion=2;
         if(!enabled){reporting.Cancel();reporting.Dispose();reporting=new();preferences.InstallationId="";}
         Save();
         if(enabled&&preferences.Confirmed)await CountLaunchAsync();
         return Preferences();
     }
-    public bool DiagnosticsAllowed=>endpoint!=null&&preferences.Confirmed&&preferences.DiagnosticsEnabled;
+    public bool DiagnosticsAllowed=>endpoint!=null&&NoticeWasConfirmed&&preferences.DiagnosticsEnabled;
     public int DiagnosticGeneration=>diagnosticGeneration;
     public object SetDiagnosticConsent(bool enabled)
     {
         // 默认勾选，保留已明确关闭的选择；声明确认前不发送。
         preferences.DiagnosticsEnabled=enabled;
+        if(!enabled){preferences.DiagnosticInstallationId="";latestFailure=null;diagnosticSessionId=Guid.NewGuid().ToString();}
         diagnosticGeneration++;
         diagnosticReporting.Cancel();diagnosticReporting.Dispose();diagnosticReporting=new();
         try{Save();}catch{preferences.DiagnosticsEnabled=false;throw;}
         return Preferences();
     }
+    private DiagnosticContext Correlation(DiagnosticTrace trace)
+    {
+        if(!Guid.TryParse(preferences.DiagnosticInstallationId,out _)){preferences.DiagnosticInstallationId=Guid.NewGuid().ToString();Save();}
+        return new(preferences.DiagnosticInstallationId,diagnosticSessionId,trace.Id);
+    }
+    public string? RecordFailure(DiagnosticTrace trace,Exception error)
+    {
+        if(DiagnosticTrace.ErrorKind(error)=="cancelled"||!DiagnosticsAllowed||trace.Generation!=diagnosticGeneration)return null;
+        try{latestFailure=new(Correlation(trace),trace.Finish(error));latestFailureAt=DateTimeOffset.UtcNow;return trace.Id;}catch{return null;}
+    }
     public async Task SendDiagnosticAsync(DiagnosticTrace trace,Exception? error,CancellationToken ct)
     {
-        if(!DiagnosticsAllowed||trace.Generation!=diagnosticGeneration||diagnosticCount>=20||!diagnosticSlots.Wait(0))return;
-        diagnosticCount++;
+        if(!DiagnosticsAllowed||trace.Generation!=diagnosticGeneration)return;
+        if(error!=null)RecordFailure(trace,error);
+        // 成功最多两份，失败独享十八份额度；有界等待，避免并发发送时静默丢弃失败。
+        lock(diagnosticGate){if(error==null){if(diagnosticSuccessCount>=2)return;diagnosticSuccessCount++;}else{if(diagnosticFailureCount>=18)return;diagnosticFailureCount++;}}
+        bool acquired=false;
         try
         {
             using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct,diagnosticReporting.Token);
             deadline.CancelAfter(TimeSpan.FromSeconds(12));
             var report=trace.Finish(error);
-            var body=new{schema=1,eventId=Guid.NewGuid().ToString(),version=Version,report};
-            // 同一个 eventId 重试去重；仅内存，不留下本地日志包或离线队列。
+            var body=new{schema=2,eventId=trace.Id,version=Version,context=Correlation(trace),report};
+            await diagnosticSlots.WaitAsync(deadline.Token);acquired=true;
             for(int attempt=0;attempt<2;attempt++)
             {
                 if(!DiagnosticsAllowed||trace.Generation!=diagnosticGeneration||deadline.IsCancellationRequested)return;
@@ -89,7 +114,7 @@ internal sealed class ClientServices : IDisposable
             }
         }
         catch(Exception){} // 诊断发送永远不能改变部署结果或弹出第二个错误。
-        finally{diagnosticSlots.Release();}
+        finally{if(acquired)diagnosticSlots.Release();}
     }
     private async Task CountLaunchAsync()
     {
@@ -109,7 +134,7 @@ internal sealed class ClientServices : IDisposable
     {
         if(endpoint==null)throw new InvalidOperationException("反馈服务尚未启用，请暂时通过 QQ 群反馈。");
         message=message.Trim();if(message.Length<5||message.Length>4000)throw new ArgumentException("反馈内容须为 5–4000 字。");
-        using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/feedback"),new{schema=1,eventId=Guid.NewGuid().ToString(),version=Version,message},JsonDefaults.Options,ct);
+        using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/feedback"),new{schema=2,eventId=Guid.NewGuid().ToString(),version=Version,message,context=RecentFailure},JsonDefaults.Options,ct);
         if(!response.IsSuccessStatusCode)throw new IOException(response.StatusCode==HttpStatusCode.TooManyRequests?"提交较频繁，请稍后重试。":"反馈暂未送达，请稍后重试。");
     }
     public async Task<UpdateInfo> CheckUpdateAsync(bool force,CancellationToken ct)

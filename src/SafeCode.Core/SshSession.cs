@@ -44,7 +44,7 @@ public sealed partial class SshSession : IDisposable
         if (!Regex.IsMatch(settings.Username, @"^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}$")) throw new ArgumentException("用户名格式无效。");
         connection = settings;
         var info = new PasswordConnectionInfo(settings.Host, settings.Port, settings.Username, settings.Password) { Timeout = TimeSpan.FromSeconds(18), RetryAttempts = 2 };
-        client = new SshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(20) };
+        client = new MountSshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(20) };
         HostTrustRequiredException? trustRequired=null;
         client.HostKeyReceived += (_, e) =>
         {
@@ -90,7 +90,7 @@ public sealed partial class SshSession : IDisposable
             try{observedEgressIp=(await RequestAsync<EgressProbe>("egress_probe",null,cancellationToken)).Ip;Server.ObservedEgressIp=observedEgressIp;}catch{Log?.Invoke("出口 IP 暂未确认，可在进阶设置中选择。");}
             return Server;
         }
-        catch { client?.Dispose(); client = null;if(trustRequired!=null)throw trustRequired;throw; }
+        catch { DisposeMountResource(client); client = null;if(trustRequired!=null)throw trustRequired;throw; }
     }
     public static Dictionary<string,string> ParseOsRelease(string input) => input.Split('\n').Where(x => x.Contains('=')).Select(x => x.Split('=', 2)).ToDictionary(x => x[0].Trim(), x => x[1].Trim().Trim('"'));
     private bool VerifyOrConfirm(ConnectionSettings settings, string fingerprint, Func<HostKeyInfo,bool> confirm)
@@ -135,15 +135,19 @@ public sealed partial class SshSession : IDisposable
         if(command.ExitStatus!=0||json==null)throw new InvalidOperationException("无法读取服务器目录，请重试。");
         return JsonSerializer.Deserialize<JsonElement>(json,JsonDefaults.Options);
     }
+    public Task<JsonElement> CreateDirectoryAsync(string path,string name,CancellationToken ct=default)=>RequestAsync<JsonElement>("create_directory",new{path,name},ct);
+
     public async Task<T> RequestAsync<T>(string operation, object? options = null, CancellationToken ct = default)
     {
         Log?.Invoke("正在等待任务通道…");
         await operations.WaitAsync(ct);
         Log?.Invoke("正在建立服务器任务通道…");
         string requestPath = remoteDirectory + "/request-" + Guid.NewGuid().ToString("N") + ".json";
+        string? claudePayloadPath=null;
         try
         {
             if (client?.IsConnected != true) throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
+            if(operation=="claude"){var payload=await PrepareClaudePayloadAsync(ct);options=payload.Options;claudePayloadPath=payload.Path;}
             using (var sftp = MakeSftp())
             {
                 await sftp.ConnectAsync(ct);
@@ -154,13 +158,14 @@ public sealed partial class SshSession : IDisposable
             using var command = client.CreateCommand(prefix + "python3 -u " + Quote(remoteDirectory + "/agent.py") + " " + Quote(requestPath));
             command.CommandTimeout = TimeSpan.FromMinutes(45);
             var execution = command.ExecuteAsync(ct);
-            string? json = null; string? error = null;string? structuredError=null;
+            string? json = null; string? error = null;string? structuredError=null;string? remoteErrorCode=null;
             var stdout = Task.Run(async () =>
             {
                 using var reader = new StreamReader(command.OutputStream, Encoding.UTF8, false, 4096, true);
                 while (await reader.ReadLineAsync(ct) is { } line)
                 {
                     if (line.StartsWith("SC_RESULT:")) json = line[10..];
+                    else if (line.StartsWith("SC_ERROR_CODE:")) remoteErrorCode=line[14..];
                     else if (line.StartsWith("SC_ERROR_JSON:")) structuredError=JsonSerializer.Deserialize<string>(line[14..]);
                     else if (line.StartsWith("SC_ERROR:")) error = line[9..];
                     else Log?.Invoke(line);
@@ -172,7 +177,7 @@ public sealed partial class SshSession : IDisposable
                 while (await reader.ReadLineAsync(ct) is { } line) { error = line; Log?.Invoke(line); }
             }, ct);
             await execution; await Task.WhenAll(stdout, stderr);
-            if (command.ExitStatus != 0 || json == null) throw new InvalidOperationException(structuredError ?? error ?? "远端任务未返回结果，请检查连接与部署日志。");
+            if (command.ExitStatus != 0 || json == null) throw new RemoteOperationException(structuredError ?? error ?? "远端任务未返回结果，请检查连接与部署日志。",remoteErrorCode);
             if(IsLongOperation(operation)&&typeof(T)!=typeof(RemoteJob))
             {
                 var job=JsonSerializer.Deserialize<RemoteJob>(json,JsonDefaults.Options)??throw new InvalidDataException("缺少后台任务标识。");
@@ -196,7 +201,7 @@ public sealed partial class SshSession : IDisposable
         finally
         {
             operations.Release();
-            if(!ct.IsCancellationRequested)_=Task.Run(()=>{try{using var sftp=MakeSftp();sftp.ConnectionInfo.Timeout=TimeSpan.FromSeconds(3);sftp.OperationTimeout=TimeSpan.FromSeconds(2);sftp.Connect();sftp.DeleteFile(requestPath);}catch{}});
+            if(!ct.IsCancellationRequested)_=Task.Run(()=>{try{using var sftp=MakeSftp();sftp.ConnectionInfo.Timeout=TimeSpan.FromSeconds(3);sftp.OperationTimeout=TimeSpan.FromSeconds(2);sftp.Connect();sftp.DeleteFile(requestPath);if(claudePayloadPath!=null)sftp.DeleteFile(claudePayloadPath);}catch{}});
         }
     }
     private static bool IsLongOperation(string operation)=>operation is "account" or "localization" or "desktop" or "chrome" or "input" or "claude" or "ssh" or "cloud" or "mount_install";
@@ -210,7 +215,7 @@ public sealed partial class SshSession : IDisposable
             string json=output.Split('\n').LastOrDefault(x=>x.StartsWith("SC_RESULT:"))?[10..]??throw new InvalidDataException("后台任务未返回监控结果。");
             var poll=JsonSerializer.Deserialize<JobPoll>(json,JsonDefaults.Options)??throw new InvalidDataException("任务监控数据无效。");
             foreach(string line in poll.Lines)Log?.Invoke(line);offset=poll.NextOffset;
-            if(poll.Error!=null)throw new InvalidOperationException(poll.Error);
+            if(poll.Error!=null)throw new RemoteOperationException(poll.Error,poll.ErrorCode);
             if(poll.Done&&poll.Value is {} value)return value.GetRawText();
             await Task.Delay(500,ct);
         }
@@ -292,12 +297,13 @@ public sealed partial class SshSession : IDisposable
     public static string Quote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
     public void Dispose()
     {
+        hostLifetime?.Cancel();CloseHostTunnel();hostLifetime?.Dispose();hostLifetime=null;
         foreach (var tunnel in tunnels) { try { tunnel.Dispose(); } catch { } }
         tunnels.Clear();
-        fileForward?.Dispose(); fileServer?.Dispose();
+        mountLifetime.Cancel();DisposeMountResource(fileForward);DisposeMountResource(mountTransport);DisposeMountResource(fileServer);
         if (client?.IsConnected == true && remoteDirectory.StartsWith("/tmp/safe-code."))
         { try { using var command = client.CreateCommand("rm -rf -- " + Quote(remoteDirectory)); command.CommandTimeout=TimeSpan.FromSeconds(2);command.Execute(); } catch { } }
-        client?.Dispose(); client = null;
+        DisposeMountResource(client); client = null;
         connection = null;
     }
 }

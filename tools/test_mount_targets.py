@@ -38,4 +38,14 @@ class Targets(unittest.TestCase):
         with patch.object(agent,'account',return_value={'username':'fixture'}),patch.object(agent,'home',return_value=self.home),patch.object(agent,'package_installed',return_value=True),patch.object(agent,'log'),patch.object(agent,'STATE',self.base),patch.object(agent,'user_files',side_effect=self.helper),patch.object(agent,'remove_mounts') as remove,patch.object(agent,'run',return_value=subprocess.CompletedProcess([],0,'127.0.0.1:12345','')):
             with self.assertRaisesRegex(RuntimeError,'服务器目录不是空目录'):agent.apply_mounts({'clientId':'a'*20,'port':12345,'username':'safecode','password':'b'*48,'mappings':[{'remote':str(target)}]})
             remove.assert_not_called()
+    def test_create_empty_folder_and_reject_existing_without_touching_files(self):
+        value=json.loads(self.helper('mkdir','Project-2026 中文').stdout);self.assertEqual(value['path'],str(self.home/'Project-2026 中文'));self.assertEqual(list(Path(value['path']).iterdir()),[])
+        with self.assertRaisesRegex(RuntimeError,'同名'):self.helper('mkdir','Project-2026 中文')
+    def test_create_folder_rejects_escape_and_path_as_name(self):
+        with patch.object(agent,'home',return_value=self.home),patch.object(agent,'user_files',side_effect=self.helper):
+            for name in ['../outside','a/b','..','a\\b']:
+                with self.assertRaises(RuntimeError):agent.create_directory({'path':str(self.home),'name':name})
+            value=agent.create_directory({'path':str(self.home),'name':'new-empty'});self.assertTrue(Path(value['path']).is_dir())
+            (self.home/'link').symlink_to(self.destination)
+            with self.assertRaises(RuntimeError):agent.create_directory({'path':str(self.home/'link'),'name':'escape'})
 if __name__=='__main__':unittest.main()

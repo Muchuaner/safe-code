@@ -27,7 +27,7 @@ let states = [];
 let taskLogs = [];
 let accountDraftPending=false;
 const tasks = [
-  ['设置工作用户和机器名称', '创建开发账户，设置独立密码与机器名称。'],
+  ['更新系统并设置工作用户', '先等待系统更新、更新软件包，再设置工作用户和机器名称。'],
   ['本土化设置', '按出口 IP 所在地匹配时区与系统语言。'],
   ['安装虚拟桌面', '配置 XFCE 与远程桌面，保留断线后的工作状态。'],
   ['安装 Chrome', '安装 Chrome 浏览器，配置桌面启动入口。'],
@@ -99,16 +99,34 @@ function resetLogin(){
   $('#connect').textContent='连接服务器';
   $('#connection-message').className='connection-message';$('#connection-message').textContent='';
 }
+function isDeveloperHost(host){return ['127.0.0.1','localhost','::1','[::1]'].includes(host.toLowerCase());}
+function enterDeveloperPreview(){
+  stopWork();serverConnection={ingressIp:'127.0.0.1',egressIp:'127.0.0.1'};
+  $('#password').value='';$('#server-ingress').textContent='127.0.0.1';$('#server-address').textContent='127.0.0.1';$('#server-user').textContent='developer';
+  states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');detectedRegion='us_ny';
+  $('#rating-state').textContent='示例数据';$('#ip-location').textContent='开发预览';$('#ip-score').textContent='—';$('#score-unit').textContent='';
+  let banner=$('#developer-preview');if(!banner){banner=document.createElement('div');banner.id='developer-preview';banner.className='developer-preview';$('.window>.titlebar').insertBefore(banner,$('.window-controls'));}
+  banner.replaceChildren(document.createTextNode('开发预览 · 未连接服务器 '));
+  const back=document.createElement('button');back.className='text-button';back.textContent='返回登录';back.onclick=()=>location.reload();banner.append(back);
+  renderTasks();resetLogin();switchMode('deployment');showScreen('workspace');
+}
+// 预览地址不需要填写用户名或密码。
+$('#ip').addEventListener('input',()=>{const preview=isDeveloperHost($('#ip').value.trim());$('#username').required=!preview;$('#password').required=!preview;});
 $('#login-form').onsubmit=event=>{
   event.preventDefault();if(window.__safeCodeDesktop){showAppMessage('客户端核心模块未就绪，无法连接。');return;}const ip=$('#ip').value.trim();const username=$('#username').value.trim();
+  if(isDeveloperHost(ip)){enterDeveloperPreview();return;}
   if(!ip || !username){$('#connection-message').textContent='请填写 IP 地址和用户名。';$('#connection-message').className='connection-message error';return;}
-  $('#login-form').querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#back').disabled=true;
-  $('#connect').textContent='正在连接…';$('#connection-message').textContent='正在建立 SSH 连接，请稍候…';$('#connection-message').className='connection-message connecting';
-  connectionTimer=setTimeout(()=>{
-    serverConnection = { ingressIp: ip, egressIp: ip };
-    $('#password').value='';$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp;$('#server-user').textContent=username;
-    states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');selecting=false;selectedTasks.clear();renderTasks();resetLogin();switchMode('deployment');$('#maintenance-result').close();showScreen('workspace');queryIpInfo(serverConnection.egressIp);
-  },1400);
+  const startConnect=()=>{
+    $('#login-form').querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#back').disabled=true;
+    $('#connect').textContent='正在连接…';$('#connection-message').textContent='正在建立 SSH 连接，请稍候…';$('#connection-message').className='connection-message connecting';
+    connectionTimer=setTimeout(()=>{
+      serverConnection = { ingressIp: ip, egressIp: ip };
+      $('#password').value='';$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp;$('#server-user').textContent=username;
+      states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');selecting=false;selectedTasks.clear();renderTasks();resetLogin();switchMode('deployment');$('#maintenance-result').close();showScreen('workspace');queryIpInfo(serverConnection.egressIp);
+    },1400);
+  };
+  if(window.openGuideDialog)window.openGuideDialog(startConnect);
+  else startConnect();
 };
 function renderTasks(){
   $('#steps').replaceChildren(...tasks.map(([title,description],i)=>{
@@ -225,7 +243,7 @@ function installAdvanced(kind){
   button.disabled=true;button.textContent='安装中…';$('#'+kind+'-state').textContent='正在安装组件…';
   const timer=setTimeout(()=>{
     advancedTimers.delete(timer);button.textContent='已安装';$('#'+kind+'-state').textContent='已就绪';
-    if(kind==='cloud')$('#open-cloud').disabled=false;
+    if(kind==='cloud'){$('#open-cloud').disabled=false;if($('#open-cloud-remote'))$('#open-cloud-remote').disabled=false;}
   },1800);advancedTimers.add(timer);
 }
 $('#install-mount').onclick=()=>installAdvanced('mount');
@@ -346,7 +364,7 @@ $('#ip-policy-form').onsubmit=e=>{
 // 项目与社区链接。VPS 推广入口单独标注 sponsored。
 const resourceLinks = {
   vps: 'https://www.rainyun.com/Agentom_',
-  qq: 'https://qm.qq.com/q/cyUWAwYKQg',
+  qq: 'https://qm.qq.com/q/Bzd5aqxW36',
   github: 'https://github.com/Muchuaner/safe-code'
 };
 for(const link of document.querySelectorAll('[data-resource]')){
@@ -376,5 +394,152 @@ function appDialog(message,options={}){
   }));appDialogQueue=next.catch(()=>{});return next;
 }
 function showAppMessage(message,options={}){return appDialog(String(message),options);}
+
+function initCloudRemoteDialog(){
+  const dialog=$('#cloud-remote-dialog');
+  if(!dialog)return;
+  const warningView=$('#cloud-remote-warning-view');
+  const logView=$('#cloud-remote-log-view');
+  const successView=$('#cloud-remote-success-view');
+  const closeBtn=$('#close-cloud-remote');
+  const cancelBtn=$('#cloud-remote-cancel');
+  const confirmBtn=$('#cloud-remote-confirm');
+  const copyBtn=$('#cloud-remote-copy-btn');
+  const doneBtn=$('#cloud-remote-done-btn');
+  const toggleLogBtn=$('#cloud-remote-toggle-log');
+  const urlLink=$('#cloud-remote-url-link');
+  const logOutput=$('#cloud-remote-log-output');
+
+  function showView(view){
+    warningView.hidden=view!=='warning';
+    logView.hidden=view!=='log';
+    successView.hidden=view!=='success';
+  }
+
+  window.openCloudRemoteDialog=function(initialUrl){
+    if(initialUrl){showSuccess(initialUrl);}
+    else{showView('warning');}
+    dialog.showModal();
+  };
+
+  function copyUrl(){
+    const url=urlLink.href||urlLink.textContent;
+    if(!url)return;
+    const finish=()=>{const orig=copyBtn.textContent;copyBtn.textContent='已复制 √';setTimeout(()=>{copyBtn.textContent=orig;},2000);};
+    if(navigator.clipboard?.writeText){navigator.clipboard.writeText(url).then(finish).catch(()=>{const i=document.createElement('input');i.value=url;document.body.appendChild(i);i.select();document.execCommand('copy');i.remove();finish();});}
+    else{const i=document.createElement('input');i.value=url;document.body.appendChild(i);i.select();document.execCommand('copy');i.remove();finish();}
+  }
+
+  function showSuccess(url){
+    showView('success');
+    urlLink.href=url;
+    urlLink.textContent=url;
+    const qrContainer=$('#cloud-remote-qrcode');
+    qrContainer.innerHTML='';
+    if(typeof qrcode!=='undefined'){
+      try{
+        const qr=qrcode(0,'M');
+        qr.addData(url);
+        qr.make();
+        qrContainer.innerHTML=qr.createSvgTag({cellSize:4,margin:8,scalable:true});
+        const svg=qrContainer.querySelector('svg');
+        if(svg){svg.style.width='160px';svg.style.height='160px';svg.style.display='block';}
+      }catch(e){qrContainer.textContent='二维码生成失败';}
+    }
+  }
+
+  window.showCloudRemoteSuccess=showSuccess;
+  closeBtn.onclick=()=>dialog.close();
+  cancelBtn.onclick=()=>dialog.close();
+  doneBtn.onclick=()=>dialog.close();
+  copyBtn.onclick=copyUrl;
+
+  dialog.addEventListener('cancel',()=>{onGuideConfirm=null;});
+  dialog.addEventListener('keydown',e=>{
+    if((e.ctrlKey||e.metaKey)&&(e.key==='c'||e.key==='C')){
+      const sel=window.getSelection().toString();
+      if(!sel&&!successView.hidden){e.preventDefault();copyUrl();}
+    }
+  });
+
+  toggleLogBtn.onclick=()=>{
+    if(logView.hidden){logView.hidden=false;toggleLogBtn.textContent='隐藏配置日志';}
+    else{logView.hidden=true;toggleLogBtn.textContent='查看配置日志';}
+  };
+
+  if(!window.__safeCodeDesktop){
+    confirmBtn.onclick=async()=>{
+      showView('log');
+      logOutput.textContent='已确认风险，准备配置公网访问…\n';
+      const steps=[
+        '正在检查 CloudCLI 安装状态…',
+        '正在配置 CloudCLI 允许公网访问 (0.0.0.0:3001)…',
+        '正在重启 CloudCLI 服务以应用配置…',
+        '正在检查防火墙配置…',
+        '正在获取公网访问地址…',
+        'CloudCLI 已成功开放公网访问：http://123.45.67.89:3001',
+        '提示：请确保网页密码安全。'
+      ];
+      for(const line of steps){
+        await new Promise(r=>setTimeout(r,350));
+        logOutput.textContent+=line+'\n';
+        logOutput.scrollTop=logOutput.scrollHeight;
+      }
+      await new Promise(r=>setTimeout(r,400));
+      showSuccess('http://123.45.67.89:3001');
+    };
+    $('#open-cloud-remote').onclick=()=>window.openCloudRemoteDialog();
+  }
+}
+initCloudRemoteDialog();
+
+let onGuideConfirm=null;
+function initGuideDialog(){
+  const dialog=$('#guide-dialog');
+  if(!dialog)return;
+  const footer=dialog.querySelector('.guide-footer-actions');dialog.append(footer);
+  const cancelBtn=$('#guide-cancel-btn');
+  const doneBtn=$('#guide-done-btn');
+  const closeBtn=$('#close-guide');
+
+  const open=(onConfirm)=>{
+    onGuideConfirm=typeof onConfirm==='function'?onConfirm:null;
+    if(onGuideConfirm){
+      if(cancelBtn)cancelBtn.hidden=false;
+      if(doneBtn)doneBtn.textContent='我已知晓，继续连接';
+    }else{
+      if(cancelBtn)cancelBtn.hidden=true;
+      if(doneBtn)doneBtn.textContent='我知道了';
+    }
+    dialog.showModal();
+  };
+  window.openGuideDialog=open;
+
+  const close=()=>{
+    dialog.close();
+    onGuideConfirm=null;
+  };
+
+  $('#header-guide-link')?.addEventListener('click',()=>window.openGuideDialog());
+  $('#bottom-guide-link')?.addEventListener('click',()=>window.openGuideDialog());
+  $('#notice-guide-link')?.addEventListener('click',()=>window.openGuideDialog());
+  $('#cloud-guide-link')?.addEventListener('click',()=>window.openGuideDialog());
+  closeBtn?.addEventListener('click',close);
+  cancelBtn?.addEventListener('click',close);
+  doneBtn?.addEventListener('click',()=>{
+    const cb=onGuideConfirm;
+    dialog.close();
+    onGuideConfirm=null;
+    if(cb)cb();
+  });
+  dialog.addEventListener('cancel',()=>{onGuideConfirm=null;});
+  dialog.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&doneBtn&&!doneBtn.disabled){
+      e.preventDefault();
+      doneBtn.click();
+    }
+  });
+}
+initGuideDialog();
 
 if(!window.__safeCodeDesktop)showScreen('notice');

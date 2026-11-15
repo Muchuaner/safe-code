@@ -1,27 +1,31 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using SafeCode.Core;
+using Renci.SshNet.Common;
+using System.Net.Sockets;
 
 namespace SafeCode.Desktop;
 
 // 诊断只输出固定词表，原始日志、异常文本、堆栈和请求参数从不进入报告。
 internal sealed record DiagnosticSignal(int Seconds,string Code);
-internal sealed record DiagnosticReport(string Operation,string Outcome,string ErrorKind,string FailureSite,int DurationSeconds,DiagnosticSignal[] Signals,int OmittedLines);
+internal sealed record DiagnosticReport(string Operation,string Outcome,string ErrorKind,string FailureSite,int DurationSeconds,DiagnosticSignal[] Signals,int OmittedLines,string Stage);
 internal sealed class DiagnosticTrace(string operation,int generation)
 {
-    internal static readonly string[] Operations=["account","localization","desktop","chrome","input","claude","ssh","cloud","mount_install","mount_apply","connection","ip_policy"];
+    internal static readonly string[] Operations=["account","localization","desktop","chrome","input","claude","ssh","cloud","mount_install","mount_apply","connection","ip_policy","directory_list"];
     private readonly Stopwatch clock=Stopwatch.StartNew();
     private readonly List<DiagnosticSignal> signals=[];
     private readonly object gate=new();
     private int omitted;
     public string Operation=>operation;
+    public string Id {get;}=Guid.NewGuid().ToString();
     public int Generation=>generation;
     public static string? OperationFor(string rpc,JsonElement args)
     {
         string? value=rpc switch{
             "deploy"=>args.ValueKind==JsonValueKind.Object&&args.TryGetProperty("step",out var step)&&step.ValueKind==JsonValueKind.String?step.GetString():null,
             "job.resume"=>args.ValueKind==JsonValueKind.Object&&args.TryGetProperty("operation",out var op)&&op.ValueKind==JsonValueKind.String?op.GetString():null,
-            "cloud.install"=>"cloud","mount.install"=>"mount_install","mount.apply"=>"mount_apply","connect"=>"connection","ip.apply"=>"ip_policy",_=>null};
+            "folder.list"=>"directory_list","cloud.install"=>"cloud","mount.install"=>"mount_install","mount.apply"=>"mount_apply","connect"=>"connection","ip.apply"=>"ip_policy",_=>null};
         return Operations.Contains(value)?value:null;
     }
     private int Seconds=>(int)Math.Clamp(clock.Elapsed.TotalSeconds,0,86400);
@@ -33,8 +37,8 @@ internal sealed class DiagnosticTrace(string operation,int generation)
     internal static string? ClassifyLine(string line)
     {
         // 即使文本含有凭据，也只返回下面的常量，不拼接任何输入片段。
-        if(line.Contains("lock-frontend",StringComparison.OrdinalIgnoreCase)||line.Contains("Waiting for cache lock",StringComparison.OrdinalIgnoreCase))return "package_lock_wait";
-        if(line.Contains("Could not resolve",StringComparison.OrdinalIgnoreCase)||line.Contains("Temporary failure resolving",StringComparison.OrdinalIgnoreCase))return "dns_failure";
+        if(line.Contains("系统正在更新，正在等待",StringComparison.Ordinal)||line.Contains("lock-frontend",StringComparison.OrdinalIgnoreCase)||line.Contains("Waiting for cache lock",StringComparison.OrdinalIgnoreCase))return "package_lock_wait";
+        if(line.Contains("DNS 域名解析失败",StringComparison.Ordinal)||line.Contains("Could not resolve",StringComparison.OrdinalIgnoreCase)||line.Contains("Temporary failure resolving",StringComparison.OrdinalIgnoreCase))return "dns_failure";
         if(line.Contains("No space left on device",StringComparison.OrdinalIgnoreCase))return "disk_full";
         if(line.Contains("Failed to fetch",StringComparison.OrdinalIgnoreCase))return "package_fetch_failed";
         if(line.Contains("dpkg was interrupted",StringComparison.OrdinalIgnoreCase))return "package_interrupted";
@@ -63,8 +67,8 @@ internal sealed class DiagnosticTrace(string operation,int generation)
         }
         return "unknown";
     }
-    internal static string ErrorKind(Exception? error)=>error switch{
-        null=>"none",OperationCanceledException=>"cancelled",DirectoryNotFoundException=>"directory_not_found",
+    internal static string ErrorKind(Exception? error)=>error?.GetType()==typeof(InvalidOperationException)&&error.InnerException!=null?ErrorKind(error.InnerException):error switch{
+        null=>"none",RemoteOperationException remote=>remote.Code,JsonException=>"json_invalid",SshAuthenticationException=>"ssh_auth_failed",SshOperationTimeoutException=>"ssh_timeout",SshConnectionException=>"ssh_connection_failed",SocketException=>"network_error",OperationCanceledException=>"cancelled",DirectoryNotFoundException=>"directory_not_found",
         FileNotFoundException=>"file_not_found",UnauthorizedAccessException=>"access_denied",TimeoutException=>"timeout",
         System.Security.Cryptography.CryptographicException=>"crypto_error",System.Net.Http.HttpRequestException=>"http_error",
         IOException=>"io_error",ArgumentException=>"invalid_argument",_=>"operation_failed"};
@@ -74,6 +78,6 @@ internal sealed class DiagnosticTrace(string operation,int generation)
         string kind=ErrorKind(error);
         string? signal=error==null?null:ClassifyLine(error.Message);
         if(signal!=null){Observe(error!.Message);kind=signal;}
-        lock(gate)return new(operation,error==null?"success":error is OperationCanceledException?"cancelled":"failure",kind,FailureSite(error),Seconds,signals.ToArray(),omitted);
+        lock(gate)return new(operation,error==null?"success":kind=="cancelled"?"cancelled":"failure",kind,FailureSite(error)=="unknown"?(operation=="connection"?"connection":operation is "mount_apply" or "directory_list"?"directory_mount":"unknown"):FailureSite(error),Seconds,signals.ToArray(),omitted,signals.LastOrDefault()?.Code??"started");
     }
 }

@@ -33,7 +33,12 @@ public sealed class MainWindow : Window
     private readonly System.Windows.Threading.DispatcherTimer logTimer=new(){Interval=TimeSpan.FromMilliseconds(120)};
     private string activeStep = "";
     private bool deploying;
+    private GuideWindow? guideWindow;
     private bool closingApproved;
+    private bool exitRequested,exitInProgress;
+    private MountTray? mountTray;
+    private WindowsHostControl? hostControl;
+    private ClaudeCodexBridge? claudeBridge;
     private string? acceptanceFingerprint;
     private readonly string[] arguments;
     private readonly ConnectionSettings? supportSettings;
@@ -69,17 +74,33 @@ public sealed class MainWindow : Window
         Content = browser;
         logTimer.Tick+=async(_,_)=>await FlushLogsAsync();logTimer.Start();
         Loaded += async (_, _) => await InitializeAsync();
+        if(!IsAcceptance)
+        {
+            mountTray=new MountTray(this,()=>session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),ShowMainWindow,async()=>{try{if(session!=null)await Task.Run(()=>session.RecoverMountsAsync(lifetime.Token),lifetime.Token);}catch(Exception error){MessageBox.Show(this,error.Message,"挂载守护");}},()=>{exitRequested=true;Close();},PublishMountStatus,()=>hostControl?.Status,()=>claudeBridge?.Running==true);
+            StateChanged+=(_,_)=>{if(WindowState==WindowState.Minimized){ShowInTaskbar=false;Hide();}};
+        }
         Closing += async (_, e) =>
         {
-            if (!closingApproved && session?.HasMounts == true)
+            if(!closingApproved&&!IsAcceptance&&!exitRequested&&(session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true||deploying))
+            {e.Cancel=true;ShowInTaskbar=false;Hide();mountTray?.NotifyHidden();return;}
+            if(!closingApproved&&(deploying||maintenanceOperations>0))
+            {e.Cancel=true;exitRequested=false;ShowMainWindow();MessageBox.Show(this,"任务正在执行，请等待完成后退出。","Safe Code");return;}
+            if(!closingApproved&&(session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true))
             {
-                e.Cancel = true;
-                try { await session.UnmountAsync(); closingApproved = true; Close(); }
-                catch (Exception error) { MessageBox.Show(this,"本地目录仍在同步，窗口暂未关闭。请关闭远端正在使用的文件后重试。\n"+error.Message,"目录卸载失败",MessageBoxButton.OK,MessageBoxImage.Warning); }
+                e.Cancel=true;if(exitInProgress)return;exitInProgress=true;
+                try{if(claudeBridge?.Running==true)await claudeBridge.StopAsync(lifetime.Token);if(hostControl?.Enabled==true)await hostControl.DisableAsync(lifetime.Token);if(session?.HasMounts==true)await Task.Run(()=>session.UnmountAsync(lifetime.Token));closingApproved=true;Close();}
+                catch(Exception error){exitRequested=false;ShowMainWindow();MessageBox.Show(this,"尚未确认所有文件同步完成，已保留挂载守护。请恢复连接或关闭远端正在使用的文件后重试。\n"+error.Message,"暂未退出",MessageBoxButton.OK,MessageBoxImage.Warning);}
+                finally{exitInProgress=false;}
                 return;
             }
-            logTimer.Stop();lifetime.Cancel(); services.Dispose();clients.Dispose(); session?.Dispose(); browser.Dispose();
+            claudeBridge?.Dispose();hostControl?.Dispose();mountTray?.Dispose();logTimer.Stop();lifetime.Cancel();services.Dispose();clients.Dispose();session?.Dispose();browser.Dispose();
         };
+    }
+    private void ShowMainWindow(){ShowInTaskbar=true;Show();WindowState=WindowState.Normal;Activate();}
+    private void PublishMountStatus(MountStatus status)
+    {
+        if(browser.CoreWebView2!=null&&!lifetime.IsCancellationRequested)_=Publish();
+        async Task Publish(){try{await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeMountStatus?.("+JsonSerializer.Serialize(status,JsonDefaults.Options)+")");}catch{}}
     }
     private async Task InitializeAsync()
     {
@@ -117,7 +138,7 @@ public sealed class MainWindow : Window
             {
                 if (e.Uri.StartsWith("https://safe-code.local/", StringComparison.Ordinal)) return;
                 e.Cancel = true;
-                if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) && uri.Scheme == "https") WindowsClients.OpenUrl(e.Uri);
+                if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) && (uri.Scheme == "https" || uri.Scheme == "http")) WindowsClients.OpenUrl(e.Uri);
             };
             browser.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; try { WindowsClients.OpenUrl(e.Uri); } catch { } };
             browser.CoreWebView2.WebMessageReceived += OnMessage;
@@ -145,7 +166,7 @@ public sealed class MainWindow : Window
             if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","RPC "+operation+"\n");
             var args = root.TryGetProperty("args", out var value) ? value : default;
             if(installingUpdate)throw new InvalidOperationException("正在准备安装更新，请稍候。");
-            bool maintenance=operation is "cloud.install" or "mount.install" or "mount.apply" or "ip.apply" or "terminal";
+            bool maintenance=operation is "cloud.install" or "cloud.expose" or "mount.install" or "mount.apply" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "bridge.start" or "bridge.stop";
             if(maintenance)maintenanceOperations++;
             if(!IsAcceptance&&services.DiagnosticsAllowed)
             {
@@ -157,7 +178,7 @@ public sealed class MainWindow : Window
             await FlushLogsAsync();
             await RespondAsync(id, answer, null);
         }
-        catch (Exception error) { diagnosticError=error;await RespondAsync(id, null, error.Message); }
+        catch (Exception error) { diagnosticError=error;string? issue=diagnostic==null?null:services.RecordFailure(diagnostic,error);await RespondAsync(id, null, error.Message+(issue==null?"":"\n问题编号："+issue)); }
         finally
         {
             if(diagnostic!=null)
@@ -172,6 +193,33 @@ public sealed class MainWindow : Window
         string Read(string key, string fallback = "") => args.ValueKind == JsonValueKind.Object && args.TryGetProperty(key, out var value) ? value.GetString() ?? fallback : fallback;
         switch (operation)
         {
+            case "bridge.status": claudeBridge??=new ClaudeCodexBridge(dataDirectory);return await claudeBridge.RefreshAsync(lifetime.Token);
+            case "bridge.start":
+                if(!args.TryGetProperty("thirdPartyAccepted",out var accepted)||!accepted.GetBoolean())throw new InvalidOperationException("请先确认第三方适配器和数据处理说明。");
+                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                claudeBridge??=new ClaudeCodexBridge(dataDirectory);deploying=true;activeStep="codex_bridge";
+                try{return await claudeBridge.StartAsync(RequireSession(),args.GetProperty("port").GetInt32(),Read("model").Trim(),args.TryGetProperty("writable",out var writable)&&writable.GetBoolean(),lifetime.Token);}finally{deploying=false;activeStep="";}
+            case "bridge.stop":
+                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");deploying=true;activeStep="codex_bridge";
+                try{return claudeBridge==null?new ClaudeCodexStatus(false,false,false,18797,"sonnet",false,"未启动"):await claudeBridge.StopAsync(lifetime.Token);}finally{deploying=false;activeStep="";}
+            case "bridge.copy-config": if(claudeBridge==null)throw new InvalidOperationException("请先启动适配器。");Clipboard.SetText(claudeBridge.Configuration);return true;
+            case "bridge.copy-key": if(claudeBridge==null)throw new InvalidOperationException("请先启动适配器。");Clipboard.SetText(claudeBridge.Token);return true;
+            case "host.status": hostControl??=new WindowsHostControl(dataDirectory);return hostControl.Status;
+            case "host.enable":
+                if(!args.TryGetProperty("riskAccepted",out var risk)||!risk.GetBoolean())throw new InvalidOperationException("请先阅读并确认本机远程控制权限说明。");
+                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                hostControl??=new WindowsHostControl(dataDirectory);deploying=true;activeStep="host_enable";
+                try{return await hostControl.EnableAsync(RequireSession(),Read("alias"),lifetime.Token);}finally{deploying=false;activeStep="";}
+            case "host.disable":
+                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                return hostControl==null?new HostControlStatus(false,"disabled","","","未启用"):await hostControl.DisableAsync(lifetime.Token);
+            case "guide.open":
+                if(guideWindow!=null){guideWindow.Activate();return false;}
+                var guide=new GuideWindow(browser.CoreWebView2.Environment,args.TryGetProperty("connecting",out var guideConnecting)&&guideConnecting.GetBoolean()){Owner=this};
+                guideWindow=guide;try{return await guide.OpenAsync();}finally{guideWindow=null;}
+            case "preview.begin":
+                if(connectionPending||deploying||maintenanceOperations>0||session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true)throw new InvalidOperationException("请先结束当前操作并卸载目录，再进入开发预览。");
+                connecting?.Cancel();pendingHostTrust=null;clients.Dispose();session?.Dispose();session=null;return true;
             case "window.resize":
                 Width = args.GetProperty("wide").GetBoolean() ? 740 : 360; Height = args.GetProperty("wide").GetBoolean() ? 634 : 536;
                 Left = Math.Max(0, (SystemParameters.WorkArea.Width - Width) / 2); Top = Math.Max(0, (SystemParameters.WorkArea.Height - Height) / 2); return true;
@@ -192,11 +240,25 @@ public sealed class MainWindow : Window
                 if(deploying||maintenanceOperations>0)throw new InvalidOperationException("请等待当前操作完成后安装更新。");
                 if(downloadedUpdate==null||!File.Exists(downloadedUpdate.Path))throw new InvalidOperationException("请先下载并校验安装包。");
                 installingUpdate=true;
-                try{await ClientServices.VerifyInstallerAsync(downloadedUpdate,lifetime.Token);if(session?.HasMounts==true)await session.UnmountAsync();
+                try{await ClientServices.VerifyInstallerAsync(downloadedUpdate,lifetime.Token);if(claudeBridge?.Running==true)await claudeBridge.StopAsync();if(hostControl?.Enabled==true)await hostControl.DisableAsync();if(session?.HasMounts==true)await session.UnmountAsync();
                 Process.Start(new ProcessStartInfo(downloadedUpdate.Path){UseShellExecute=true});closingApproved=true;Close();return true;}
                 catch{installingUpdate=false;throw;}
             case "login.load": return LocalSecrets.Load();
             case "pickFolder": var dialog = new OpenFolderDialog { Title = "选择要挂载到 VPS 的本地目录", InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+            case "acceptance.guide":
+                if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
+                foreach(var action in new[]{"confirm","cancel","close"})
+                {
+                    var testGuide=new GuideWindow(browser.CoreWebView2.Environment,true){Owner=this};
+                    var completed=testGuide.OpenAsync();
+                    try{
+                        if(testGuide.WindowStyle==WindowStyle.None||!IsEnabled)throw new InvalidOperationException("指南不是独立的系统窗口。");
+                        double previous=Left;testGuide.Left+=20;if(Left!=previous)throw new InvalidOperationException("拖动指南改变了主窗口。");
+                        testGuide.Height=350;await testGuide.VerifyContentAsync(action);
+                        if(await completed!=(action=="confirm"))throw new InvalidOperationException("指南关闭结果错误。");
+                    }finally{testGuide.Close();}
+                }
+                return new{independentWindow=true,buttonsVisible=true,confirm=true,cancel=true,systemClose=true};
             case "acceptance.capture":
                 if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
                 string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services"&&tag!="loading"&&tag!="error"&&tag!="advanced"&&tag!="trust"&&tag!="resolution"&&tag!="draft"&&tag!="install"&&tag!="folder"&&tag!="maintenance"&&tag!="ip"&&tag!="update")throw new ArgumentException("截图标识无效。");
@@ -228,9 +290,10 @@ public sealed class MainWindow : Window
                 if(pendingHostTrust is not {} challenge||challenge.Token!=Read("token"))throw new InvalidOperationException("服务器身份确认已失效，请重新连接。");
                 new HostTrustStore(dataDirectory).Accept(challenge.Key);pendingHostTrust=null;return true;
             case "notice.state":
-                string noticePath=Path.Combine(dataDirectory,"notice-accepted-v1");bool noticeAccepted=File.Exists(noticePath)||services.NoticeWasConfirmed;if(noticeAccepted&&!File.Exists(noticePath))File.WriteAllText(noticePath,DateTimeOffset.UtcNow.ToString("O"));return new{accepted=noticeAccepted};
-            case "notice.accept": File.WriteAllText(Path.Combine(dataDirectory,"notice-accepted-v1"),DateTimeOffset.UtcNow.ToString("O"));return true;
+                string noticePath=Path.Combine(dataDirectory,"notice-accepted-v2");bool noticeAccepted=File.Exists(noticePath)||services.NoticeWasConfirmed;if(noticeAccepted&&!File.Exists(noticePath))File.WriteAllText(noticePath,DateTimeOffset.UtcNow.ToString("O"));return new{accepted=noticeAccepted};
+            case "notice.accept": File.WriteAllText(Path.Combine(dataDirectory,"notice-accepted-v2"),DateTimeOffset.UtcNow.ToString("O"));return true;
             case "connect":
+                if(session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true)throw new InvalidOperationException("正在保护挂载目录或本机控制通道，请先停用并安全卸载再更换连接。");
                 if(connectionPending)throw new InvalidOperationException("连接正在处理中，请稍候。");
                 connectionPending=true;try{connecting?.Dispose();connecting=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);connecting.CancelAfter(TimeSpan.FromSeconds(90));
                 session?.Dispose(); session = new SshSession(dataDirectory);
@@ -240,7 +303,7 @@ public sealed class MainWindow : Window
                     var current=session;var server=await Task.Run(()=>current.ConnectAsync(settings,host=>acceptanceFingerprint!=null&&acceptanceFingerprint==host.Fingerprint,connecting.Token),connecting.Token);
                     pendingHostTrust=null;LocalSecrets.Save(settings);return new{ready=true,server};
                 }catch(HostTrustRequiredException error){string token=Guid.NewGuid().ToString("N");pendingHostTrust=(token,error.Key);return new{requiresTrust=true,token,key=error.Key};}
-                catch(Exception error){pendingHostTrust=null;throw new InvalidOperationException(ConnectionErrors.Describe(error));}
+                catch(Exception error){pendingHostTrust=null;throw new InvalidOperationException(ConnectionErrors.Describe(error),error);}
                 finally{connectionPending=false;}
 
             case "job.resume":
@@ -250,6 +313,7 @@ public sealed class MainWindow : Window
             case "ip.info": return await IpIntelligenceService.QueryAsync(Read("ip"),lifetime.Token);
             case "metrics": return await RequireSession().MeasureNetworkAsync(lifetime.Token);
             case "deploy":
+                if(Read("step")=="account"&&claudeBridge?.Running==true)throw new InvalidOperationException("请先停止模型适配器，再更新工作账户。");
                 if (deploying) throw new InvalidOperationException("另一个任务正在执行，请等待。");
                 deploying = true; activeStep = Read("step");
                 try
@@ -262,10 +326,11 @@ public sealed class MainWindow : Window
                     return result;
                 }
                 finally { deploying = false; activeStep = ""; }
+            case "folder.create": return await RequireSession().CreateDirectoryAsync(Read("path"),Read("name"),lifetime.Token);
             case "folder.cancel": try{browsing?.Cancel();}catch(ObjectDisposedException){}return true;
             case "folder.list":
                 try{browsing?.Cancel();}catch(ObjectDisposedException){}browsing=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                using(var timeout=browsing){timeout.CancelAfter(TimeSpan.FromSeconds(12));try{return await RequireSession().ListDirectoriesAsync(Read("path"),timeout.Token);}catch(Exception error)when(error is OperationCanceledException or Renci.SshNet.Common.SshOperationTimeoutException){throw new InvalidOperationException("读取目录超时，请检查网络或挂载目录，稍后重试。");}}
+                using(var timeout=browsing){timeout.CancelAfter(TimeSpan.FromSeconds(12));try{return await RequireSession().ListDirectoriesAsync(Read("path"),timeout.Token);}catch(Exception error)when(error is OperationCanceledException or Renci.SshNet.Common.SshOperationTimeoutException){throw new TimeoutException("读取目录超时，请检查网络或挂载目录，稍后重试。",error);}}
             case "account.draft.get": return preferences.ReadDraft(RequireSession());
             case "account.draft.save": preferences.SaveDraft(RequireSession(),new(Read("username"),Read("hostname"),Read("password")));return true;
             case "desktop.resolution.get": return preferences.ReadResolution();
@@ -278,11 +343,25 @@ public sealed class MainWindow : Window
                 try{return await Task.Run(()=>RequireSession().RequestAsync<ServerInfo>("cloud",null,lifetime.Token));}finally{deploying=false;activeStep="";}
             case "cloud.open":
                 if (RequireSession().Server?.CloudReady != true) throw new InvalidOperationException("请先安装 CloudCLI。");
+                if(deploying)throw new InvalidOperationException("请等待当前部署完成后打开 CloudCLI。");
+                await RequireSession().RequestAsync<ServerInfo>("cloud_setup",null,lifetime.Token);
                 uint cloudPort = await RequireSession().ForwardAsync(3001, lifetime.Token); WindowsClients.OpenUrl("http://127.0.0.1:" + cloudPort); return true;
+            case "cloud.expose":
+                if (RequireSession().Server?.CloudReady != true) throw new InvalidOperationException("请先安装 CloudCLI。");
+                if (deploying) throw new InvalidOperationException("已有任务正在执行，请等待完成。");
+                deploying = true; activeStep = "cloud_public";
+                try
+                {
+                    string host = RequireSession().Host;
+                    return await Task.Run(() => RequireSession().RequestAsync<JsonElement>("cloud_public", new { host }, lifetime.Token));
+                }
+                finally { deploying = false; activeStep = ""; }
             case "mount.settings": return RequireSession().ReadMountMappings();
             case "mount.install":
                 if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="mount_install";
                 try{return await Task.Run(()=>RequireSession().RequestAsync<ServerInfo>("mount_install",null,lifetime.Token));}finally{deploying=false;activeStep="";}
+            case "mount.status": return session?.GetMountStatus()??new MountStatus(0,"idle","未挂载目录",0,0,0,0,0);
+            case "mount.status.open": mountTray?.Open(); return true;
             case "mount.apply":
                 var mappings=JsonSerializer.Deserialize<List<MountMapping>>(args.GetProperty("mappings"), JsonDefaults.Options) ?? [];
                 if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="mount_apply";
@@ -304,7 +383,7 @@ public sealed class MainWindow : Window
         List<object> lines=[];lock(logLock){while(logQueue.Count>0){var item=logQueue.Dequeue();lines.Add(new{step=item.Step,line=item.Line});}}
         if(lines.Count>0&&!lifetime.IsCancellationRequested&&browser.CoreWebView2!=null)try{await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeNativeLogs?.("+JsonSerializer.Serialize(lines,JsonDefaults.Options)+")");}catch{}
     }
-    private void QueueLog(string step,string line){lock(logLock){if(diagnosticTraces.TryGetValue(string.IsNullOrEmpty(step)?"connection":step,out var diagnostic))diagnostic.Observe(line);logQueue.Enqueue((step,line));while(logQueue.Count>1000)logQueue.Dequeue();}}
+    private void QueueLog(string step,string line){lock(logLock){if(diagnosticTraces.TryGetValue(step=="folder"?"directory_list":string.IsNullOrEmpty(step)?"connection":step,out var diagnostic))diagnostic.Observe(line);logQueue.Enqueue((step,line));while(logQueue.Count>1000)logQueue.Dequeue();}}
     private SshSession RequireSession() => !connectionPending&&session?.IsConnected == true&&session.Server!=null ? session : throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
     private async Task RespondAsync(string id, object? result, string? error)
     {
