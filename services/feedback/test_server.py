@@ -15,6 +15,9 @@ class FeedbackTests(unittest.TestCase):
         with self.store.connect() as db:
             self.assertEqual(db.execute('SELECT count(*),count(distinct installation_id) FROM usage').fetchone(),(2,1))
             self.assertEqual([r[1] for r in db.execute('PRAGMA table_info(usage)')],['event_id','installation_id','day','version','os'])
+    def test_macos_usage_and_unknown_platform(self):
+        event=self.usage();event['os']='macOS';self.assertEqual(self.post('/v1/usage',event),202)
+        event['eventId']=str(uuid.uuid4());event['os']='unknown';self.assertEqual(self.post('/v1/usage',event),400)
     def test_reject_unexpected_personal_data(self):
         event=self.usage();event['password']='must-not-store';self.assertEqual(self.post('/v1/usage',event),400)
         with self.store.connect() as db:self.assertEqual(db.execute('SELECT count(*) FROM usage').fetchone()[0],0)

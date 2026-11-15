@@ -12,6 +12,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-6b4a3a?style=for-the-badge" alt="MIT License"></a>
 </p>
 
+macOS 原生开发版的安装、构建与验证范围见 [Mac 使用说明](docs/MACOS.md)。
+
 ## ✨ 功能
 
 | | 功能 | 说明 |

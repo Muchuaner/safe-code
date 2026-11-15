@@ -1,6 +1,7 @@
 /* Windows 客户端桥接。普通浏览器继续使用概念稿；桌面模式不执行模拟部署。 */
-if (window.chrome?.webview && location.host === 'safe-code.local') {
+if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__safeCodePlatform === 'macos' && location.protocol === 'file:'))) {
   (() => {
+    const isMac=window.__safeCodePlatform==='macos';
     const pending = new Map();
     let hostBusy=false,hostStatus=null,hostPolling=false;
     let bridgeBusy=false,bridgeStatus=null,bridgePolling=false;
@@ -14,7 +15,7 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     const originalRenderTasks=renderTasks;renderTasks=function(){originalRenderTasks();syncAdvancedButtons();};
     const ids = ['account','localization','desktop','chrome','input','claude','ssh'];
     const native = (op,args={}) => new Promise((resolve,reject) => {
-      if(developerPreview&&!/^(window\.|guide\.|services\.|diagnostics\.|notice\.|updates\.|feedback\.|copy$|preview\.|acceptance\.)/.test(op))return reject(new Error('开发预览未连接服务器，此操作仅在真实连接后可用。'));
+      if(developerPreview&&!/^(window\.|guide\.|services\.|diagnostics\.|notice\.|updates\.|feedback\.|copy$|mount\.status\.open$|preview\.|acceptance\.)/.test(op))return reject(new Error('开发预览未连接服务器，此操作仅在真实连接后可用。'));
       const id=crypto.randomUUID();pending.set(id,{resolve,reject});window.chrome.webview.postMessage({id,op,args});
     });
     window.safeCodeNativeResponse = ({id,result,error}) => {
@@ -44,7 +45,7 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     $('#advanced-form').onsubmit=e=>{e.preventDefault();if(!$('#advanced-form').reportValidity())return;sshPort=Number($('#ssh-port').value);$('#advanced-dialog').close();};
     $('#login-form').append(advanced);
     function applyServer(server){
-      nativeServer=server;$('#host-manage').disabled=!server.statuses?.account;$('#bridge-manage').disabled=!server.statuses?.account;states=ids.map(id=>server.statuses?.[id]?'done':'pending');
+      nativeServer=server;$('#host-manage').disabled=!server.statuses?.account;$('#bridge-manage').disabled=isMac||!server.statuses?.account;states=ids.map(id=>server.statuses?.[id]?'done':'pending');
       if(currentTask>=0&&states[currentTask]!=='done')states[currentTask]='running';
       const desired=currentLocale();if(desired&&(server.timezone!==desired.timezone||server.systemLocale!==desired.locale))states[1]='pending';
       if(server.ipPolicy){ipPolicy=server.ipPolicy;$('#ip-policy-state').textContent=server.ipPolicyHealthy?(ipPolicy.lockIngress&&ipPolicy.lockEgress?'已锁定':ipPolicy.lockIngress||ipPolicy.lockEgress?'部分锁定':'未锁定'):'待检查';}
@@ -313,6 +314,7 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
       finally{clearInterval(timer);mountSaving=false;busy=false;mountProgress.hidden=true;form.removeAttribute('aria-busy');for(const [control,disabled] of controls)control.disabled=disabled;button.textContent='保存设置';renderTasks();}
     };
     function renderClaudeBridge(value){
+      if(isMac){$('#bridge-state').textContent='暂不可用';$('#bridge-summary').textContent='当前附件仅有 Windows 适配器，macOS 暂不可用。';$('#bridge-manage').disabled=true;$('#bridge-start').disabled=true;return;}
       if(value)bridgeStatus=value;const running=!!bridgeStatus?.running,ready=running&&!!bridgeStatus?.configuration;
       $('#bridge-state').textContent=running?(bridgeStatus.connected?'已连接':'连接中'):bridgeStatus?.cleanupPending?'清理待重试':'未启动';
       $('#bridge-summary').textContent=running?(bridgeStatus.message||'本机适配器运行中'):'习惯 Codex 客户端？在里面连接服务器上的 Claude。';
@@ -361,20 +363,20 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     }
     async function pollHostControl(){if(hostPolling||hostBusy||!nativeServer)return;hostPolling=true;try{renderHostControl(await native('host.status'));}catch{}finally{hostPolling=false;}}
     $('#host-manage').onclick=async()=>{
-      await pollHostControl();$('#host-risk').checked=false;$('#host-alias').value=hostStatus?.alias||'win';$('#host-progress').textContent=hostStatus?.enabled?hostStatus.message:'启用时会请求 Windows 管理员授权；首次部署需要几秒至几十秒。';renderHostControl();$('#host-dialog').showModal();
+      await pollHostControl();$('#host-risk').checked=false;$('#host-alias').value=hostStatus?.alias||(isMac?'mac':'win');$('#host-progress').textContent=hostStatus?.enabled?hostStatus.message:(isMac?'请先在系统设置 → 通用 → 共享开启远程登录，仅允许当前账户。Safe Code 将添加专用密钥，不会开启或更改系统 SSH 服务。':'启用时会请求 Windows 管理员授权；首次部署需要几秒至几十秒。');renderHostControl();$('#host-dialog').showModal();
     };
     $('#host-close').onclick=()=>{if(!hostBusy)$('#host-dialog').close();};
     $('#host-dialog').addEventListener('cancel',event=>{if(hostBusy)event.preventDefault();});
     $('#host-risk').onchange=()=>renderHostControl();
     $('#host-form').onsubmit=async event=>{
       event.preventDefault();if(hostBusy||!$('#host-risk').checked||!$('#host-form').reportValidity())return;
-      hostBusy=true;renderHostControl();$('#host-progress').textContent='正在准备专用密钥与本机 SSH，请完成 Windows 管理员授权。随后会验证服务器能否登录本机…';
+      hostBusy=true;renderHostControl();$('#host-progress').textContent=isMac?'正在为系统远程登录添加专用公钥，并验证 macOS 账户身份…':'正在准备专用密钥与本机 SSH，请完成 Windows 管理员授权。随后会验证服务器能否登录本机…';
       try{hostStatus=await native('host.enable',{alias:$('#host-alias').value.trim(),riskAccepted:true});$('#host-progress').textContent='部署完成，已通过实际 SSH 登录验证。复制下方命令发给服务器上的 AI。';}
       catch(error){$('#host-risk').checked=false;$('#host-progress').textContent=error.message;}
       finally{hostBusy=false;renderHostControl();}
     };
     $('#host-disable').onclick=async()=>{
-      if(hostBusy)return;hostBusy=true;renderHostControl();$('#host-progress').textContent='正在关闭控制通道并停止本机 SSH…';
+      if(hostBusy)return;hostBusy=true;renderHostControl();$('#host-progress').textContent=isMac?'正在断开专用通道并撤销密钥；系统远程登录设置保持不变…':'正在关闭控制通道并停止本机 SSH…';
       try{hostStatus=await native('host.disable');$('#host-risk').checked=false;$('#host-progress').textContent='本机远程控制已停用。';}
       catch(error){$('#host-progress').textContent=error.message;}
       finally{hostBusy=false;renderHostControl();}
@@ -443,7 +445,7 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
     $('#check-update').onclick=()=>checkUpdate(true);
     $('#release-page').onclick=()=>{if(update?.page)window.open(update.page,'_blank');};
     window.safeCodeUpdateProgress=(done,total)=>{$('#update-status').textContent='正在下载 '+Math.round(done/total*100)+'%';};
-    $('#download-update').onclick=async()=>{$('#download-update').disabled=true;try{await native('updates.download');$('#update-status').textContent='下载完成，SHA256 校验通过。安装时会关闭当前客户端。';$('#download-update').hidden=true;$('#install-update').hidden=false;}catch(e){$('#update-status').textContent=e.message;}finally{$('#download-update').disabled=false;}};
+    $('#download-update').onclick=async()=>{$('#download-update').disabled=true;try{await native('updates.download');$('#update-status').textContent='下载完成，SHA256 校验通过。'+(isMac?'请先安全卸载目录，再打开镜像替换应用。':'安装时会关闭当前客户端。');$('#download-update').hidden=true;$('#install-update').hidden=false;}catch(e){$('#update-status').textContent=e.message;}finally{$('#download-update').disabled=false;}};
     $('#install-update').onclick=()=>{if(busy){$('#update-status').textContent='请等待当前操作完成后安装更新。';return;}native('updates.install').catch(e=>{$('#update-status').textContent=e.message;});};
     for(const button of document.querySelectorAll('[data-open-services]'))button.addEventListener('click',()=>native('services.preferences').then(showPreferences).catch(()=>{}));
     $('#feedback-form').onsubmit=async e=>{e.preventDefault();$('#feedback-send').disabled=true;try{await native('feedback.send',{message:$('#feedback-message').value});$('#feedback-message').value='';$('#feedback-status').textContent='已提交，谢谢你的反馈。';}catch(e){$('#feedback-status').textContent=e.message;}finally{$('#feedback-send').disabled=!servicePreferences?.serviceAvailable;}};
@@ -543,6 +545,14 @@ if (window.chrome?.webview && location.host === 'safe-code.local') {
         await native('acceptance.done',{success:true,draftSaveDidNotApply:true,completedAccountUpdateEnabled:true,idempotentAccountUpdateApplied:true,resolutionPersisted:true,mountInstalled:nativeServer.mountReady,cloudInstalled:nativeServer.cloudReady,cloudHttp:page.status,folderReadMilliseconds:folderDuration,folderReadSucceeded:true,hostnameBefore:before});
       }catch(e){await native('acceptance.done',{success:false,error:e.message});}
     };
+    if(isMac){
+      for(const element of document.querySelectorAll('#usage-detail,.usage-consent small,.host-permission-note p'))element.textContent=element.textContent.replaceAll('Windows','macOS');
+      document.querySelector('.host-risk small').textContent='需先在系统设置中开启远程登录，仅允许当前账户。使用专用密钥，不会修改系统 SSH 设置。';
+      $('#host-alias').placeholder='例如 mac 或 local';
+      $('#bridge-summary').textContent='当前附件仅有 Windows 适配器，macOS 暂不可用。';$('#bridge-state').textContent='暂不可用';$('#bridge-manage').disabled=true;
+      $('#bridge-manage').title='取得可信的 macOS 适配器后再接入';
+      $('.window-controls').hidden=true;$('.window-controls').style.display='none';document.querySelector('.titlebar').style.paddingRight='18px';
+    }
     window.safeCodeNativeReady=true;
   })();
 }

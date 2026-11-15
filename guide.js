@@ -1,8 +1,8 @@
 (async()=>{
   const finish=confirmed=>window.chrome.webview.postMessage({confirmed});
   try{
-    const response=await fetch('index.html');if(!response.ok)throw new Error('指南文件读取失败');
-    const source=new DOMParser().parseFromString(await response.text(),'text/html');
+    const response=window.__safeCodeGuideHTML?null:await fetch('index.html');if(response&&!response.ok)throw new Error('指南文件读取失败');
+    const source=new DOMParser().parseFromString(window.__safeCodeGuideHTML||await response.text(),'text/html');
     const body=source.querySelector('.guide-body');const footer=body.querySelector('.guide-footer-actions');
     const connecting=new URLSearchParams(location.search).get('connecting')==='1';
     footer.querySelector('#guide-cancel-btn').hidden=!connecting;
