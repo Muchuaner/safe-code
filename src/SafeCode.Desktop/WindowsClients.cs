@@ -8,13 +8,21 @@ public sealed class WindowsClients : IDisposable
 {
     private readonly List<Process> terminals = [];
     private readonly List<RdpDesktop> desktops=[];
+    internal bool AdaptiveScaling { get; private set; }
+    internal void SetDesktopScaling(bool enabled)
+    {
+        var open=desktops.Where(d=>!d.IsDisposed).ToArray();
+        if(enabled&&open.Any(d=>!d.CanEnableAdaptiveScaling))throw new InvalidOperationException("当前 Windows 远程桌面组件不支持放大缩放，请更新 Windows 后重试。");
+        foreach(var desktop in open)desktop.SetAdaptiveScaling(enabled);
+        AdaptiveScaling=enabled;
+    }
     public async Task OpenDesktopAsync(SshSession session,CancellationToken ct,DesktopResolution? resolution=null)=>await LaunchDesktopAsync(session,ct,resolution);
     private async Task<RdpDesktop> LaunchDesktopAsync(SshSession session,CancellationToken ct,DesktopResolution? resolution=null)
     {
         if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         uint port=await session.ForwardAsync(3389,ct);
-        var window=new RdpDesktop(resolution);desktops.Add(window);
+        var window=new RdpDesktop(resolution,AdaptiveScaling);desktops.Add(window);
         window.FormClosed+=(_,_)=>desktops.Remove(window);
         try{window.Show();window.Connect("127.0.0.1",port,account.Username,account.Password,resolution);return window;}catch{window.Close();window.Dispose();throw;}
     }

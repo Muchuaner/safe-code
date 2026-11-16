@@ -1,0 +1,14 @@
+.unified-maintenance-cards .desktop-scaling-card{grid-column:1/-1;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:18px;padding:16px;min-height:84px}
+.desktop-scaling-card[hidden]{display:none!important}
+.desktop-scaling-card .advanced-copy{flex:1;min-width:0;margin:0}
+.desktop-scaling-card .advanced-copy p{min-height:0;line-height:1.8;margin:0}
+.desktop-scaling-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-shrink:0}
+#desktop-scaling-state{font-size:10px;color:#7b897f;min-width:42px}
+#desktop-scaling-settings{min-width:86px}
+.desktop-scaling-toggle{position:relative;flex:0 0 40px;width:40px;height:23px;padding:0;border:1px solid #cbd5ce;border-radius:14px;background:#dce3de;cursor:pointer;transition:background .15s}
+.desktop-scaling-toggle::after{content:'';position:absolute;top:3px;left:3px;width:15px;height:15px;border-radius:50%;background:white;box-shadow:0 1px 3px #0002;transition:transform .15s}
+.desktop-scaling-toggle[aria-checked=true]{background:var(--green);border-color:var(--green)}
+.desktop-scaling-toggle[aria-checked=true]::after{transform:translateX(17px)}
+.desktop-scaling-toggle:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.desktop-scaling-toggle:disabled{cursor:wait;opacity:.5}
+@media(max-width:650px){.unified-maintenance-cards .desktop-scaling-card{flex-wrap:wrap;gap:12px}.desktop-scaling-actions{width:100%;flex-wrap:wrap}}

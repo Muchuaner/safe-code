@@ -18,6 +18,7 @@ public sealed class MainWindow : Window
     private readonly WindowsClients clients = new();
     private readonly ClientServices services;
     private readonly ClientPreferences preferences;
+    private readonly DesktopScalingPreferences scalingPreferences;
     private DownloadedInstaller? downloadedUpdate;
     private bool installingUpdate;
     private int maintenanceOperations;
@@ -68,6 +69,7 @@ public sealed class MainWindow : Window
         }
         if(arguments.Length>=3&&arguments[0]=="--updates-acceptance"){dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Updates-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;}
         services=new ClientServices(dataDirectory);preferences=new ClientPreferences(dataDirectory);
+        scalingPreferences=new DesktopScalingPreferences(dataDirectory);clients.SetDesktopScaling(scalingPreferences.Read());
         this.arguments = arguments; Title = "Safe Code"; Width = 360; Height = 536;
         MinWidth = 360; MinHeight = 500; WindowStartupLocation = WindowStartupLocation.CenterScreen;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResize; Background = Brushes.White;
@@ -348,6 +350,12 @@ public sealed class MainWindow : Window
             case "account.change.status": return new{requiresConfirmation=preferences.RequiresAccountConfirmation(RequireSession())};
             case "account.draft.save": preferences.SaveDraft(RequireSession(),new(Read("username"),Read("hostname"),Read("password")));return true;
             case "desktop.resolution.get": return preferences.ReadResolution();
+            case "desktop.scaling.get": return new{enabled=clients.AdaptiveScaling};
+            case "desktop.scaling.save":
+                bool scalingEnabled=args.GetProperty("enabled").GetBoolean(),previousScaling=clients.AdaptiveScaling;
+                clients.SetDesktopScaling(scalingEnabled);
+                try{scalingPreferences.Save(scalingEnabled);}catch{clients.SetDesktopScaling(previousScaling);throw;}
+                return new{enabled=clients.AdaptiveScaling};
             case "desktop.resolution.save": var resolution=new DesktopResolution(args.GetProperty("width").GetInt32(),args.GetProperty("height").GetInt32());preferences.SaveResolution(resolution);return clients.ResizeOpenDesktops(resolution);
             case "account": return await RequireSession().RequestAsync<AccountInfo>("account_info", null, lifetime.Token);
             case "desktop": await clients.OpenDesktopAsync(RequireSession(), lifetime.Token,preferences.ReadResolution()); return true;

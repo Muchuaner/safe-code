@@ -15,7 +15,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     const originalRenderTasks=renderTasks;renderTasks=function(){originalRenderTasks();syncAdvancedButtons();};
     const ids = ['account','localization','desktop','chrome','input','claude','ssh'];
     const native = (op,args={}) => new Promise((resolve,reject) => {
-      if(developerPreview&&!/^(window\.|guide\.|services\.|diagnostics\.|notice\.|updates\.|feedback\.|copy$|mount\.status\.open$|preview\.|acceptance\.)/.test(op))return reject(new Error('开发预览未连接服务器，此操作仅在真实连接后可用。'));
+      if(developerPreview&&!/^(window\.|guide\.|desktop\.scaling\.|services\.|diagnostics\.|notice\.|updates\.|feedback\.|copy$|mount\.status\.open$|preview\.|acceptance\.)/.test(op))return reject(new Error('开发预览未连接服务器，此操作仅在真实连接后可用。'));
       const id=crypto.randomUUID();pending.set(id,{resolve,reject});window.chrome.webview.postMessage({id,op,args});
     });
     window.safeCodeNativeResponse = ({id,result,error}) => {
@@ -598,6 +598,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#bridge-manage').title='取得可信的 macOS 适配器后再接入';
       $('.window-controls').hidden=true;$('.window-controls').style.display='none';document.querySelector('.titlebar').style.paddingRight='18px';
     }
+    void window.safeCodeDesktopScaling?.initialize({native,isMac,showError:showAppMessage});
     window.safeCodeNativeReady=true;
   })();
 }
