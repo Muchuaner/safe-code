@@ -200,7 +200,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func openFile(_ path:String) {
         let url=URL(fileURLWithPath:path).standardizedFileURL;let root=directory.standardizedFileURL.path+"/"
         guard url.path.hasPrefix(root),["rdp","dmg"].contains(url.pathExtension.lowercased()),FileManager.default.fileExists(atPath:url.path) else{fail("拒绝打开非客户端生成的文件。");return}
-        if url.pathExtension=="rdp" && NSWorkspace.shared.urlForApplication(toOpen:url)==nil {fail("请先安装支持 RDP 的 macOS 客户端（例如 Windows App），再打开远程桌面。SSH 隧道已建立，地址保存在本机 RDP 配置中。密码需在远程桌面客户端自行输入。");return};NSWorkspace.shared.open(url)
+        if url.pathExtension=="rdp" {openRemoteDesktop(url);return}
+        NSWorkspace.shared.open(url)
+    }
+    private func openRemoteDesktop(_ document:URL) {
+        let workspace=NSWorkspace.shared
+        let bundleID="com.microsoft.rdc.macos"
+        let roots=[URL(fileURLWithPath:"/Applications",isDirectory:true),
+                   FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications",isDirectory:true)]
+        let installed=roots.flatMap{root in ["Windows App.app","Microsoft Remote Desktop.app"].map{root.appendingPathComponent($0)}}
+        let explicitClient=([workspace.urlForApplication(withBundleIdentifier:bundleID)].compactMap{$0}+installed)
+            .first{Bundle(url:$0)?.bundleIdentifier==bundleID}
+        if let client=explicitClient {
+            workspace.open([document],withApplicationAt:client,configuration:NSWorkspace.OpenConfiguration()){[weak self] _,error in
+                if error != nil {DispatchQueue.main.async {self?.fail("无法打开 Windows App，请确认应用仍可运行。")}}
+            }
+        }else if let handler=workspace.urlForApplication(toOpen:document),Bundle(url:handler) != nil {
+            if !workspace.open(document) {fail("无法打开远程桌面配置，请检查默认 RDP 客户端。")}
+        }else {
+            fail("请先安装支持 RDP 的 macOS 客户端（例如 Windows App），再打开远程桌面。工作用户密码需在远程桌面客户端自行输入。")
+        }
     }
     private func openGuide(id:String,connecting:Bool) {
         if guide != nil {guide?.makeKeyAndOrderFront(nil);answer(id,false);return}
