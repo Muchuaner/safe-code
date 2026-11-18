@@ -1,5 +1,10 @@
 using SafeCode.Core;
 using System.Diagnostics;
+using System.Buffers.Binary;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
 namespace SafeCode.Desktop;
 internal sealed class MacClients(string directory)
 {
@@ -26,8 +31,61 @@ internal sealed class MacClients(string directory)
     public async Task<string> DesktopAsync(SshSession session,DesktopResolution resolution,CancellationToken ct)
     {
         if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
-        var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);uint port=await session.ForwardAsync(3389,ct);
-        string folder=Path.Combine(directory,"Desktops");Directory.CreateDirectory(folder);string path=Path.Combine(folder,"Safe Code-"+port+".rdp");
-        File.WriteAllText(path,"full address:s:127.0.0.1:"+port+"\nusername:s:"+account.Username+"\nprompt for credentials:i:1\nscreen mode id:i:1\ndesktopwidth:i:"+resolution.Width+"\ndesktopheight:i:"+resolution.Height+"\nauthentication level:i:2\nredirectclipboard:i:1\n");MacFiles.Protect(path);return path;
+        var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
+        byte[] identity=SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{session.Host.ToLowerInvariant()}:{session.Port}|{session.Fingerprint}|{account.Username}"));
+        uint preferredPort=20000u+BinaryPrimitives.ReadUInt32BigEndian(identity)%20000u;
+        uint port=session.ForwardRemoteDesktop(preferredPort,ct);
+        if(!await DesktopRespondsAsync(port,ct))
+            throw new IOException("SSH 隧道已建立，但虚拟桌面没有返回 RDP 握手。请检查服务器上的 xrdp 服务。");
+
+        string folder=Path.Combine(directory,"Desktops");
+        Directory.CreateDirectory(folder);
+        string path=Path.Combine(folder,"Safe Code-"+Convert.ToHexString(identity.AsSpan(0,10)).ToLowerInvariant()+".rdp");
+        string temp=path+"."+Guid.NewGuid().ToString("N")+".tmp";
+        try
+        {
+            var options=new FileStreamOptions{Mode=FileMode.CreateNew,Access=FileAccess.Write,Share=FileShare.None};
+            if(!OperatingSystem.IsWindows()) options.UnixCreateMode=UnixFileMode.UserRead|UnixFileMode.UserWrite;
+            using(var writer=new StreamWriter(temp,options))
+            {
+                writer.WriteLine("full address:s:127.0.0.1:"+port);
+                writer.WriteLine("username:s:"+account.Username);
+                writer.WriteLine("prompt for credentials:i:1");
+                writer.WriteLine("screen mode id:i:1");
+                writer.WriteLine("desktopwidth:i:"+resolution.Width);
+                writer.WriteLine("desktopheight:i:"+resolution.Height);
+                writer.WriteLine("authentication level:i:2");
+                writer.WriteLine("redirectclipboard:i:1");
+                writer.WriteLine("bandwidthautodetect:i:1");
+                writer.WriteLine("networkautodetect:i:1");
+            }
+            File.Move(temp,path,true);
+            return path;
+        }
+        finally{File.Delete(temp);}
+    }
+
+    internal static async Task<bool> DesktopRespondsAsync(uint port,CancellationToken ct)
+    {
+        using var tcp=new TcpClient();
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            await tcp.ConnectAsync(IPAddress.Loopback,(int)port,deadline.Token);
+            // Standard X.224 connection request with RDP negotiation, no credentials.
+            byte[] request=[0x03,0x00,0x00,0x13,0x0e,0xe0,0,0,0,0,0,0x01,0,0x08,0,0x03,0,0,0];
+            var stream=tcp.GetStream();
+            await stream.WriteAsync(request,deadline.Token);
+            var confirmation=new byte[11];
+            await stream.ReadExactlyAsync(confirmation,deadline.Token);
+            return confirmation[0]==3 && confirmation[1]==0 &&
+                BinaryPrimitives.ReadUInt16BigEndian(confirmation.AsSpan(2))>=11 &&
+                confirmation[4]>=6 && confirmation[5]==0xd0;
+        }
+        catch(OperationCanceledException) when(!ct.IsCancellationRequested){return false;}
+        catch(SocketException){return false;}
+        catch(IOException){return false;}
     }
 }
