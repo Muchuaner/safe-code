@@ -1,4 +1,3 @@
-using System.Net.Sockets;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 using System.Diagnostics;
@@ -288,65 +287,6 @@ public sealed partial class SshSession : IDisposable
         var forward = new ForwardedPortLocal(localHost, 0, "127.0.0.1", destinationPort);
         client.AddForwardedPort(forward); forward.Start(); tunnels.Add(forward); return forward.BoundPort;
     }
-    private readonly object desktopForwardGate = new();
-    private ForwardedPortLocal? desktopForward;
-    private SshClient? desktopForwardOwner;
-    private bool desktopForwardClosed;
-
-    // Reuse only the desktop forward owned by this authenticated SSH transport.
-    public uint ForwardRemoteDesktop(uint preferredPort, CancellationToken ct = default)
-    {
-        if (preferredPort is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(preferredPort));
-        lock (desktopForwardGate)
-        {
-            ct.ThrowIfCancellationRequested();
-            ObjectDisposedException.ThrowIf(desktopForwardClosed, this);
-            var current = client;
-            if (current?.IsConnected != true) throw new InvalidOperationException("SSH 已断开。");
-            if (ReferenceEquals(current, desktopForwardOwner) && desktopForward?.IsStarted == true)
-                return desktopForward.BoundPort;
-
-            CloseDesktopForward();
-            try { desktopForward = StartForward(current, preferredPort); }
-            catch (SocketException error) when (error.SocketErrorCode == SocketError.AddressAlreadyInUse)
-            {
-                ct.ThrowIfCancellationRequested();
-                desktopForward = StartForward(current, 0);
-            }
-            desktopForwardOwner = current;
-            return desktopForward.BoundPort;
-        }
-    }
-
-    private static ForwardedPortLocal StartForward(SshClient owner, uint port)
-    {
-        var forward = new ForwardedPortLocal("127.0.0.1", port, "127.0.0.1", 3389);
-        try
-        {
-            owner.AddForwardedPort(forward);
-            forward.Start();
-            return forward;
-        }
-        catch
-        {
-            try { owner.RemoveForwardedPort(forward); } catch { }
-            DisposeMountResource(forward);
-            throw;
-        }
-    }
-
-    private void CloseDesktopForward()
-    {
-        lock (desktopForwardGate)
-        {
-            if (desktopForward == null) return;
-            try { desktopForwardOwner?.RemoveForwardedPort(desktopForward); } catch { }
-            DisposeMountResource(desktopForward);
-            desktopForward = null;
-            desktopForwardOwner = null;
-        }
-    }
-
     public async Task<NetworkStats> MeasureNetworkAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

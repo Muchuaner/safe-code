@@ -9,4 +9,5 @@
   <ItemGroup><Content Include="service-endpoints.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><Content Include="../../assets/icons/safe-code-shortcut.ico" Link="Icons/safe-code-shortcut.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="PowerShell/*.ps1" /></ItemGroup>
+  <ItemGroup><Compile Include="../Shared/RdpResizePreferences.cs" Link="RdpResizePreferences.cs" /></ItemGroup>
 </Project>

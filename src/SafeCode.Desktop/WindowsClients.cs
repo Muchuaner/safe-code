@@ -14,10 +14,10 @@ public sealed class WindowsClients : IDisposable
     {
         if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
-        uint port=await session.ForwardAsync(3389,ct);
+        var connection=await session.PrepareRemoteDesktopAsync(account.Username,false,ct);
         var window=new RdpDesktop(resolution,ResizePreferences);desktops.Add(window);
         window.FormClosed+=(_,_)=>desktops.Remove(window);
-        try{window.Show();window.Connect("127.0.0.1",port,account.Username,account.Password,resolution);return window;}catch{window.Close();window.Dispose();throw;}
+        try{window.Show();window.Connect("127.0.0.1",connection.Port,account.Username,account.Password,resolution);return window;}catch{window.Close();window.Dispose();throw;}
     }
     public object ResizeOpenDesktops(DesktopResolution resolution)
     {
