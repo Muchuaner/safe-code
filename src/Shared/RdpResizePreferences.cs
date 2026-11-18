@@ -23,6 +23,19 @@ internal sealed class RdpResizePreferences(string directory)
         catch (UnauthorizedAccessException) { return RdpResizeMode.Original; }
     }
 
+    internal bool ReadFullscreen() => File.Exists(Path.Combine(directory, "rdp-fullscreen"));
+
+    internal void SaveFullscreen(bool enabled)
+    {
+        var path = Path.Combine(directory, "rdp-fullscreen");
+        if (enabled)
+        {
+            Directory.CreateDirectory(directory);
+            using var marker = File.Open(path, FileMode.OpenOrCreate);
+        }
+        else if (File.Exists(path)) File.Delete(path);
+    }
+
     internal void Save(RdpResizeMode mode)
     {
         Directory.CreateDirectory(directory);
