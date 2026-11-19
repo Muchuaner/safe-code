@@ -223,3 +223,6 @@ button.resource-link:hover{color:var(--green)}
 #login-screen>.back{align-self:center;margin:auto 0 0;padding:12px 8px 0;line-height:16px;font-size:10px;color:#8e9b92}
 #login-screen>.back:hover{color:var(--green)}
 @media(max-height:520px){#login-screen{padding-top:18px;padding-bottom:14px}#login-screen .login-heading{margin-bottom:10px}#login-form input:not([type=checkbox]){height:36px;margin-bottom:10px}#login-form .password-wrap input{margin-bottom:0}#login-form .password-wrap .reveal{height:36px}#login-form .rating-disclosure{margin-top:11px;margin-bottom:10px}#login-screen>.back{padding-top:8px}}
+
+#mac-rdp-options label.policy-toggle{display:flex;align-items:center;gap:7px;margin:12px 0 0}
+#rdp-fullscreen{width:13px;height:13px;margin:0;padding:0;accent-color:var(--green)}

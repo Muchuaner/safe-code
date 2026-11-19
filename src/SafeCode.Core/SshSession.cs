@@ -300,6 +300,11 @@ public sealed partial class SshSession : IDisposable
     public static string Quote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
     public void Dispose()
     {
+        lock (desktopForwardGate)
+        {
+            desktopForwardClosed = true;
+            CloseDesktopForward();
+        }
         hostLifetime?.Cancel();CloseHostTunnel();hostLifetime?.Dispose();hostLifetime=null;
         foreach (var tunnel in tunnels) { try { tunnel.Dispose(); } catch { } }
         tunnels.Clear();

@@ -336,8 +336,32 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       }catch(error){$('#credential-error').textContent=error.message+' 原挂载和缓存已保留，可重新输入密码。';}
       finally{credentialSaving=false;busy=false;for(const control of controls)control.disabled=false;renderTasks();}
     };
-    $('#desktop-resolution').onclick=async()=>{try{const value=await native('desktop.resolution.get');$('#resolution-select').value=value.width+'x'+value.height;$('#resolution-dialog').showModal();}catch(e){showAppMessage(e.message);}};
-    $('#resolution-form').onsubmit=async e=>{e.preventDefault();const [width,height]=$('#resolution-select').value.split('x').map(Number);try{const result=await native('desktop.resolution.save',{width,height});$('#resolution-dialog').close();if(result.deferred>0)showAppMessage('窗口大小已调整。当前服务器未接受在线分辨率切换，新像素分辨率将在下次打开桌面时使用。');}catch(e){showAppMessage(e.message);}};
+    if(isMac){
+      $('#mac-rdp-options').hidden=false;
+      $('#rdp-display-hint').textContent='下次打开桌面时生效。使用 SDL FreeRDP 可免重复输入工作用户密码；其他客户端按其自身设置连接。';
+    }
+    $('#desktop-resolution').onclick=async()=>{
+      try{
+        const value=await native('desktop.resolution.get');
+        $('#resolution-select').value=value.width+'x'+value.height;
+        if(isMac){
+          $('#rdp-display-mode').value=value.displayMode||'Original';
+          $('#rdp-fullscreen').checked=!!value.fullscreen;
+        }
+        $('#resolution-dialog').showModal();
+      }catch(error){showAppMessage(error.message);}
+    };
+    $('#resolution-form').onsubmit=async event=>{
+      event.preventDefault();
+      const [width,height]=$('#resolution-select').value.split('x').map(Number);
+      const settings={width,height};
+      if(isMac)Object.assign(settings,{displayMode:$('#rdp-display-mode').value,fullscreen:$('#rdp-fullscreen').checked});
+      try{
+        const result=await native('desktop.resolution.save',settings);
+        $('#resolution-dialog').close();
+        if(result.deferred>0)showAppMessage(isMac?'已保存，下次打开远程桌面时生效。':'窗口大小已调整。当前服务器未接受在线分辨率切换，新像素分辨率将在下次打开桌面时使用。');
+      }catch(error){showAppMessage(error.message);}
+    };
     native('login.load').then(saved=>{if(saved&&$('#workspace-screen').hidden){$('#ip').value=saved.host;$('#username').value=saved.username;$('#password').value=saved.password;sshPort=saved.port||22;}}).catch(()=>{});
     $('#mount-settings').onclick=async()=>{try{mountPairs=await native('mount.settings');$('#mount-list').replaceChildren();(mountPairs.length?mountPairs:[{local:'',remote:''}]).forEach(appendMountPair);$('#mount-dialog').showModal();}catch(e){showAppMessage(e.message);}};
     let mountSaving=false;
