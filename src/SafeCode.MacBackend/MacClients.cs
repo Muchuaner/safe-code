@@ -11,13 +11,19 @@ internal sealed class MacClients(string directory)
         try{await process.WaitForExitAsync(ct);}catch{try{process.Kill(true);}catch{}throw;}
         if(process.ExitCode!=0)throw new IOException("系统工具执行失败："+await error);return await output;
     }
+    public static async Task<string> OpenLocalClientAsync(string name,CancellationToken ct)
+    {
+        if(name is not ("Codex" or "Claude"))throw new ArgumentException("未知客户端。");
+        try{await Run("/usr/bin/open",["-a",name],ct);return "已请求打开 "+name+" 客户端。";}
+        catch(IOException){throw new InvalidOperationException("未能打开 "+name+"，请先安装官方客户端，或从应用程序目录启动。");}
+    }
     public async Task OpenTerminalAsync(SshSession session,CancellationToken ct)
     {
         if(session.Server?.Statuses.GetValueOrDefault("account")!=true)throw new InvalidOperationException("请先部署工作用户。");
         await session.DeployAsync("ssh",null,ct:ct);await session.VerifyWorkspaceKeyAsync(ct);
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         var config=Path.Combine(directory,"terminal-config");File.WriteAllText(config,"# Safe Code isolated SSH client\n");MacFiles.Protect(config);
-        string[] args=["/usr/bin/ssh","-t","-F",config,"-i",session.KeyPath,"-p",session.Port.ToString(),"-o","BatchMode=yes","-o","ForwardAgent=no","-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile="+session.KnownHostsPath,account.Username+"@"+session.Host,".local/bin/safe-code-terminal"];
+        string[] args=["/usr/bin/ssh","-t","-F",config,"-i",session.KeyPath,"-p",session.Port.ToString(),"-o","BatchMode=yes","-o","ForwardAgent=no","-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o",SshClientOptions.UserKnownHostsFile(session.KnownHostsPath),account.Username+"@"+session.Host,".local/bin/safe-code-terminal"];
         string command=string.Join(" ",args.Select(Quote));
         // AppleScript string encoding is separate from shell quoting. No password in args or scripts.
         string literal="\""+command.Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r","\\r").Replace("\n","\\n")+"\"";

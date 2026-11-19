@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """生成 Windows x64 自包含便携包。仅写本地 dist，不连接 GitHub。"""
-import argparse,hashlib,json,os,re,shutil,subprocess,zipfile
+import argparse,hashlib,json,os,shutil,subprocess,zipfile
+from xml.etree import ElementTree
 from pathlib import Path
-p=argparse.ArgumentParser();p.add_argument('--dotnet',default='dotnet');p.add_argument('--output-dir',type=Path);p.add_argument('--claude-payload',type=Path);p.add_argument('--claude-version');p.add_argument('--claude-sha256');p.add_argument('--openssh-payload',type=Path);p.add_argument('--codex-bridge-payload',type=Path);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--dotnet',default='dotnet');p.add_argument('--output-dir',type=Path);p.add_argument('--openssh-payload',type=Path);p.add_argument('--codex-bridge-payload',type=Path);a=p.parse_args()
 root=Path(__file__).resolve().parent.parent
-output=a.output_dir.resolve() if a.output_dir else root/'dist'/'SafeCode-Beta-0.4.4.2-win-x64';archive=output.parent/(output.name+'.zip')
+project=root/'src/SafeCode.Desktop/SafeCode.Desktop.csproj'
+app_version=ElementTree.parse(project).findtext('./PropertyGroup/InformationalVersion')
+if not app_version:raise SystemExit('Windows 项目未设置 InformationalVersion。')
+output=a.output_dir.resolve() if a.output_dir else root/'dist'/('SafeCode-'+app_version+'-win-x64');archive=output.parent/(output.name+'.zip')
 if output.exists():shutil.rmtree(output)
 subprocess.run([a.dotnet,'publish',str(root/'src/SafeCode.Desktop/SafeCode.Desktop.csproj'),'-c','Release','-r','win-x64','--self-contained','true','-o',str(output),'--nologo'],cwd=root,check=True,env={**os.environ,'DOTNET_CLI_TELEMETRY_OPTOUT':'1'})
 shutil.move(output/'SafeCode.Desktop.exe',output/'SafeCode.exe')
@@ -30,16 +34,6 @@ for package in sorted(packages):
   shutil.copy2(path,destination)
 mit=(root/'LICENSE').read_text();body=mit[mit.index('Permission is hereby'):]
 (legal/'SSH.NET-2026.0.0-MIT.txt').write_text('MIT License\n\nCopyright © Renci 2010-2026\n\n'+body)
-if a.claude_payload:
- if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',a.claude_version or '') or not re.fullmatch('[a-f0-9]{64}',a.claude_sha256 or ''):raise SystemExit('随包 Claude Code 需要有效版本和官方 SHA256。')
- with a.claude_payload.open('rb') as f:
-  digest=hashlib.sha256()
-  for block in iter(lambda:f.read(1024*1024),b''):digest.update(block)
- if digest.hexdigest()!=a.claude_sha256:raise SystemExit('Claude Code 文件与官方 SHA256 不符，已停止打包。')
- bundled=output/'Payloads/claude';bundled.mkdir(parents=True)
- shutil.copy2(a.claude_payload,bundled/'linux-x64')
- (bundled/'linux-x64.json').write_text(json.dumps({'version':a.claude_version,'sha256':a.claude_sha256,'source':'https://downloads.claude.ai/claude-code-releases/'+a.claude_version+'/linux-x64/claude'}))
- (legal/'Claude-Code.txt').write_text('Claude Code 为 Anthropic 发布的未修改程序，用户须自行完成官方授权。\n许可与条款：https://code.claude.com/docs/en/legal-and-compliance\n来源：https://downloads.claude.ai/claude-code-releases/\n')
 if a.openssh_payload:
  expected='b67ff8becd203502190ec42ac7787c24c2cd3325ed7700485fe7a1c83d2a7957'
  if hashlib.sha256(a.openssh_payload.read_bytes()).hexdigest()!=expected:raise SystemExit('OpenSSH 官方完整包 SHA256 不匹配。')
@@ -59,7 +53,7 @@ if a.codex_bridge_payload:
   for name in ['LICENSE.txt','THIRD_PARTY_LICENSES.txt','UPSTREAM.txt']:
    data=source.read(prefix+name);(bundled/name).write_bytes(data);(legal/('Claude-Codex-'+name)).write_bytes(data)
  (bundled/'source.json').write_bytes((root/'third_party/claude-codex-vps/SOURCE.json').read_bytes())
-manifest={'version':'Beta-0.4.4.2','target':'win-x64','selfContained':True,'files':{}}
+manifest={'version':app_version,'target':'win-x64','selfContained':True,'files':{}}
 for path in sorted(output.rglob('*')):
  if path.is_file():manifest['files'][path.relative_to(output).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
 (output/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))

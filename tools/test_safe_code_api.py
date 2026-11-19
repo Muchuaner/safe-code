@@ -1,0 +1,533 @@
+"""Safe Code API management, queue and usage checks using disposable state."""
+import base64
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import hmac
+import http.client
+import importlib.util
+import json
+from pathlib import Path
+import socket
+import socketserver
+import sqlite3
+import ssl
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT/'tools/desktop-api'), str(ROOT/'src/SafeCode.Core/Remote')]
+from desktop_gateway import GatewayError
+from management import ClaudeSubscription, KeyRegistry, RequestQueue, send_admin
+from pricing import estimate
+
+spec = importlib.util.spec_from_file_location('safe_code_api_server',ROOT/'tools/desktop-api/server.py')
+server = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(server)
+agent_spec = importlib.util.spec_from_file_location('safe_code_agent', ROOT/'src/SafeCode.Core/Remote/agent.py')
+agent = importlib.util.module_from_spec(agent_spec)
+agent_spec.loader.exec_module(agent)
+
+def decode_new_ticket(ticket):
+    assert ticket.startswith('sc2.')
+    text = ticket[4:]
+    data = base64.urlsafe_b64decode(text + '='*(-len(text)%4))
+    body, tag = data[:-32], data[-32:]
+    assert hmac.compare_digest(tag, hmac.digest(server.TICKET_AUTH_KEY, b'sc2.' + body, 'sha256'))
+    assert b'https://' not in body
+    plaintext = subprocess.run(
+        ['/usr/bin/openssl', 'enc', '-d', '-aes-256-cbc', '-K', server.TICKET_ENCRYPTION_KEY,
+         '-iv', body[:16].hex()],
+        input=body[16:], capture_output=True, check=True,
+    ).stdout
+    return json.loads(plaintext)
+
+
+class SafeCodeApiTest(unittest.TestCase):
+    def setUp(self):
+        probe = patch.object(ClaudeSubscription, 'read', return_value=('unavailable', {}, 300))
+        probe.start()
+        self.addCleanup(probe.stop)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root/'keys').mkdir()
+        self.digests = ['a'*64,'b'*64,'c'*64]
+        for key in self.digests[:2]:
+            (self.root/'keys'/key).touch()
+        self.registry = KeyRegistry(self.root)
+
+    def wait_for(self, predicate):
+        start=time.monotonic()
+        while not predicate():
+            if time.monotonic()-start>2:
+                self.fail('timed out')
+            time.sleep(0.01)
+
+    def test_official_rates_and_historical_migration(self):
+        self.assertEqual(estimate('claude-opus-5-5[1m]', [1_000_000]*4, one_hour_writes=500_000),
+                         (30_700_000_000, 0))
+        self.assertEqual(estimate('claude-haiku-5-5', [100_000, 0, 0, 0]), (10_000_000, 0))
+        self.assertEqual(estimate('claude-haiku-5-5', [99_999, 0, 2, 0]), (49_999_600, 0))
+        self.assertEqual(estimate('unknown', [1, 2, 3, 4]), (0, 10))
+        path = self.root/'legacy'
+        path.mkdir()
+        (path/'keys').mkdir()
+        with sqlite3.connect(path/'gateway.sqlite3') as db:
+            db.executescript('''
+                CREATE TABLE usage (key_id TEXT,model TEXT,requests INTEGER,failures INTEGER,
+                    input INTEGER,output INTEGER,cache_read INTEGER,cache_write INTEGER,last_used INTEGER,
+                    PRIMARY KEY(key_id,model));
+            ''')
+            db.execute('INSERT INTO usage VALUES (?,?,1,0,100,10,20,40,0)',
+                       (self.digests[0], 'claude-sonnet-5'))
+        for _ in range(2):
+            registry = KeyRegistry(path)
+            self.assertEqual(registry.usage(self.digests[0])[0]['cost_nanos'], 404_000)
+
+    def test_legacy_keys_usage_and_revoke(self):
+        first, second, _ = self.digests
+        self.assertEqual({first,second},{key['id'] for key in self.registry.list()})
+        self.registry.update(first,'笔记本',12)
+        self.registry.record(first,'claude-test',False,{'input_tokens':80,'output_tokens':3,'cache_read_input_tokens':40})
+        self.registry.record(first,'claude-test',True,{'input_tokens':10})
+        self.registry.revoke(first)
+        next_registry = KeyRegistry(self.root)
+        key = next(row for row in next_registry.list() if row['id']==first)
+        self.assertEqual((key['note'],key['rpm'],key['requests'],key['enabled']),('笔记本',12,2,False))
+        usage = next_registry.usage(first)[0]
+        self.assertEqual((usage['input'],usage['output'],usage['cache_read'],usage['failures']),(90,3,40,1))
+        self.assertEqual(next_registry.usage(second),[])
+        self.assertEqual(key['tokens'],133)
+        overview=next_registry.overview()
+        self.assertEqual(overview['models'][0]['requests'],2)
+        self.assertEqual(overview['stats']['requests'],0)
+        self.assertEqual(overview['trend'],[])
+
+    def test_fifo_timeout_frequency_limit_and_revocation(self):
+        first,second,third=self.digests
+        (self.root/'keys'/third).touch()
+        self.registry.register(third)
+        queue=RequestQueue(self.registry,max_wait=.55,per_key=1)
+        order=[]
+        def wait_slot(key):
+            try:
+                with queue.slot(key):
+                    order.append(key)
+            except GatewayError as error:
+                order.append(error.status)
+
+        with queue.slot(first):
+            b=threading.Thread(target=wait_slot,args=(second,));b.start()
+            self.wait_for(lambda:queue.snapshot()[1].get(second)==1)
+            with self.assertRaises(GatewayError) as full:
+                with queue.slot(second): pass
+            self.assertEqual(full.exception.status,429)
+            c=threading.Thread(target=wait_slot,args=(third,));c.start()
+            self.wait_for(lambda:queue.snapshot()[1].get(third)==1)
+        b.join(2);c.join(2)
+        self.assertEqual(order,[second,third])
+        with queue.slot(first):
+            b=threading.Thread(target=wait_slot,args=(second,));b.start()
+            b.join(2)
+            self.assertEqual(order[-1],429)
+            c=threading.Thread(target=wait_slot,args=(third,));c.start()
+            self.wait_for(lambda:queue.snapshot()[1].get(third)==1)
+            self.registry.revoke(third);queue.wake()
+            c.join(2)
+            self.assertEqual(order[-1],401)
+        self.registry.update(first,'limited',1)
+        with self.assertRaises(GatewayError) as rate:
+            with queue.slot(first): pass
+        self.assertEqual(rate.exception.status,429)
+        self.assertEqual(queue.snapshot(), ({}, {}, 1))
+        with self.assertRaises(ConnectionAbortedError):
+            with queue.slot(second,lambda:True):pass
+        self.assertEqual(queue.snapshot(), ({}, {}, 1))
+
+    def test_resize_admits_queued_requests_and_drains_active_requests(self):
+        first, second, _ = self.digests
+        queue = RequestQueue(self.registry, max_wait=3)
+        second_active = threading.Event()
+        release_second = threading.Event()
+        third_active = threading.Event()
+
+        def run_second():
+            with queue.slot(second):
+                second_active.set()
+                release_second.wait(3)
+
+        def run_third():
+            with queue.slot(second):
+                third_active.set()
+
+        threads = [threading.Thread(target=run_second), threading.Thread(target=run_third)]
+        try:
+            with queue.slot(first):
+                threads[0].start()
+                self.wait_for(lambda: queue.snapshot()[1].get(second) == 1)
+                queue.resize(2)
+                self.assertTrue(second_active.wait(1))
+                queue.resize(1)
+                self.assertEqual(queue.snapshot(), ({first: 1, second: 1}, {}, 1))
+                threads[1].start()
+                self.wait_for(lambda: queue.snapshot()[1].get(second) == 1)
+            self.assertEqual(queue.snapshot(), ({second: 1}, {second: 1}, 1))
+            self.assertFalse(third_active.is_set())
+        finally:
+            release_second.set()
+            for thread in threads:
+                if thread.ident is not None:
+                    thread.join(3)
+        self.assertTrue(third_active.is_set())
+        self.assertEqual(queue.snapshot(), ({}, {}, 1))
+
+    def test_port_configuration_and_failed_restart_rollback(self):
+        config_path = self.root/'config.json'
+        original = {'bind': '127.0.0.1', 'port': 45143, 'publicOrigin': 'https://fixture.example'}
+        config_path.write_text(json.dumps(original))
+        with socket.socket() as occupied:
+            occupied.bind(('127.0.0.1', 0))
+            occupied.listen()
+            with self.assertRaisesRegex(ValueError, '占用'):
+                server.configure_port(self.root, 45143, occupied.getsockname()[1])
+        self.assertEqual(json.loads(config_path.read_text()), original)
+        with self.assertRaisesRegex(ValueError, '已变更'):
+            server.configure_port(self.root, 45142, 45144)
+
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            new_port = probe.getsockname()[1]
+
+        def configure(command, **options):
+            _, expected, port, *flags = command
+            server.configure_port(self.root, int(expected), int(port), check_available=not flags)
+
+        def restart(command, port):
+            self.assertEqual(json.loads(config_path.read_text())['port'], port)
+            if port == new_port:
+                raise RuntimeError('simulated startup failure')
+            return {'port': port}
+
+        with (patch.object(agent, 'STATE', self.root),
+              patch.object(agent, 'secure_root_directory'),
+              patch.object(agent, 'run', side_effect=configure),
+              patch.object(agent, 'safe_code_api_admin', return_value={'port': 45143, 'busy': False}),
+              patch.object(agent, 'restart_safe_code_api', side_effect=restart) as restarted):
+            with self.assertRaisesRegex(RuntimeError, '已恢复原监听端口'):
+                agent.change_safe_code_api_port([], {'port': new_port, 'expectedPort': 45143})
+            self.assertEqual([call.args[1] for call in restarted.call_args_list], [new_port, 45143])
+        self.assertEqual(json.loads(config_path.read_text()), original)
+
+    def test_failed_gateway_turn_without_final_usage_releases_partial_accounting(self):
+        manager = server.PublicManager(self.root, {'instance': 'fixture'})
+        manager.conversations.append(SimpleNamespace(turn_id='failed-turn', pending={'tool': True}))
+        manager.accounting.before = {}
+        manager.count_usage({'id': 'completed-piece', 'usage': {'input_tokens': 10}}, 'failed-turn')
+        self.assertEqual(manager.take_usage()['input_tokens'], 10)
+        self.assertIn('failed-turn', manager.turn_messages)
+
+        manager.accounting.before = {}
+        manager.count_usage({'id': 'completed-piece', 'usage': {'input_tokens': 12}}, 'failed-turn')
+        manager.record_result('failed-turn', {})
+        manager.conversations.clear()
+        self.assertEqual(manager.take_usage()['input_tokens'], 2)
+        self.assertFalse(manager.usage)
+        self.assertFalse(manager.turn_messages)
+        self.assertFalse(manager.completed_usage)
+
+        disconnected = SimpleNamespace(turn_id='disconnected-turn', pending={'tool': True})
+        manager.conversations.append(disconnected)
+        manager.accounting.before = {}
+        manager.count_usage({'id': 'known-piece', 'usage': {'input_tokens': 3}}, 'disconnected-turn')
+        self.assertEqual(manager.take_usage()['input_tokens'], 3)
+        manager.accounting.before = {}
+        disconnected.pending.clear()
+        manager.finish_conversation_request(disconnected)
+        self.assertEqual(manager.accounting.finished['input_tokens'], 0)
+        self.assertFalse(manager.turn_messages)
+        self.assertFalse(manager.usage)
+
+    def test_concurrent_accounting_preserves_other_turn_usage(self):
+        manager = server.PublicManager(self.root, {'instance': 'fixture'})
+        worker_has_usage = threading.Event()
+        finish_worker = threading.Event()
+        totals = []
+
+        def count_other_turn():
+            manager.accounting.before = {}
+            manager.count_usage({'id': 'second-message', 'usage': {'input_tokens': 11}}, 'second-turn')
+            manager.record_result('second-turn', {'input_tokens': 11})
+            worker_has_usage.set()
+            finish_worker.wait(3)
+            totals.append(manager.take_usage()['input_tokens'])
+
+        worker = threading.Thread(target=count_other_turn)
+        worker.start()
+        try:
+            self.assertTrue(worker_has_usage.wait(1))
+            manager.accounting.before = {}
+            manager.count_usage({'id': 'first-message', 'usage': {'input_tokens': 7}}, 'first-turn')
+            self.assertEqual(manager.take_usage()['input_tokens'], 7)
+        finally:
+            finish_worker.set()
+            worker.join(3)
+        self.assertEqual(totals, [11])
+
+    def test_activation_is_required_after_the_first_active_key(self):
+        openssl = ['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=fixture']
+        subprocess.run([*openssl, '-keyout', self.root/'key.pem', '-out', self.root/'cert.pem'], check=True, capture_output=True)
+        for digest in self.digests[:2]:
+            self.registry.revoke(digest)
+        with server.PublicServer(self.root, {'bind':'127.0.0.1','port':0,'publicOrigin':'https://fixture.example'}) as public:
+            public.manage({'action':'enable_public','accepted':True})
+            self.assertFalse(public.manage({'action':'list'})['activation_required'])
+
+            def free_issue():
+                try:
+                    return public.manage({'action':'issue'})['id']
+                except ValueError as error:
+                    self.assertIn('激活码', str(error))
+                    return None
+
+            with ThreadPoolExecutor(2) as pool:
+                issued = [key for key in pool.map(lambda _: free_issue(), range(2)) if key]
+            self.assertEqual(len(issued), 1)
+            self.assertTrue(public.manage({'action':'list'})['activation_required'])
+            for invalid in ('', 'wrong', 'agentom', 123):
+                with self.assertRaisesRegex(ValueError, '激活码'):
+                    public.manage({'action':'issue','activation_code':invalid})
+            destination = self.root/'unissued.key'
+            with self.assertRaisesRegex(ValueError, '激活码'):
+                server.issue(self.root, 'https://fixture.example', destination)
+            self.assertFalse(destination.exists())
+            second = public.manage({'action':'issue','activation_code':'Agentom'})['id']
+            self.assertEqual({row['id'] for row in self.registry.list() if row['enabled']}, {issued[0], second})
+            public.manage({'action':'revoke','id':second})
+            public.manage({'action':'revoke','id':issued[0]})
+            self.assertFalse(public.manage({'action':'list'})['activation_required'])
+            self.assertIsNotNone(free_issue())
+
+    def test_local_admin_and_public_api_boundary(self):
+        subprocess.run(['openssl','req','-x509','-newkey','rsa:2048',
+                        '-nodes','-days','1','-subj','/CN=fixture','-keyout',self.root/'key.pem',
+                        '-out',self.root/'cert.pem'],check=True,capture_output=True)
+        with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0,
+                                           'publicOrigin':'https://fixture.example'}) as public:
+            fake=server.PublicManager(self.root,{'instance':'fixture'})
+            fake.catalog=lambda: {'data':[{'id':'claude-test'}]}
+            def model(data, **options):
+                fake.count_usage({'id':'fixture','usage':{'input_tokens':7}}, 'turn')
+                fake.record_result('turn',{'input_tokens':7,'output_tokens':2})
+                return {'model':'claude-test','usage':{'input_tokens':7,'output_tokens':2}}
+            fake.run=model
+            public.account=lambda *_:fake
+            with socketserver.UnixStreamServer(str(self.root/'admin.sock'),server.AdminHandler) as admin:
+                admin.manage=public.manage
+                for endpoint in (public,admin):
+                    threading.Thread(target=endpoint.serve_forever,daemon=True).start()
+                    self.addCleanup(endpoint.shutdown)
+
+                def admin_request(action, **args):
+                    return send_admin(self.root,json.dumps({'action':action,**args}).encode())
+
+                def manage(action, **args):
+                    if action == 'issue':
+                        args.setdefault('activation_code', 'Agentom')
+                    return admin_request(action, **args)['value']
+
+                def request(method, path, key=None, body=None):
+                    conn=http.client.HTTPSConnection('127.0.0.1',public.server_port,
+                                                     context=ssl._create_unverified_context(),timeout=3)
+                    try:
+                        conn.request(method,path,body,{'Authorization':'Bearer '+key} if key else {})
+                        response=conn.getresponse()
+                        return response.status,response.read()
+                    finally:
+                        conn.close()
+
+                self.assertEqual(manage('public_status'), {'enabled': False})
+                for operation in ('list', 'settings', 'issue', 'enable_public'):
+                    self.assertEqual(admin_request(operation), {'error': server.PUBLIC_DISABLED_MESSAGE})
+                self.assertEqual(admin_request('enable_public', accepted='true'), {'error': server.PUBLIC_DISABLED_MESSAGE})
+                earlier_ticket, legacy_id = server.make_key(self.root, 'https://fixture.example')
+                legacy_key = decode_new_ticket(earlier_ticket)['key']
+                self.registry.register(legacy_id)
+                (self.root/'keys'/legacy_id).touch()
+                self.assertEqual(request('GET','/v1/models?test=1',legacy_key)[0],403)
+                self.assertEqual(request('POST','/v1/messages',legacy_key)[0],403)
+                counter_path='/v1/messages/count_tokens'
+                self.assertEqual(request('POST',counter_path,legacy_key)[0],403)
+                with self.assertRaisesRegex(ValueError, '启用公网'):
+                    server.issue(self.root, 'https://fixture.example', self.root/'unissued.key')
+                self.assertFalse((self.root/'unissued.key').exists())
+                self.assertEqual(manage('enable_public', accepted=True), {'enabled': True})
+                runtime = manage('public_status', runtime=True)
+                self.assertEqual((runtime['enabled'], runtime['active'], runtime['waiting']), (True, 0, 0))
+                self.assertIn('subscription', runtime)
+                self.assertEqual(runtime['concurrency'], 1)
+                for invalid in (True, 0, -5, 2.5, '1e3', '0'):
+                    self.assertIn('error', admin_request('set_concurrency', concurrency=invalid))
+                self.assertEqual(manage('set_concurrency', concurrency='30'),
+                                 {'concurrency': 30, 'concurrency_text': '30'})
+                self.assertEqual(manage('list')['concurrency'], 30)
+                for capacity in (public.turns, public.webfetch_turns, public.workers):
+                    for _ in range(30):
+                        self.assertTrue(capacity.acquire(blocking=False))
+                    for _ in range(30):
+                        capacity.release()
+                self.assertEqual(manage('set_concurrency', concurrency=2),
+                                 {'concurrency': 2, 'concurrency_text': '2'})
+                with public.queue.slot(legacy_id), public.queue.slot(legacy_id):
+                    summary = manage('list')
+                    self.assertEqual((summary['active_count'], summary['concurrency']), (2, 2))
+                    legacy = next(key for key in summary['keys'] if key['id'] == legacy_id)
+                    self.assertEqual(legacy['active_count'], 2)
+                with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0}) as reopened:
+                    self.assertEqual(reopened.manage({'action':'public_status'}), {'enabled':True})
+                    self.assertEqual(reopened.manage({'action':'list'})['concurrency'], 2)
+                self.assertEqual(request('GET','/v1/models',legacy_key)[0],200)
+
+                settings = manage('settings')
+                self.assertEqual(settings, {'bind': '127.0.0.1', 'port': public.server_port,
+                                            'publicIp': None, 'origin': 'https://fixture.example',
+                                            'developmentChannel': False, 'busy': False})
+                with public.queue.slot(self.digests[0]):
+                    self.assertTrue(manage('settings')['busy'])
+                public.config['publicIp'] = '8.8.8.8'
+                self.assertEqual(manage('settings')['publicIp'], '8.8.8.8')
+
+                def post(path, key=None, body=True):
+                    return request('POST',path,key,json.dumps({'model':'claude-test'}) if body else None)
+
+                created=manage('issue',note='设备一',rpm=1)
+                ticket_payload = decode_new_ticket(created['ticket'])
+                self.assertEqual(ticket_payload['url'], 'https://fixture.example')
+                key=ticket_payload['key']
+                self.assertEqual(hashlib.sha256(key.encode()).hexdigest(),created['id'])
+                self.assertEqual(post('/admin',key,False)[0],404)
+                self.assertNotIn(key,json.dumps(manage('list')))
+                self.assertEqual(post('/v1/messages',key)[0],200)
+                self.assertEqual(post('/v1/messages',key)[0],429)
+                details=manage('usage',id=created['id'])
+                model_usage=details['models'][0]
+                self.assertEqual((model_usage['requests'],model_usage['input'],model_usage['output']),(1,7,2))
+                limited, success=details['recent']
+                self.assertEqual((limited['outcome'],limited['status'],limited['duration_ms']),('limited',429,None))
+                self.assertEqual((success['outcome'],success['status'],success['tokens']),('success',200,9))
+                self.assertGreaterEqual(success['wait_ms'],0)
+                self.assertGreaterEqual(success['duration_ms'],0)
+                overview=manage('list',details=True)
+                self.assertEqual((overview['stats']['requests'],overview['stats']['tokens'],overview['stats']['limited']),(2,9,1))
+                self.assertEqual(overview['trend'][0]['tokens'],9)
+                self.assertEqual(overview['recent'],details['recent'])
+                self.assertNotIn(key,json.dumps(overview))
+                analytics = manage('list', details=True, analytics='1h')['analytics']
+                self.assertEqual((analytics['step'], analytics['count']), (300, 12))
+                self.assertEqual(sum(point['requests'] for point in analytics['timeline']), 2)
+                self.assertEqual(sum(point['tokens'] for point in analytics['timeline']), 9)
+                self.assertEqual(sum(point['limited'] for point in analytics['timeline']), 1)
+                self.assertEqual(analytics['latency']['duration_ms']['samples'], 1)
+                self.assertEqual(analytics['latency']['wait_ms']['samples'], 2)
+                self.assertEqual(analytics['latency']['duration_ms']['p95_ms'], success['duration_ms'])
+                self.assertNotIn('analytics', manage('list', details=True, analytics=['1h']))
+                self.assertIn('请先撤销', admin_request('delete', id=created['id'])['error'])
+                self.assertEqual(manage('usage', id=created['id']), details)
+                manage('revoke',id=created['id'])
+                self.assertEqual(manage('usage', id=created['id']), details)
+                self.assertEqual(manage('delete', id=created['id']), {'id': created['id']})
+                self.assertEqual(manage('delete', id=created['id']), {'id': created['id']})
+                public.registry.record(created['id'], success['model'], False, {'output_tokens': 1}, request=success)
+                public.registry.record_unadmitted(created['id'], limited)
+                self.assertEqual(manage('usage', id=created['id']), {'models': [], 'recent': []})
+                key_ids = {entry['id'] for entry in manage('list')['keys']}
+                self.assertNotIn(created['id'], key_ids)
+                self.assertIn(legacy_id, key_ids)
+                self.assertEqual(manage('list', details=True)['stats']['requests'], 0)
+                self.assertEqual(post('/v1/messages',key,False)[0],401)
+                self.assertEqual(post(counter_path,key)[0],401)
+                self.assertEqual(post(counter_path)[0],401)
+                self.assertEqual(post(counter_path,legacy_key)[0],501)
+                counter=manage('issue',note='Token count only',rpm=1)
+                counter_key=decode_new_ticket(counter['ticket'])['key']
+                with patch.object(fake,'count_input_tokens',return_value={'input_tokens':950}) as count:
+                    status, body=post(counter_path+'?beta=true',counter_key)
+                    self.assertEqual((status,json.loads(body)),(200,{'input_tokens':950}))
+                    self.assertEqual(post(counter_path,counter_key)[0],429)
+                    count.assert_called_once_with({'model':'claude-test'}, {})
+                    self.assertEqual(manage('usage',id=counter['id'])['models'][0]['input'],0)
+                    self.assertEqual(manage('usage',id=counter['id'])['recent'][1]['tokens'],0)
+                capped = manage('issue', budget_cents=0)
+                capped_key = decode_new_ticket(capped['ticket'])['key']
+                self.assertEqual(post('/v1/messages', capped_key)[0], 402)
+                manage('update', id=capped['id'], budget_cents=1)
+                public.registry.record(capped['id'], 'claude-opus-5-5', False, {'output_tokens': 500})
+                manage('update', id=capped['id'], note='保留额度')
+                self.assertEqual(post('/v1/messages', capped_key)[0], 402)
+                manage('update', id=capped['id'], budget_cents=2)
+                self.assertEqual(post('/v1/messages', capped_key)[0], 200)
+                self.assertIn('error', admin_request('set_origin', origin='https://fixture.example/path'))
+                origin = 'https://new.fixture.example:45143'
+                self.assertEqual(manage('set_origin', origin=origin+'/')['origin'], origin)
+                self.assertEqual(manage('settings')['origin'], origin)
+                self.assertEqual(decode_new_ticket(manage('issue', note='设备二', rpm=10)['ticket'])['url'], origin)
+                with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0}) as reopened:
+                    self.assertEqual(reopened.manage({'action':'settings'})['origin'], origin)
+                with patch.object(server.socket, 'gethostname', return_value='tom666'):
+                    self.assertTrue(server.is_development_gateway('192.168.50.66'))
+                    self.assertFalse(server.is_development_gateway('8.8.8.8'))
+                with patch.object(server.socket, 'gethostname', return_value='other-vps'):
+                    self.assertFalse(server.is_development_gateway('192.168.50.66'))
+                with patch.object(server, 'is_development_gateway', return_value=True):
+                    settings = manage('settings')
+                    self.assertTrue(settings['developmentChannel'])
+                    self.assertEqual(settings['origin'], server.DEVELOPMENT_ORIGIN)
+                    self.assertIn('error', admin_request('set_origin', origin=origin))
+                    issued = manage('issue', origin='https://wrong.fixture.example')
+                    self.assertEqual(decode_new_ticket(issued['ticket'])['url'], server.DEVELOPMENT_ORIGIN)
+                admin.shutdown()
+            public.shutdown()
+
+
+class ClaudeSubscriptionTest(unittest.TestCase):
+    def test_subscription_returns_only_sanitized_windows(self):
+        with tempfile.TemporaryDirectory() as d:
+            subscription = ClaudeSubscription()
+            subscription.credentials = Path(d)/'.credentials.json'
+            self.assertEqual(subscription.read(), ('unavailable', {}, 300))
+            subscription.credentials.write_text(json.dumps({'claudeAiOauth': {'accessToken': 'fixture-token'}}))
+            response_body = {
+                'five_hour': {'utilization': 32.25, 'resets_at': '2026-11-19T08:00:00Z', 'secret': 'ignore'},
+                'seven_day': {'utilization': 92, 'resets_at': 'bad date'},
+                'extra': {'token': 'ignore'},
+            }
+            with patch('management.http.client.HTTPSConnection') as connect:
+                connection = connect.return_value
+                response = connection.getresponse.return_value
+                response.status = 200
+                response.read.return_value = json.dumps(response_body).encode()
+                subscription.refresh()
+                connect.assert_called_once_with('api.anthropic.com', timeout=5)
+                self.assertEqual(connection.request.call_args.args, ('GET', '/api/oauth/usage'))
+                self.assertEqual(connection.request.call_args.kwargs['headers']['Authorization'], 'Bearer fixture-token')
+                value = subscription.snapshot()
+                self.assertEqual(value['state'], 'available')
+                self.assertEqual(value['windows']['five_hour']['used'], 32.2)
+                self.assertIsInstance(value['windows']['five_hour']['resets_at'], int)
+                self.assertEqual(value['windows']['seven_day'], {'used': 92, 'resets_at': None})
+                self.assertNotIn('fixture-token', json.dumps(value))
+                self.assertNotIn('ignore', json.dumps(value))
+                response.status = 429
+                response.getheader.return_value = '900'
+                subscription.refresh()
+                self.assertEqual(subscription.snapshot()['state'], 'stale')
+                self.assertEqual(subscription.snapshot()['windows'], value['windows'])
+
+
+if __name__=='__main__':
+    unittest.main()

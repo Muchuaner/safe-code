@@ -18,12 +18,20 @@ with tempfile.TemporaryDirectory(prefix='safe-code-sandbox-') as d:
    if message.get('id')==id:return message
   raise TimeoutError(op)
  try:
-  for op in ['connect','connection.reauthenticate','deploy','mount.apply','host.enable','bridge.start','cloud.open','ip.apply','terminal','desktop','feedback.send','updates.download','updates.install','ip.info']:
+  for op in ['connect','connection.reauthenticate','deploy','mount.apply','host.enable','bridge.start','claudeDesktop.start','claudeDesktop.stop','cloud.open','ip.apply','terminal','desktop','feedback.send','updates.download','updates.install','ip.info']:
    reply=rpc(op,{'host':'production.invalid','username':'fixture','password':'fixture-only'});assert '隔离预览' in reply['error'],(op,reply)
-  prefs=rpc('services.preferences')['result'];assert prefs['enabled'] is False and prefs['serviceAvailable'] is False
+  prefs=rpc('services.preferences')['result']
+  assert not prefs['enabled'] and not prefs['diagnosticsEnabled'] and not prefs['serviceAvailable']
+  assert rpc('services.consent',{'enabled':True})['result']['enabled']
+  assert rpc('diagnostics.consent',{'enabled':True})['result']['diagnosticsEnabled']
+  assert not rpc('services.consent',{'enabled':False})['result']['enabled']
+  assert not rpc('diagnostics.consent',{'enabled':False})['result']['diagnosticsEnabled']
+  prefs=rpc('services.confirm')['result']
+  assert prefs['confirmed'] and not prefs['enabled'] and not prefs['diagnosticsEnabled']
+  desktop=rpc('claudeDesktop.status')['result']; assert not desktop['active'] and not desktop['managed']
   assert rpc('login.load')['result'] is None;assert rpc('mount.status')['result']['count']==0
   assert not (Path(d)/'known_hosts').exists();assert not (Path(d)/'login.aes').exists();assert rpc('app.shutdown')['result'] is True
  finally:
   p.stdin.close();p.wait(timeout=10)
  assert p.returncode==0,p.stderr.read()
-print('OFFLINE_SANDBOX_BLOCKS_14_NETWORK_AND_MUTATION_OPERATIONS_WITH_DISPOSABLE_STATE')
+print('OFFLINE_SANDBOX_BLOCKS_NETWORK_AND_MUTATION_OPERATIONS_WITH_DISPOSABLE_STATE')

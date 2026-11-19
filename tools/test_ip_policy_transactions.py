@@ -7,6 +7,8 @@ from unittest.mock import patch
 root=Path(__file__).resolve().parent.parent
 spec=importlib.util.spec_from_file_location('network',root/'src/SafeCode.Core/Remote/network.py')
 n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n)
+aspec=importlib.util.spec_from_file_location('agent',root/'src/SafeCode.Core/Remote/agent.py')
+a=importlib.util.module_from_spec(aspec);aspec.loader.exec_module(a)
 class Transactions(unittest.TestCase):
     def setUp(self):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);self.base=Path(temp.name)
@@ -15,7 +17,7 @@ class Transactions(unittest.TestCase):
         nft=self.base/'usr/sbin/nft';nft.parent.mkdir(parents=True);nft.touch()
         self.route={'tokens':['default','via','198.18.0.1','dev','ens18','src','198.18.0.12'],'dev':'ens18','source':'198.18.0.12'}
         self.policy={'ingressIp':'198.18.0.11','egressIp':'198.18.0.12','sshPort':22,'lockIngress':True,'lockEgress':True}
-        self.commands=[];self.fail_enable=False
+        self.commands=[];self.fail_enable=False;self.original_valid_policy=n.valid_policy
         def local_path(value):
             text=str(value)
             return self.base/text.lstrip('/') if text.startswith(('/opt/','/etc/','/usr/')) else Path(value)
@@ -26,6 +28,19 @@ class Transactions(unittest.TestCase):
             return subprocess.CompletedProcess(args,0,'enabled\n' if args[:2]==['systemctl','is-enabled'] else '198.18.0.12' if args[0]=='curl' else '', '')
         for name,value in [('ROOT',self.state),('Path',local_path),('run',run),('route',lambda:self.route),('valid_policy',lambda p:p),('existing_table',lambda:'table inet safe_code_ip { comment "Safe Code managed"; }')]:
             handle=patch.object(n,name,value);handle.start();self.addCleanup(handle.stop)
+    def test_invalid_policy_uses_existing_protocol_error_code(self):
+        with patch.object(n,'assigned',return_value={'198.18.0.11':'ens18'}),patch.object(n,'route',return_value=self.route):
+            with self.assertRaises(n.PolicyError) as raised:self.original_valid_policy({**self.policy,'egressIp':'198.18.0.99'})
+        self.assertEqual(raised.exception.code,'invalid_argument')
+    def test_policy_error_code_reaches_remote_protocol(self):
+        self.assertEqual(a.error_code(n.PolicyError('invalid_argument','fixture')),'invalid_argument')
+        self.assertEqual(a.error_code(n.PolicyError('deployment_busy','fixture')),'deployment_busy')
+    def test_pending_change_and_expired_token_are_distinguishable(self):
+        pending=self.state/('ip-pending-'+'c'*24+'.json');pending.write_text(json.dumps({'created':time.time(),'applied':False}))
+        with self.assertRaises(n.PolicyError) as raised:n.prepare(self.policy)
+        self.assertEqual(raised.exception.code,'deployment_busy')
+        with self.assertRaises(n.PolicyError) as expired:n.status('d'*24)
+        self.assertEqual(expired.exception.code,'invalid_argument')
     def test_stale_unapplied_record_is_cleared_without_touching_network(self):
         old=self.state/('ip-pending-'+'a'*24+'.json');old.write_text(json.dumps({'created':time.time()-601,'applied':False}))
         result=n.prepare(self.policy)
