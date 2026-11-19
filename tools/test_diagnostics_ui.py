@@ -18,12 +18,12 @@ with sync_playwright() as p:
     page.route('**/*',route)
     page.add_init_script('''
       window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;
-      window.fixturePrefs={enabled:false,confirmed:true,diagnosticsEnabled:true,serviceAvailable:true,recipient:'collector.invalid',issueId:'12345678-1234-4234-8234-123456789abc'};
+      window.fixturePrefs={enabled:false,confirmed:true,diagnosticsEnabled:false,serviceAvailable:true,recipient:'collector.invalid',issueId:null};
       window.diagnosticConsentCalls=[];
       window.chrome={webview:{postMessage(message){
         let result=null;
         if(message.op==='services.preferences')result=window.fixturePrefs;
-        if(message.op==='diagnostics.consent'){window.diagnosticConsentCalls.push(message.args.enabled);window.fixturePrefs.diagnosticsEnabled=message.args.enabled;result=window.fixturePrefs;}
+        if(message.op==='diagnostics.consent'){window.diagnosticConsentCalls.push(message.args.enabled);window.fixturePrefs.diagnosticsEnabled=message.args.enabled;window.fixturePrefs.issueId=message.args.enabled?'12345678-1234-4234-8234-123456789abc':null;result=window.fixturePrefs;}
         if(message.op==='notice.state')result={accepted:false};
         queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
       }}};
@@ -31,21 +31,23 @@ with sync_playwright() as p:
     page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady')
     page.wait_for_function("!document.querySelector('#settings-diagnostics-consent').disabled")
     page.wait_for_function("document.querySelector('#notice-screen').hidden===false")
-    assert page.locator('#diagnostics-consent').is_checked()
+    assert not page.locator('#diagnostics-consent').is_checked()
+    assert not page.locator('#usage-consent').is_checked()
     assert page.locator('#accept').bounding_box()['y']+page.locator('#accept').bounding_box()['height']<=536, 'Notice confirmation is inaccessible'
     output=root/'.local/evidence';output.mkdir(parents=True,exist_ok=True)
     page.screenshot(path=str(output/'diagnostics-notice.png'))
     page.locator('[data-open-services]:visible').first.click()
     assert page.locator('#services-dialog .diagnostic-notice').count()==1
-    assert '12345678-1234-4234-8234-123456789abc' in page.locator('#feedback-status').inner_text()
     assert page.locator('#services-dialog .config-body').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
     toggle=page.locator('#settings-diagnostics-consent')
-    assert toggle.is_checked()
-    toggle.uncheck();page.wait_for_function('window.diagnosticConsentCalls.length===1')
+    assert not toggle.is_checked()
+    toggle.check();page.wait_for_function('window.diagnosticConsentCalls.length===1')
     assert not page.locator('#settings-usage-consent').is_checked(), 'Diagnostic opt-in changed usage consent'
-    toggle.check();page.wait_for_function('window.diagnosticConsentCalls.length===2')
-    assert page.evaluate('window.diagnosticConsentCalls')==[False,True]
     assert page.locator('#diagnostics-consent').is_checked()
+    assert '12345678-1234-4234-8234-123456789abc' in page.locator('#feedback-status').inner_text()
+    toggle.uncheck();page.wait_for_function('window.diagnosticConsentCalls.length===2')
+    assert page.evaluate('window.diagnosticConsentCalls')==[True,False]
+    assert not page.locator('#diagnostics-consent').is_checked()
     assert '不发送原始日志' in page.locator('#services-dialog').inner_text()
     page.locator('#feedback-send').scroll_into_view_if_needed()
     bounds=page.locator('#feedback-send').bounding_box()
@@ -55,4 +57,4 @@ with sync_playwright() as p:
     page.screenshot(path=str(output/'diagnostics-settings.png'))
     assert not errors,errors
     browser.close()
-print('DIAGNOSTIC_DEFAULT_CHECKED_INDEPENDENT_CONSENT_AND_SMALL_WINDOW_PASSED')
+print('DIAGNOSTIC_DEFAULT_OFF_INDEPENDENT_CONSENT_AND_SMALL_WINDOW_PASSED')

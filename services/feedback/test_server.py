@@ -53,6 +53,50 @@ class FeedbackTests(unittest.TestCase):
             self.assertEqual(stored['correlation'],event['context']);self.assertEqual(stored['report']['stage'],'job_started')
         feedback['eventId']=str(uuid.uuid4());feedback['context']=None
         self.assertEqual(self.post('/v1/feedback',feedback),202)
+    def test_feature_diagnostics_and_feedback_use_same_fixed_vocabulary(self):
+        gateway=self.diagnostic_v2();gateway['report'].update(operation='gateway_key_issue',outcome='success',errorKind='none')
+        self.assertEqual(self.post('/v1/diagnostics',gateway),202)
+        relay=self.diagnostic_v2();relay['report'].update(operation='desktop_key_request',errorKind='gateway_upstream_failed',stage='started',signals=[])
+        self.assertEqual(self.post('/v1/diagnostics',relay),202)
+        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=relay['version'],message='本机接入请求失败',
+                      context=dict(correlation=relay['context'],report=relay['report']))
+        self.assertEqual(self.post('/v1/feedback',feedback),202)
+        download=self.diagnostic_v2()
+        download['report'].update(operation='claude',outcome='success',errorKind='none',stage='claude_download_verified',
+                                  signals=[dict(seconds=2,code='claude_download_started'),dict(seconds=10,code='claude_download_verified')])
+        self.assertEqual(self.post('/v1/diagnostics',download),202)
+        with self.store.connect() as db:
+            reports=[json.loads(row[0]) for row in db.execute('SELECT report FROM diagnostics ORDER BY rowid')]
+            self.assertEqual(reports,[gateway['report'],relay['report'],download['report']])
+            stored=json.loads(db.execute('SELECT context FROM report_context WHERE event_id=?',(feedback['eventId'],)).fetchone()[0])
+            self.assertEqual(stored,feedback['context'])
+    def test_feature_diagnostics_reject_private_values_and_preserve_legacy_scope(self):
+        for field in ('apiKey','activationCode','vpsAddress','toolOutput','command','conversation'):
+            with self.subTest(field=field):
+                event=self.diagnostic_v2()
+                event['report'].update(operation='gateway_key_issue',**{field:'private'})
+                self.assertEqual(self.post('/v1/diagnostics',event),400)
+        for key,value in [('operation','gateway_key_issue:user-input'),('errorKind','claude_download_verified')]:
+            with self.subTest(key=key):
+                event=self.diagnostic_v2();event['report'].update(operation='gateway_key_issue')
+                event['report'][key]=value
+                self.assertEqual(self.post('/v1/diagnostics',event),400)
+        legacy=self.diagnostic();legacy['report']['operation']='gateway_enable'
+        self.assertEqual(self.post('/v1/diagnostics',legacy),400)
+        legacy['report']['operation']='claude'
+        legacy['report']['signals']=[dict(seconds=2,code='claude_download_started')]
+        self.assertEqual(self.post('/v1/diagnostics',legacy),400)
+        with self.store.connect() as db:self.assertEqual(db.execute('SELECT count(*) FROM diagnostics').fetchone()[0],0)
+    def test_relay_error_kinds_are_fixed_and_v2_only(self):
+        for kind in ('gateway_invalid_request','gateway_auth_failed','gateway_conflict','gateway_rate_limited',
+                     'gateway_not_supported','gateway_upstream_failed'):
+            with self.subTest(kind=kind):
+                event=self.diagnostic_v2();event['report'].update(operation='desktop_key_request',errorKind=kind)
+                self.assertEqual(self.post('/v1/diagnostics',event),202)
+        event=self.diagnostic_v2();event['report'].update(operation='desktop_key_request',errorKind='gateway_unknown_status')
+        self.assertEqual(self.post('/v1/diagnostics',event),400)
+        legacy=self.diagnostic();legacy['report']['errorKind']='gateway_auth_failed'
+        self.assertEqual(self.post('/v1/diagnostics',legacy),400)
     def test_v2_reject_private_metadata_invalid_stages_and_mismatched_ids(self):
         for mutation in ['extra','id','stage','raw','feedback_raw']:
             event=self.diagnostic_v2();path='/v1/diagnostics'
@@ -103,7 +147,7 @@ class FeedbackTests(unittest.TestCase):
             event=self.diagnostic();event['report']['signals']=signals;events.append(event)
         for event in events:self.assertEqual(self.post('/v1/diagnostics',event),400)
     def test_diagnostics_rate_limit_is_independent(self):
-        for _ in range(20):self.assertEqual(self.post('/v1/diagnostics',self.diagnostic()),202)
+        for _ in range(40):self.assertEqual(self.post('/v1/diagnostics',self.diagnostic()),202)
         self.assertEqual(self.post('/v1/diagnostics',self.diagnostic()),429)
         self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='0.4.0',message='normal feedback')),202)
         self.assertEqual(self.post('/v1/usage',self.usage()),202)

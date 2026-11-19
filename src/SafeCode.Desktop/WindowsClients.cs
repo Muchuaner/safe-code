@@ -9,13 +9,14 @@ public sealed class WindowsClients : IDisposable
     private readonly List<Process> terminals = [];
     private readonly List<RdpDesktop> desktops=[];
     internal RdpResizePreferences? ResizePreferences { get; set; }
+    internal Action<Exception?>? DisplayOperationCompleted { get; set; }
     public async Task OpenDesktopAsync(SshSession session,CancellationToken ct,DesktopResolution? resolution=null)=>await LaunchDesktopAsync(session,ct,resolution);
     private async Task<RdpDesktop> LaunchDesktopAsync(SshSession session,CancellationToken ct,DesktopResolution? resolution=null)
     {
         if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         var connection=await session.PrepareRemoteDesktopAsync(account.Username,false,ct);
-        var window=new RdpDesktop(resolution,ResizePreferences);desktops.Add(window);
+        var window=new RdpDesktop(resolution,ResizePreferences,DisplayOperationCompleted);desktops.Add(window);
         window.FormClosed+=(_,_)=>desktops.Remove(window);
         try{window.Show();window.Connect("127.0.0.1",connection.Port,account.Username,account.Password,resolution);return window;}catch{window.Close();window.Dispose();throw;}
     }
@@ -41,7 +42,7 @@ public sealed class WindowsClients : IDisposable
     {
         string config=Path.Combine(Path.GetDirectoryName(session.KnownHostsPath)!,"ssh-client-config");
         File.WriteAllText(config,"# Safe Code 单次连接不加载用户的通配主机配置。\n");
-        return [interactive?"-t":"-T","-F",config,"-i",session.KeyPath,"-p",session.Port.ToString(),"-o","BatchMode=yes","-o","ForwardAgent=no","-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile="+session.KnownHostsPath,username+"@"+session.Host];
+        return [interactive?"-t":"-T","-F",config,"-i",session.KeyPath,"-p",session.Port.ToString(),"-o","BatchMode=yes","-o","ForwardAgent=no","-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o",SshClientOptions.UserKnownHostsFile(session.KnownHostsPath),username+"@"+session.Host];
     }
     public async Task<bool> VerifyNativeSshAsync(SshSession session,CancellationToken ct)
     {
@@ -66,6 +67,28 @@ public sealed class WindowsClients : IDisposable
         var start=new ProcessStartInfo(ssh){UseShellExecute=true};
         foreach(string arg in args)start.ArgumentList.Add(arg);
         var process=Process.Start(start)??throw new IOException("无法打开 Windows 终端。");terminals.Add(process);
+    }
+    public static string OpenCodex()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("codex://") { UseShellExecute = true });
+            return "已请求打开 Codex 客户端。";
+        }
+        catch
+        {
+            string packages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages");
+            if (Directory.Exists(Path.Combine(packages, "OpenAI.Codex_2p2nqsd0c76g0")))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo("explorer.exe", @"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App") { UseShellExecute = true });
+                    return "已请求打开 Codex 客户端。";
+                }
+                catch { }
+            }
+            throw new InvalidOperationException("未能打开 Codex，请先安装官方客户端，或从开始菜单启动。");
+        }
     }
     public static void OpenUrl(string url)
     {

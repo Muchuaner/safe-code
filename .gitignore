@@ -9,6 +9,7 @@ artifacts/
 **/bin/
 **/obj/
 .local/
+/.agents/skills/quarkclouddrive/
 dist/
 *.user
 

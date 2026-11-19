@@ -1,7 +1,7 @@
 ﻿; 本地构建单个离线安装文件；不发布任何内容。
-#define AppVersion "Beta-0.4.4.2"
+#define AppVersion "Beta-0.4.4.17"
 #ifndef AppSource
-  #define AppSource "..\dist\SafeCode-Beta-0.4.4.2-win-x64"
+  #define AppSource "..\dist\SafeCode-Beta-0.4.4.17-win-x64"
 #endif
 #ifndef RuntimeSource
   #define RuntimeSource "..\.local\installer\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
@@ -13,7 +13,7 @@
 AppId={{C219972F-04EC-4647-92E0-1F93DB8DDE29}
 AppName=Safe Code
 AppVersion={#AppVersion}
-VersionInfoVersion=0.4.4.2
+VersionInfoVersion=0.4.4.17
 AppPublisher=Safe Code
 DefaultDirName={localappdata}\Programs\Safe Code
 DefaultGroupName=Safe Code
@@ -28,16 +28,24 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\SafeCode.exe
+SetupIconFile=..\assets\icons\safe-code-shortcut.ico
 CloseApplications=yes
 RestartApplications=no
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+[InstallDelete]
+Type: files; Name: "{app}\Web\guide.html"
+Type: files; Name: "{app}\Web\guide.js"
+Type: files; Name: "{app}\Payloads\claude\linux-x64"
+Type: files; Name: "{app}\Payloads\claude\linux-x64.json"
+Type: files; Name: "{app}\licenses\Claude-Code.txt"
+Type: dirifempty; Name: "{app}\Payloads\claude"
 [Files]
-Source: "{#AppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#AppSource}\*"; DestDir: "{app}"; Excludes: "\Payloads\claude\*,\Web\guide.html,\Web\guide.js,\licenses\Claude-Code.txt"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#RuntimeSource}"; DestDir: "{tmp}"; DestName: "WebView2-offline.exe"; Flags: deleteafterinstall
 [Icons]
 Name: "{userdesktop}\Safe Code"; Filename: "{app}\SafeCode.exe"; IconFilename: "{app}\Icons\safe-code-shortcut.ico"; IconIndex: 0
-Name: "{userprograms}\Safe Code"; Filename: "{app}\SafeCode.exe"
+Name: "{userprograms}\Safe Code"; Filename: "{app}\SafeCode.exe"; IconFilename: "{app}\Icons\safe-code-shortcut.ico"; IconIndex: 0
 [Run]
 Filename: "{tmp}\WebView2-offline.exe"; Parameters: "/silent /install"; Flags: waituntilterminated; Check: NeedsWebView
 Filename: "{app}\SafeCode.exe"; Description: "启动 Safe Code"; Flags: nowait postinstall skipifsilent

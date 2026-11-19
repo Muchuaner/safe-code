@@ -37,7 +37,7 @@ public sealed partial class SshSession
                             await sftp.UploadFileAsync(resource,directory+"/"+name,ct);sftp.ChangePermissions(directory+"/"+name,600);
                         }
                         var previous=client;connection=settings;client=replacement;remoteDirectory=directory;
-                        mountAuthenticationFailed=false;
+                        mountAuthenticationFailed=false;gatewayAuthenticationFailed=false;
                         if(HasMounts){mountState="reconnecting";mountMessage="新密码已验证，正在恢复原挂载通道";}
                         foreach(var tunnel in tunnels)DisposeMountResource(tunnel);tunnels.Clear();DisposeMountResource(previous);
                     }
