@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><Version>0.4.4-beta.2</Version><InformationalVersion>Beta-0.4.4.2</InformationalVersion><IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion></PropertyGroup>
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><Version>0.4.4-beta.17</Version><InformationalVersion>Beta-0.4.4.17</InformationalVersion><IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion></PropertyGroup>
   <ItemGroup><ProjectReference Include="../SafeCode.Core/SafeCode.Core.csproj" /></ItemGroup>
   <ItemGroup>
     <Compile Include="../SafeCode.Desktop/ClientServices.cs" Link="ClientServices.cs" />
@@ -9,5 +9,6 @@
     <Compile Include="../SafeCode.Desktop/ConnectionErrors.cs" Link="ConnectionErrors.cs" />
     <Content Include="../SafeCode.Desktop/service-endpoints.json" Link="service-endpoints.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /><Compile Include="../Shared/DesktopKeyAccess.cs" Link="DesktopKeyAccess.cs" /></ItemGroup>
   <ItemGroup><Compile Include="../Shared/RdpResizePreferences.cs" Link="RdpResizePreferences.cs" /></ItemGroup>
 </Project>

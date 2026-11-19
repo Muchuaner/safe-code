@@ -19,40 +19,77 @@ class Installation(unittest.TestCase):
         with patch.object(a,'read_config',return_value=previous),patch.object(a,'run',return_value=Mock(returncode=0)) as run,patch.object(a,'write',side_effect=OSError('fixture full disk')):
             with self.assertRaisesRegex(RuntimeError,'密码已更新，但账户记录保存失败'):a.setup_account({'password':'new-fixture-password','hostname':'new-host'})
             calls=[c.args[0][0] for c in run.call_args_list];self.assertLess(calls.index('hostnamectl'),calls.index('chpasswd'))
-    def claude_download(self,folder,content=b'official fixture',digest=None):
+    def claude_download(self,target,content=b'official fixture',digest=None,architecture='aarch64'):
         digest=digest or hashlib.sha256(content).hexdigest()
+        platform={'aarch64':'linux-arm64','x86_64':'linux-x64'}[architecture]
         urls=[]
         def fetch(url,timeout):
             urls.append(url)
             if url.endswith('/stable'):return io.BytesIO(b'2.1.311\n')
-            if url.endswith('/manifest.json'):return io.BytesIO(json.dumps({'platforms':{'linux-arm64':{'checksum':digest}}}).encode())
+            if url.endswith('/manifest.json'):return io.BytesIO(json.dumps({'platforms':{platform:{'checksum':digest}}}).encode())
             return io.BytesIO(content)
-        with patch.object(a,'__file__',str(Path(folder)/'agent.py')),patch.object(a,'log'),patch('platform.machine',return_value='aarch64'),patch('urllib.request.urlopen',side_effect=fetch):
-            value=a.download_claude()
-        self.assertEqual(urls, ['https://downloads.claude.ai/claude-code-releases/stable','https://downloads.claude.ai/claude-code-releases/2.1.311/manifest.json','https://downloads.claude.ai/claude-code-releases/2.1.311/linux-arm64/claude'])
+        with patch.object(a,'log'),patch('platform.machine',return_value=architecture),patch('urllib.request.build_opener') as opener:
+            opener.return_value.open.side_effect=fetch
+            value=a.download_claude(target)
+        self.assertEqual(urls, ['https://downloads.claude.ai/claude-code-releases/stable',
+            'https://downloads.claude.ai/claude-code-releases/2.1.311/manifest.json',
+            f'https://downloads.claude.ai/claude-code-releases/2.1.311/{platform}/claude'])
         return value
     def test_vps_download_uses_vps_architecture_and_checks_official_digest(self):
-        with tempfile.TemporaryDirectory() as folder:
-            result=self.claude_download(folder);target=Path(result['claudePayload'])
-            self.assertEqual(target.read_bytes(),b'official fixture');self.assertEqual(target.stat().st_mode&0o777,0o600)
-            self.assertEqual(result['claudeVersion'],'2.1.311')
+        for architecture in ('aarch64','x86_64'):
+            with self.subTest(architecture=architecture), tempfile.TemporaryDirectory() as folder:
+                target=Path(folder)/'download'
+                release=self.claude_download(target,architecture=architecture)
+                self.assertEqual(target.read_bytes(),b'official fixture')
+                self.assertEqual(release,'2.1.311')
     def test_vps_download_bad_digest_removes_file(self):
         with tempfile.TemporaryDirectory() as folder:
-            with self.assertRaisesRegex(RuntimeError,'校验失败'):self.claude_download(folder,digest='0'*64)
+            with self.assertRaisesRegex(RuntimeError,'校验失败'):
+                self.claude_download(Path(folder)/'download',digest='0'*64)
             self.assertEqual(list(Path(folder).iterdir()),[])
-    def test_vps_dns_failure_has_stable_fallback_code(self):
-        with tempfile.TemporaryDirectory() as folder,patch.object(a,'__file__',str(Path(folder)/'agent.py')),patch.object(a,'log'),patch('platform.machine',return_value='x86_64'),patch('urllib.request.urlopen',side_effect=urllib.error.URLError(socket.gaierror('fixture'))):
-            with self.assertRaises(a.OperationError) as error:a.download_claude()
+    def test_vps_dns_failure_returns_stable_code(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(a,'log'),patch('platform.machine',return_value='x86_64'),patch('urllib.request.build_opener') as opener:
+            opener.return_value.open.side_effect=urllib.error.URLError(socket.gaierror('fixture'))
+            with self.assertRaises(a.OperationError) as error:a.download_claude(Path(folder)/'download')
             self.assertEqual(error.exception.code,'dns_failure');self.assertIn('VPS',str(error.exception))
             self.assertEqual(list(Path(folder).iterdir()),[])
     def test_vps_download_stream_failure_removes_partial_file(self):
-        with tempfile.TemporaryDirectory() as folder,patch.object(a,'__file__',str(Path(folder)/'agent.py')),patch.object(a,'log'),patch('platform.machine',return_value='x86_64'):
+        with tempfile.TemporaryDirectory() as folder,patch.object(a,'log'),patch('platform.machine',return_value='x86_64'):
             response=Mock();response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
             response.read.side_effect=[b'partial',TimeoutError()]
             manifest=json.dumps({'platforms':{'linux-x64':{'checksum':'0'*64}}}).encode()
-            with patch('urllib.request.urlopen',side_effect=[io.BytesIO(b'2.1.311'),io.BytesIO(manifest),response]):
-                with self.assertRaises(a.OperationError) as error:a.download_claude()
+            with patch('urllib.request.build_opener') as opener:
+                opener.return_value.open.side_effect=[io.BytesIO(b'2.1.311'),io.BytesIO(manifest),response]
+                with self.assertRaises(a.OperationError) as error:a.download_claude(Path(folder)/'download')
             self.assertEqual(error.exception.code,'timeout');self.assertEqual(list(Path(folder).iterdir()),[])
+    def test_vps_does_not_follow_download_redirects(self):
+        url='https://downloads.claude.ai/claude-code-releases/stable'
+        redirect=urllib.error.HTTPError(url,302,'fixture redirect',{},None)
+        with tempfile.TemporaryDirectory() as folder,patch.object(a,'log'),patch('platform.machine',return_value='x86_64'),patch('urllib.request.build_opener') as opener:
+            opener.return_value.open.side_effect=redirect
+            with self.assertRaises(a.OperationError) as error:a.download_claude(Path(folder)/'download')
+            self.assertEqual(error.exception.code,'package_fetch_failed')
+            opener.return_value.open.assert_called_once_with(url,timeout=45)
+            redirect_handler=opener.call_args.args[0]
+            self.assertIsNone(redirect_handler.redirect_request(None,None,302,'',{},'https://example.test/'))
+            self.assertEqual(list(Path(folder).iterdir()),[])
+    def test_install_only_passes_vps_verified_file_to_work_user(self):
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as staging:
+            def fetch(target):
+                self.assertEqual(Path(staging),target.parent)
+                target.write_bytes(b'verified')
+                return '2.1.311'
+            def user_files(action,path,**options):
+                if action=='install_claude':
+                    source=Path(options['source'])
+                    self.assertEqual((path,source.read_bytes(),options['release']),('.local/bin/claude',b'verified','2.1.311'))
+                    self.assertEqual(source.stat().st_mode&0o777,0o444)
+                    self.assertEqual(source.parent.stat().st_mode&0o777,0o755)
+                else:self.assertEqual((action,path),('append_unique','.profile'))
+            with patch.object(a,'has_pinned_model_runtime',return_value=False),patch.object(a,'account'),patch.object(a,'apt'),patch.object(a,'log'),patch.object(a,'home',return_value=Path(workspace)),patch.object(a,'version',return_value='2.1.311'),patch.object(a.tempfile,'TemporaryDirectory',return_value=Mock(__enter__=Mock(return_value=staging),__exit__=Mock())),patch.object(a,'download_claude',side_effect=fetch) as download,patch.object(a,'user_files',side_effect=user_files) as install:
+                a.setup_claude({'claudePayload':'/tmp/unapproved'})
+            download.assert_called_once_with(Path(staging)/'claude')
+            self.assertEqual(install.call_count,2)
     def test_dns_error_is_chinese_and_has_stable_code(self):
         p=subprocess.CompletedProcess([],6,'','curl: (6) Could not resolve host: claude.ai\n'*4)
         with patch.object(a.subprocess,'run',return_value=p):
@@ -70,16 +107,42 @@ class Installation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d,patch.object(a,'STATE',Path(d)),patch.object(a,'log'),patch.object(a,'wait_package_manager'),patch.object(a,'run',return_value=Mock(stdout='')),patch.object(a,'stream',side_effect=a.OperationError('dns_failure','DNS')):
             with self.assertRaises(a.OperationError):a.prepare_system()
             self.assertFalse((Path(d)/'system-prepared.json').exists())
-    def test_background_job_keeps_its_own_verified_payload(self):
+    def test_background_job_schedules_install_instead_of_copying_a_payload(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d).resolve();scripts=root/'scripts';scripts.mkdir();(scripts/'agent.py').write_text('# fixture');(scripts/'network.py').write_text('# fixture')
-            name='claude-payload-'+'a'*32;payload=scripts/name;payload.write_bytes(b'fixture binary')
-            with patch.object(a,'STATE',root/'state'),patch.object(a,'__file__',str(scripts/'agent.py')),patch.object(a,'run'):
-                result=a.start_job({'op':'claude','options':{'claudePayload':str(payload)}})
+            with patch.object(a,'STATE',root/'state'),patch.object(a,'__file__',str(scripts/'agent.py')),patch.object(a,'run') as start,patch.object(a,'download_claude') as download:
+                result=a.start_job({'op':'claude','options':None,'background':True})
             directory=root/'state/jobs'/result['jobId'];request=json.loads((directory/'request.json').read_text())
-            self.assertEqual(request['options']['claudePayload'],str(directory/name));self.assertEqual((directory/name).read_bytes(),b'fixture binary')
-    def test_claude_bad_payload_is_never_installed(self):
-        with patch.object(a,'account',return_value={'username':'fixture'}),patch.object(a,'apt'),patch.object(a,'user_files') as install:
-            with self.assertRaises(RuntimeError):a.setup_claude({'claudePayload':'/tmp/wrong'})
-            install.assert_not_called()
+            self.assertEqual(request,{'op':'claude','options':None,'background':False,'jobId':result['jobId']})
+            self.assertEqual({p.name for p in directory.iterdir()},{'agent.py','network.py','request.json','metadata.json','output.log'})
+            start.assert_called_once()
+            self.assertEqual(start.call_args.args[0][-2:],[str(directory/'agent.py'),str(directory/'request.json')])
+            download.assert_not_called()
+
+    def test_fixed_示例环境_maintenance_preserves_verified_components(self):
+        with patch.object(a,'has_pinned_model_runtime',return_value=True), \
+             patch.object(a,'verify_pinned_model_runtime') as verify, patch.object(a,'log'), \
+             patch.object(a,'run',return_value=Mock(stdout=str(a.PARITY_CHECK))) as run, \
+             patch.object(a,'active',return_value=True), patch.object(a,'require_ubuntu'), \
+             patch.object(a,'apt') as apt, patch.object(a,'stream') as stream, \
+             patch.object(a,'download_claude') as fetch:
+            a.setup_claude({})
+            a.setup_cloud({})
+            with self.assertRaisesRegex(RuntimeError,'双重验证入口'):
+                a.setup_cloud_public({})
+            self.assertEqual([c.args[0] for c in verify.call_args_list],['claude','cloudcli'])
+            run.assert_called_once_with(['systemctl','show','-p','ExecStartPre','--value','safe-code-cloudcli.service'])
+            apt.assert_not_called()
+            stream.assert_not_called()
+            fetch.assert_not_called()
+
+    def test_failed_示例环境_validation_does_not_fall_back_to_installation(self):
+        with patch.object(a,'has_pinned_model_runtime',return_value=True), \
+             patch.object(a,'verify_pinned_model_runtime',side_effect=RuntimeError('invalid lockfile')), \
+             patch.object(a,'apt') as apt, patch.object(a,'stream') as stream, patch.object(a,'download_claude') as fetch:
+            for operation in (lambda: a.setup_claude({}), lambda: a.setup_cloud({})):
+                with self.assertRaisesRegex(RuntimeError,'invalid lockfile'):operation()
+            apt.assert_not_called()
+            stream.assert_not_called()
+            fetch.assert_not_called()
 if __name__=='__main__':unittest.main()

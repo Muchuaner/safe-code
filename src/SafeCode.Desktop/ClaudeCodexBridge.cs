@@ -14,7 +14,10 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace SafeCode.Desktop;
-internal sealed record ClaudeCodexStatus(bool Running,bool Connected,bool CleanupPending,int Port,string Model,bool Writable,string Message,string Configuration="");
+internal sealed record ClaudeCodexStatus(bool Running,bool Connected,bool CleanupPending,int Port,string Model,bool Writable,string Message,string Configuration="",DateTimeOffset? StartedAt=null,DateTimeOffset? StoppedAt=null,IntegrationUsage? Usage=null,string UsageSource="")
+{
+    public long DurationSeconds=>(long)Math.Max(0,((StoppedAt??DateTimeOffset.UtcNow)-(StartedAt??DateTimeOffset.UtcNow)).TotalSeconds);
+}
 internal sealed class ClaudeCodexBridge : IDisposable
 {
     internal const string ExeSha256="c8b2353f14afeef2a04c759d0da64d4aca301127a9e0fcdb82a8032026acd070";
@@ -27,9 +30,17 @@ internal sealed class ClaudeCodexBridge : IDisposable
     private bool connected,cleanupPending,writable;
     private string message="未启动";
     private DateTime lastHealth;
+    private readonly SemaphoreSlim usageGate=new(1,1);
+    private CodexUsageSource? usageSource;
+    private IntegrationUsage usage=IntegrationUsage.Unavailable("尚未取样");
+    private string usageSourceName="";
+    private DateTimeOffset? startedAt,stoppedAt;
+    private DateTime lastUsageSample;
+    private string PreferencePath=>Path.Combine(dataDirectory,"CodexBridge","enabled.json");
+    public GatewayPreference Preference=>GatewayPreference.Load(PreferencePath);
     public bool Running=>process!=null&&!process.HasExited;
     public ClaudeCodexBridge(string dataDirectory)=>this.dataDirectory=dataDirectory;
-    public ClaudeCodexStatus Status=>new(Running,Running&&connected,cleanupPending,port,model,writable,Running?message:cleanupPending?"本机已停止，远端清理待重试":"未启动",Running?configuration:"");
+    public ClaudeCodexStatus Status=>new(Running,Running&&connected,cleanupPending,port,model,writable,Running?message:cleanupPending?"本机已停止，远端清理待重试":"未启动",Running?configuration:"",startedAt,stoppedAt,Running||startedAt!=null?usage:IntegrationUsage.Unavailable("尚未启用"),usageSourceName);
     private static void ProtectDirectory(string path)
     {
         Directory.CreateDirectory(path);using var current=WindowsIdentity.GetCurrent();var acl=new DirectorySecurity();acl.SetAccessRuleProtection(true,false);acl.SetOwner(current.User!);
@@ -66,7 +77,7 @@ internal sealed class ClaudeCodexBridge : IDisposable
             var probe=new TcpListener(IPAddress.Loopback,requestedPort);try{probe.Start();}catch(SocketException){throw new IOException("本机端口已被占用，请更换适配器端口。");}finally{probe.Stop();}
             port=requestedPort;model=requestedModel;writable=allowWrite;session=target;
             string identity=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target.Fingerprint+"@"+target.Host+":"+target.Port)))[..20].ToLowerInvariant();profile=Path.Combine(dataDirectory,"CodexBridge",identity);ProtectDirectory(profile);ProtectDirectory(Path.Combine(profile,"ssh"));
-            foreach(string name in new[]{"token","client-id","salt","config.json","state.json","adapter.log","claude-models.json"}){string file=Path.Combine(profile,name);if(File.Exists(file))ProtectFile(file);}
+            foreach(string name in new[]{"token","client-id","salt","config.json","state.json","adapter.log","claude-models.json","session.json"}){string file=Path.Combine(profile,name);if(File.Exists(file))ProtectFile(file);}
             var key=SshSession.CreateCodexBridgeKey(Path.Combine(profile,"ssh"));ProtectFile(key.Path);publicKey=key.PublicKey;keyId=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(publicKey.Split(' ')[1])))[..20].ToLowerInvariant();
             string idFile=Path.Combine(profile,"client-id");clientId=File.Exists(idFile)?File.ReadAllText(idFile).Trim():"c_"+Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
             if(!Regex.IsMatch(clientId,@"\Ac_[a-f0-9]{24}\z"))throw new IOException("适配器客户端标识异常，已停止。");File.WriteAllText(idFile,clientId);token=Secret(Path.Combine(profile,"token"),32);
@@ -74,6 +85,12 @@ internal sealed class ClaudeCodexBridge : IDisposable
             string pin=File.ReadAllLines(target.KnownHostsPath).SingleOrDefault(line=>line.StartsWith(host+" ",StringComparison.Ordinal))??throw new IOException("缺少已核验的服务器指纹，未启动适配器。");
             string known=Path.Combine(profile,"ssh","known_hosts");File.WriteAllText(known,pin+"\n");
             string sshPath=await SshClientAsync(profile,ct);
+            startedAt=DateTimeOffset.UtcNow;stoppedAt=null;usage=IntegrationUsage.Unavailable("正在建立本机 Codex 用量基线");usageSourceName="本机 Codex 会话 token_count";
+            usageSource=new CodexUsageSource(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".codex","sessions"),startedAt.Value);
+            try{using var baselineTimeout=new CancellationTokenSource(TimeSpan.FromSeconds(6));await Task.Run(()=>usageSource.InitializeAsync(baselineTimeout.Token),baselineTimeout.Token);usage=usageSource.Snapshot();}
+            catch(OperationCanceledException){usage=IntegrationUsage.Unavailable("用量基线建立超时，稍后重试");}
+            catch(Exception error)when(error is IOException or UnauthorizedAccessException or NotSupportedException){usage=IntegrationUsage.Unavailable("本机 Codex 会话用量暂不可用");}
+            lastUsageSample=DateTime.UtcNow;PersistSession();
             var installed=await target.InstallCodexBridgeAsync(publicKey,keyId,clientId,ct);
             if(!installed.Ready)throw new IOException("适配器服务器组件未就绪。");cleanupPending=true;
             string slug=requestedModel.StartsWith("claude-",StringComparison.Ordinal)?requestedModel:"claude-"+requestedModel;
@@ -97,6 +114,7 @@ internal sealed class ClaudeCodexBridge : IDisposable
             if(!File.Exists(Path.Combine(profile,"claude-models.json")))throw new IOException("适配器未生成 Codex 模型目录。");
             string catalog=JsonSerializer.Serialize(Path.Combine(profile,"claude-models.json").Replace('\\','/'));
             configuration=$"model_catalog_json = {catalog}\nmodel_provider = \"safe_code_claude\"\nmodel = \"{slug}\"\nmodel_reasoning_effort = \"high\"\nmodel_context_window = 200000\nmodel_auto_compact_token_limit = 160000\n\n[model_providers.safe_code_claude]\nname = \"Claude via Safe Code\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nwire_api = \"responses\"\nsupports_websockets = false\nrequires_openai_auth = true\nrequest_max_retries = 2\nstream_max_retries = 3\nstream_idle_timeout_ms = 600000\n";
+            GatewayPreference.For(target,port,model,writable).Save(PreferencePath);
             message="接口与 SSH 已连接；Claude 登录及模型权限需在使用前确认";return Status;
         }
         catch
@@ -117,6 +135,42 @@ internal sealed class ClaudeCodexBridge : IDisposable
         catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
         catch{connected=false;return false;}
     }
+    public async Task<ClaudeCodexStatus> TickAsync(CancellationToken ct=default)
+    {
+        if(Running)await SampleUsageAsync(force:false,ct);
+        return Status;
+    }
+    private async Task SampleUsageAsync(bool force,CancellationToken ct)
+    {
+        if(usageSource==null||startedAt==null)return;
+        if(!force&&DateTime.UtcNow-lastUsageSample<TimeSpan.FromSeconds(8))return;
+        bool acquired=force?await usageGate.WaitAsync(TimeSpan.FromSeconds(3),ct):await usageGate.WaitAsync(0,ct);
+        if(!acquired)return;
+        try
+        {
+            using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if(!force)timeout.CancelAfter(TimeSpan.FromSeconds(4));
+            await Task.Run(()=>usageSource.SampleAsync(timeout.Token),timeout.Token);
+            usage=usageSource.Snapshot();lastUsageSample=DateTime.UtcNow;PersistSession();
+        }
+        catch(OperationCanceledException)when(!ct.IsCancellationRequested){usage=IntegrationUsage.Unavailable("用量取样超时，稍后重试");}
+        catch(Exception error)when(error is IOException or UnauthorizedAccessException){usage=IntegrationUsage.Unavailable("本机 Codex 会话用量暂不可用");}
+        finally{usageGate.Release();}
+    }
+    private void PersistSession()
+    {
+        if(string.IsNullOrEmpty(profile)||startedAt is null||usageSource is null)return;
+        try
+        {
+            string path=Path.Combine(profile,"session.json");
+            string temp=path+".new";
+            File.WriteAllText(temp,JsonSerializer.Serialize(new CodexBridgeSession(startedAt.Value,stoppedAt,usageSource.Export()),new JsonSerializerOptions{WriteIndented=false}));
+            ProtectFile(temp);File.Move(temp,path,true);
+        }
+        catch(IOException){}
+        catch(UnauthorizedAccessException){}
+    }
+    private sealed record CodexBridgeSession(DateTimeOffset StartedAt,DateTimeOffset? StoppedAt,CodexUsageState Usage);
     public async Task<ClaudeCodexStatus> RefreshAsync(CancellationToken ct)
     {
         if(Running&&DateTime.UtcNow-lastHealth>TimeSpan.FromSeconds(4)&&await gate.WaitAsync(0,ct))
@@ -132,6 +186,7 @@ internal sealed class ClaudeCodexBridge : IDisposable
             if(!process.WaitForExit(5000))throw new IOException("适配器仍在停止，已保留进程守护，请重试。");
         }
         process.Dispose();process=null;connected=false;configuration="";
+        if(startedAt!=null&&stoppedAt==null){stoppedAt=DateTimeOffset.UtcNow;PersistSession();}
     }
     private async Task CleanupRemoteAsync()
     {
@@ -139,9 +194,9 @@ internal sealed class ClaudeCodexBridge : IDisposable
         try{using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(18));var result=await session.RemoveCodexBridgeAsync(publicKey,keyId,clientId,timeout.Token);cleanupPending=result.Warning!=null;message=result.Warning??"适配器已停止，专用授权已移除";}
         catch{cleanupPending=true;message="本机入口已停止；远端清理未确认，恢复连接后可重试停止。";}
     }
-    public async Task<ClaudeCodexStatus> StopAsync(CancellationToken ct=default)
-    {await gate.WaitAsync(ct);try{KillLocal();await CleanupRemoteAsync();return Status;}finally{gate.Release();}}
+    public async Task<ClaudeCodexStatus> StopAsync(CancellationToken ct=default,bool suspend=false)
+    {await gate.WaitAsync(ct);try{if(!suspend)(Preference with{Enabled=false}).Save(PreferencePath);try{await SampleUsageAsync(force:true,ct);}catch(OperationCanceledException){}KillLocal();await CleanupRemoteAsync();return Status;}finally{gate.Release();}}
     public string Configuration=>Running?configuration:throw new InvalidOperationException("请先启动适配器。");
     public string Token=>Running?token:throw new InvalidOperationException("请先启动适配器。");
-    public void Dispose()=>KillLocal();
+    public void Dispose(){if(startedAt!=null&&stoppedAt==null){stoppedAt=DateTimeOffset.UtcNow;PersistSession();}KillLocal();}
 }

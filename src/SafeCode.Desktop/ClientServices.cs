@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -11,8 +12,10 @@ namespace SafeCode.Desktop;
 
 internal sealed class UsagePreferences
 {
-    public bool Enabled {get;set;}=true;
-    public bool DiagnosticsEnabled {get;set;}=true;
+    public bool Enabled {get;set;}
+    public bool DiagnosticsEnabled {get;set;}
+    public int OptInVersion {get;set;}
+    public int DiagnosticScopeVersion {get;set;}
     public bool Confirmed {get;set;}
     public int DiagnosticNoticeVersion {get;set;}
     public string InstallationId {get;set;}="";
@@ -25,6 +28,8 @@ internal sealed record UpdateInfo(string CurrentVersion,string? Version,string S
 internal sealed class ClientServices : IDisposable
 {
     private const string Repository="Muchuaner/safe-code";
+    private const int ExplicitOptInVersion=1;
+    private const int CurrentDiagnosticScope=1;
     private readonly string preferencesPath;
     private readonly string directory;
     private readonly string updateAssetSuffix;
@@ -36,9 +41,12 @@ internal sealed class ClientServices : IDisposable
     private bool counted;
     private CancellationTokenSource diagnosticReporting=new();
     private int diagnosticGeneration;
-    private int diagnosticSuccessCount;
-    private int diagnosticFailureCount;
     private readonly object diagnosticGate=new();
+    private readonly HashSet<string> reportedSuccesses=new(StringComparer.Ordinal);
+    private readonly HashSet<(string Operation,string Error)> sampledBackgroundErrors=[];
+    private long diagnosticWindow=Stopwatch.GetTimestamp();
+    private int diagnosticSuccessCount,diagnosticFailureCount,backgroundSuccessCount,backgroundFailureCount;
+    private bool disposed;
     private string diagnosticSessionId=Guid.NewGuid().ToString();
     private FeedbackContext? latestFailure;
     private DateTimeOffset latestFailureAt;
@@ -49,38 +57,73 @@ internal sealed class ClientServices : IDisposable
     private DateTimeOffset lastCheck;
     private UpdateInfo? lastUpdate;
     public static string Version=>Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]??Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)??"0.4.3";
-    public ClientServices(string directory,HttpMessageHandler? transport=null,HttpMessageHandler? downloadTransport=null,string? updateAssetSuffix=null)
+    public ClientServices(string directory,HttpMessageHandler? transport=null,HttpMessageHandler? downloadTransport=null,string? updateAssetSuffix=null,bool endpointEnabled=true)
     {
         http=transport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(transport);http.MaxResponseContentBufferSize=1048576;http.Timeout=TimeSpan.FromSeconds(15);this.downloadTransport=downloadTransport;this.updateAssetSuffix=updateAssetSuffix??AssetSuffix;
         this.directory=directory;Directory.CreateDirectory(directory);preferencesPath=Path.Combine(directory,"usage-preferences.json");
         try{preferences=JsonSerializer.Deserialize<UsagePreferences>(File.ReadAllText(preferencesPath),JsonDefaults.Options)??new();}catch(IOException){preferences=new();}catch(JsonException){preferences=new();}
+        if(preferences.OptInVersion<ExplicitOptInVersion)
+        {
+            // Older records cannot distinguish default selections from explicit opt-ins.
+            preferences.Enabled=false;
+            preferences.DiagnosticsEnabled=false;
+            preferences.InstallationId="";
+            preferences.DiagnosticInstallationId="";
+            preferences.OptInVersion=ExplicitOptInVersion;
+        }
+        if(preferences.DiagnosticScopeVersion<CurrentDiagnosticScope)
+        {
+            // Consent to installation diagnostics is not consent to feature diagnostics.
+            preferences.DiagnosticsEnabled=false;
+            preferences.DiagnosticInstallationId="";
+            preferences.DiagnosticScopeVersion=CurrentDiagnosticScope;
+        }
         http.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+Version);
         string config=Path.Combine(AppContext.BaseDirectory,"service-endpoints.json");
-        try{if(File.Exists(config)){using var doc=JsonDocument.Parse(File.ReadAllText(config));if(doc.RootElement.TryGetProperty("feedbackBaseUrl",out var value)&&Uri.TryCreate(value.GetString(),UriKind.Absolute,out var uri)&&uri.Scheme=="https"&&!uri.IsLoopback&&string.IsNullOrEmpty(uri.UserInfo)&&uri.AbsolutePath=="/"&&string.IsNullOrEmpty(uri.Query)&&string.IsNullOrEmpty(uri.Fragment))endpoint=uri;}}catch(IOException){}catch(JsonException){}catch(InvalidOperationException){}
+        try{if(endpointEnabled&&File.Exists(config)){using var doc=JsonDocument.Parse(File.ReadAllText(config));if(doc.RootElement.TryGetProperty("feedbackBaseUrl",out var value)&&Uri.TryCreate(value.GetString(),UriKind.Absolute,out var uri)&&uri.Scheme=="https"&&!uri.IsLoopback&&string.IsNullOrEmpty(uri.UserInfo)&&uri.AbsolutePath=="/"&&string.IsNullOrEmpty(uri.Query)&&string.IsNullOrEmpty(uri.Fragment))endpoint=uri;}}catch(IOException){}catch(JsonException){}catch(InvalidOperationException){}
     }
     public bool NoticeWasConfirmed=>preferences.Confirmed&&preferences.DiagnosticNoticeVersion>=2;
-    public object Preferences()=>new{enabled=preferences.Enabled,confirmed=preferences.Confirmed,diagnosticsEnabled=preferences.DiagnosticsEnabled,serviceAvailable=endpoint!=null,recipient=endpoint?.Host,issueId=RecentFailure?.Correlation.OperationId};
+    public object Preferences()
+    {
+        lock(diagnosticGate)return new{enabled=preferences.Enabled,confirmed=preferences.Confirmed,diagnosticsEnabled=preferences.DiagnosticsEnabled,serviceAvailable=endpoint!=null,recipient=endpoint?.Host,issueId=RecentFailure?.Correlation.OperationId};
+    }
+    public Task<object> ConfirmConsentAsync(){lock(diagnosticGate)return SetConsentAsync(preferences.Enabled,true);}
     private void Save(){string temp=preferencesPath+".new";File.WriteAllText(temp,JsonSerializer.Serialize(preferences,JsonDefaults.Options));File.Move(temp,preferencesPath,true);}
     public async Task<object> SetConsentAsync(bool enabled,bool confirmed)
     {
-        preferences.Enabled=enabled;preferences.Confirmed|=confirmed;
-        if(confirmed)preferences.DiagnosticNoticeVersion=2;
-        if(!enabled){reporting.Cancel();reporting.Dispose();reporting=new();preferences.InstallationId="";}
-        Save();
-        if(enabled&&preferences.Confirmed)await CountLaunchAsync();
+        lock(diagnosticGate)
+        {
+            bool previousConfirmation=preferences.Confirmed;
+            int previousNoticeVersion=preferences.DiagnosticNoticeVersion;
+            preferences.Enabled=enabled;preferences.Confirmed|=confirmed;
+            if(confirmed)preferences.DiagnosticNoticeVersion=2;
+            if(!enabled){reporting.Cancel();reporting.Dispose();reporting=new();preferences.InstallationId="";}
+            try{Save();}catch{preferences.Enabled=false;preferences.Confirmed=previousConfirmation;preferences.DiagnosticNoticeVersion=previousNoticeVersion;throw;}
+        }
+        if(enabled&&NoticeWasConfirmed)await CountLaunchAsync();
         return Preferences();
     }
-    public bool DiagnosticsAllowed=>endpoint!=null&&NoticeWasConfirmed&&preferences.DiagnosticsEnabled;
-    public int DiagnosticGeneration=>diagnosticGeneration;
+    public bool DiagnosticsAllowed
+    {
+        get{lock(diagnosticGate)return !disposed&&endpoint!=null&&NoticeWasConfirmed&&preferences.DiagnosticsEnabled;}
+    }
+    public int DiagnosticGeneration=>Volatile.Read(ref diagnosticGeneration);
+    public DiagnosticTrace? BeginDiagnostic(string operation,bool background=false)
+    {
+        lock(diagnosticGate)
+            return DiagnosticsAllowed&&DiagnosticTrace.Operations.Contains(operation)?new(operation,diagnosticGeneration,background):null;
+    }
     public object SetDiagnosticConsent(bool enabled)
     {
-        // 默认勾选，保留已明确关闭的选择；声明确认前不发送。
-        preferences.DiagnosticsEnabled=enabled;
-        if(!enabled){preferences.DiagnosticInstallationId="";latestFailure=null;diagnosticSessionId=Guid.NewGuid().ToString();}
-        diagnosticGeneration++;
-        diagnosticReporting.Cancel();diagnosticReporting.Dispose();diagnosticReporting=new();
-        try{Save();}catch{preferences.DiagnosticsEnabled=false;throw;}
-        return Preferences();
+        lock(diagnosticGate)
+        {
+            preferences.DiagnosticsEnabled=enabled;
+            if(!enabled){preferences.DiagnosticInstallationId="";latestFailure=null;diagnosticSessionId=Guid.NewGuid().ToString();}
+            diagnosticGeneration++;
+            diagnosticReporting.Cancel();diagnosticReporting.Dispose();diagnosticReporting=new();
+            try{Save();}catch{preferences.DiagnosticsEnabled=false;throw;}
+            return Preferences();
+        }
     }
     private DiagnosticContext Correlation(DiagnosticTrace trace)
     {
@@ -89,22 +132,65 @@ internal sealed class ClientServices : IDisposable
     }
     public string? RecordFailure(DiagnosticTrace trace,Exception error)
     {
-        if(DiagnosticTrace.ErrorKind(error)=="cancelled"||!DiagnosticsAllowed||trace.Generation!=diagnosticGeneration)return null;
-        try{latestFailure=new(Correlation(trace),trace.Finish(error));latestFailureAt=DateTimeOffset.UtcNow;return trace.Id;}catch{return null;}
+        lock(diagnosticGate)
+        {
+            if(trace.Background||!CanReport(trace)||DiagnosticTrace.ErrorKind(error)=="cancelled")return null;
+            if(latestFailure?.Correlation.OperationId==trace.Id)return trace.Id;
+            try{latestFailure=new(Correlation(trace),trace.Finish(error));latestFailureAt=DateTimeOffset.UtcNow;return trace.Id;}catch{return null;}
+        }
+    }
+    private bool CanReport(DiagnosticTrace trace)=>DiagnosticsAllowed&&trace.Generation==diagnosticGeneration&&DiagnosticTrace.Operations.Contains(trace.Operation);
+    private bool ReserveDiagnostic(DiagnosticTrace trace,DiagnosticReport report)
+    {
+        if(Stopwatch.GetElapsedTime(diagnosticWindow)>=TimeSpan.FromHours(1))
+        {
+            diagnosticWindow=Stopwatch.GetTimestamp();
+            diagnosticSuccessCount=diagnosticFailureCount=backgroundSuccessCount=backgroundFailureCount=0;
+            sampledBackgroundErrors.Clear();
+        }
+        if(report.Outcome=="success")
+        {
+            if(diagnosticSuccessCount>=20||(trace.Background&&backgroundSuccessCount>=8)||!reportedSuccesses.Add(trace.Operation))return false;
+            diagnosticSuccessCount++;
+            if(trace.Background)backgroundSuccessCount++;
+        }
+        else
+        {
+            if(diagnosticFailureCount>=18)return false;
+            if(trace.Background&&(report.Outcome=="cancelled"||backgroundFailureCount>=6||
+                !sampledBackgroundErrors.Add((trace.Operation,report.ErrorKind))))return false;
+            diagnosticFailureCount++;
+            if(trace.Background)backgroundFailureCount++;
+        }
+        return true;
+    }
+    public async Task<T> WithDiagnosticAsync<T>(string operation,Func<Task<T>> run,CancellationToken ct,bool background=false)
+    {
+        var trace=BeginDiagnostic(operation,background);
+        Exception? failure=null;
+        try{return await run();}
+        catch(Exception error){failure=error;throw;}
+        finally{if(trace!=null)_=SendDiagnosticAsync(trace,failure,ct);}
     }
     public async Task SendDiagnosticAsync(DiagnosticTrace trace,Exception? error,CancellationToken ct)
     {
-        if(!DiagnosticsAllowed||trace.Generation!=diagnosticGeneration)return;
-        if(error!=null)RecordFailure(trace,error);
-        // 成功最多两份，失败独享十八份额度；有界等待，避免并发发送时静默丢弃失败。
-        lock(diagnosticGate){if(error==null){if(diagnosticSuccessCount>=2)return;diagnosticSuccessCount++;}else{if(diagnosticFailureCount>=18)return;diagnosticFailureCount++;}}
+        CancellationTokenSource? deadline=null;
         bool acquired=false;
         try
         {
-            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct,diagnosticReporting.Token);
-            deadline.CancelAfter(TimeSpan.FromSeconds(12));
-            var report=trace.Finish(error);
-            var body=new{schema=2,eventId=trace.Id,version=Version,context=Correlation(trace),report};
+            DiagnosticReport report;
+            DiagnosticContext context;
+            lock(diagnosticGate)
+            {
+                if(!CanReport(trace)||ct.IsCancellationRequested)return;
+                report=trace.Finish(error);
+                if(error!=null)RecordFailure(trace,error);
+                if(!ReserveDiagnostic(trace,report))return;
+                context=Correlation(trace);
+                deadline=CancellationTokenSource.CreateLinkedTokenSource(ct,diagnosticReporting.Token);
+                deadline.CancelAfter(TimeSpan.FromSeconds(12));
+            }
+            var body=new{schema=2,eventId=trace.Id,version=Version,context,report};
             await diagnosticSlots.WaitAsync(deadline.Token);acquired=true;
             for(int attempt=0;attempt<2;attempt++)
             {
@@ -115,15 +201,19 @@ internal sealed class ClientServices : IDisposable
             }
         }
         catch(Exception){} // 诊断发送永远不能改变部署结果或弹出第二个错误。
-        finally{if(acquired)diagnosticSlots.Release();}
+        finally{deadline?.Dispose();if(acquired)diagnosticSlots.Release();}
     }
     private async Task CountLaunchAsync()
     {
-        if(counted||endpoint==null||!preferences.Enabled||!preferences.Confirmed)return;
-        if(!Guid.TryParse(preferences.InstallationId,out _)){preferences.InstallationId=Guid.NewGuid().ToString();Save();}
-        counted=true;var token=reporting.Token;
+        CancellationToken token;string installationId;
+        lock(diagnosticGate)
+        {
+            if(disposed||counted||endpoint==null||!preferences.Enabled||!NoticeWasConfirmed)return;
+            if(!Guid.TryParse(preferences.InstallationId,out _)){preferences.InstallationId=Guid.NewGuid().ToString();Save();}
+            counted=true;token=reporting.Token;installationId=preferences.InstallationId;
+        }
         // 固定字段白名单：无 VPS 地址、登录名、机器名、密码或项目路径。
-        var body=new{schema=1,eventId,installationId=preferences.InstallationId,version=Version,os=OperatingSystem.IsMacOS()?"macOS":"Windows",eventType="launch"};
+        var body=new{schema=1,eventId,installationId,version=Version,os=OperatingSystem.IsMacOS()?"macOS":"Windows",eventType="launch"};
         for(int attempt=0;attempt<3;attempt++){
             if(token.IsCancellationRequested||!preferences.Enabled)return;
             try{using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/usage"),body,JsonDefaults.Options,token);if(response.IsSuccessStatusCode||((int)response.StatusCode<500&&response.StatusCode!=HttpStatusCode.TooManyRequests))return;}
@@ -135,7 +225,9 @@ internal sealed class ClientServices : IDisposable
     {
         if(endpoint==null)throw new InvalidOperationException("反馈服务尚未启用，请暂时通过 QQ 群反馈。");
         message=message.Trim();if(message.Length<5||message.Length>4000)throw new ArgumentException("反馈内容须为 5–4000 字。");
-        using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/feedback"),new{schema=2,eventId=Guid.NewGuid().ToString(),version=Version,message,context=RecentFailure},JsonDefaults.Options,ct);
+        FeedbackContext? context;
+        lock(diagnosticGate)context=RecentFailure;
+        using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/feedback"),new{schema=2,eventId=Guid.NewGuid().ToString(),version=Version,message,context},JsonDefaults.Options,ct);
         if(!response.IsSuccessStatusCode)throw new IOException(response.StatusCode==HttpStatusCode.TooManyRequests?"提交较频繁，请稍后重试。":"反馈暂未送达，请稍后重试。");
     }
     public async Task<UpdateInfo> CheckUpdateAsync(bool force,CancellationToken ct)
@@ -193,5 +285,13 @@ internal sealed class ClientServices : IDisposable
         await using var file=File.OpenRead(installer.Path);var digest=await SHA256.HashDataAsync(file,ct);
         if(!Convert.ToHexString(digest).Equals(installer.Digest,StringComparison.OrdinalIgnoreCase))throw new IOException("安装文件已变化，请重新下载。");
     }
-    public void Dispose(){diagnosticGeneration++;diagnosticReporting.Cancel();diagnosticReporting.Dispose();reporting.Cancel();reporting.Dispose();http.Dispose();}
+    public void Dispose()
+    {
+        lock(diagnosticGate)
+        {
+            if(disposed)return;
+            disposed=true;diagnosticGeneration++;diagnosticReporting.Cancel();diagnosticReporting.Dispose();reporting.Cancel();reporting.Dispose();
+        }
+        http.Dispose();
+    }
 }

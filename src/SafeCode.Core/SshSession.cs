@@ -66,7 +66,7 @@ public sealed partial class SshSession : IDisposable
             Log?.Invoke("SSH 认证成功，检查操作系统…");
             string osRelease;
             try{osRelease=await ExecuteTextAsync("cat /etc/os-release", cancellationToken);}
-            catch{throw new UnsupportedOsException("无法安装环境：未能识别为 Ubuntu，请确认系统类型并检查连接；未写入部署文件。");}
+            catch(InvalidOperationException){throw new UnsupportedOsException("无法安装环境：未能识别为 Ubuntu，请确认系统类型并检查连接；未写入部署文件。");}
             Log?.Invoke("操作系统信息已读取。");
             if (!ParseOsRelease(osRelease).TryGetValue("ID", out var id) || id != "ubuntu")
                 throw new UnsupportedOsException("无法安装环境：本软件仅支持 Ubuntu。当前服务器未通过系统检查，未写入任何部署文件。");
@@ -74,7 +74,7 @@ public sealed partial class SshSession : IDisposable
             if (uid != "0")
             {
                 try{await ExecuteTextAsync("sudo -n true", cancellationToken);}
-                catch{throw new InvalidOperationException("此账户没有免密 sudo 安装权限，请使用 root 或配置免密 sudo 后重新连接。");}
+                catch(InvalidOperationException){throw new InvalidOperationException("此账户没有免密 sudo 安装权限，请使用 root 或配置免密 sudo 后重新连接。");}
                 prefix = "sudo -n ";
             }
             remoteDirectory = (await ExecuteTextAsync("mktemp -d /tmp/safe-code.XXXXXXXX", cancellationToken)).Trim();
@@ -139,22 +139,28 @@ public sealed partial class SshSession : IDisposable
     }
     public Task<JsonElement> CreateDirectoryAsync(string path,string name,CancellationToken ct=default)=>RequestAsync<JsonElement>("create_directory",new{path,name},ct);
 
+    public async Task RequirePublicGatewayAsync(CancellationToken ct)
+    {
+        var status = await ReadPublicGatewayAsync(false, ct);
+        if (!status.TryGetProperty("enabled", out var enabled) || enabled.ValueKind != JsonValueKind.True)
+            throw new InvalidOperationException("请先在 Safe Code 中确认「保证自用」并启用公网。");
+    }
+
     public async Task<T> RequestAsync<T>(string operation, object? options = null, CancellationToken ct = default)
     {
         Log?.Invoke("正在等待任务通道…");
         await operations.WaitAsync(ct);
         Log?.Invoke("正在建立服务器任务通道…");
         string requestPath = remoteDirectory + "/request-" + Guid.NewGuid().ToString("N") + ".json";
-        string? claudePayloadPath=null;
         try
         {
             if (client?.IsConnected != true) throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
-            if(operation=="claude"){var payload=await PrepareClaudePayloadAsync(ct);options=payload.Options;claudePayloadPath=payload.Path;}
             using (var sftp = MakeSftp())
             {
+                if (operation == "safe_code_api") sftp.OperationTimeout = TimeSpan.FromSeconds(12);
                 await sftp.ConnectAsync(ct);
                 using var bytes = new MemoryStream(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { op = operation, options, background = IsLongOperation(operation) }, JsonDefaults.Options)));
-                sftp.UploadFile(bytes, requestPath); sftp.ChangePermissions(requestPath, 600);
+                await sftp.UploadFileAsync(bytes, requestPath, ct); sftp.ChangePermissions(requestPath, 600);
             }
             Log?.Invoke("任务请求已上传，正在启动远端操作…");
             using var command = client.CreateCommand(prefix + "python3 -u " + Quote(remoteDirectory + "/agent.py") + " " + Quote(requestPath));
@@ -203,7 +209,7 @@ public sealed partial class SshSession : IDisposable
         finally
         {
             operations.Release();
-            if(!ct.IsCancellationRequested)_=Task.Run(()=>{try{using var sftp=MakeSftp();sftp.ConnectionInfo.Timeout=TimeSpan.FromSeconds(3);sftp.OperationTimeout=TimeSpan.FromSeconds(2);sftp.Connect();sftp.DeleteFile(requestPath);if(claudePayloadPath!=null)sftp.DeleteFile(claudePayloadPath);}catch{}});
+            if(!ct.IsCancellationRequested)_=Task.Run(()=>{try{using var sftp=MakeSftp();sftp.ConnectionInfo.Timeout=TimeSpan.FromSeconds(3);sftp.OperationTimeout=TimeSpan.FromSeconds(2);sftp.Connect();sftp.DeleteFile(requestPath);}catch{}});
         }
     }
     private static bool IsLongOperation(string operation)=>operation is "account" or "localization" or "desktop" or "chrome" or "input" or "claude" or "ssh" or "cloud" or "mount_install";
@@ -234,7 +240,7 @@ public sealed partial class SshSession : IDisposable
         {
             "account" => new { username, password, hostname },
             "localization" when locale != null => new { timezone = locale.Timezone, locale = locale.Locale },
-            "localization" => throw new InvalidOperationException("请先选择与出口所在地一致的时区和语言。"),
+            "localization" => throw new InvalidOperationException("请先手动选择时区和系统语言。"),
             "ssh" => new { publicKey = CreateWorkspaceKey().PublicKey },
             _ => new { }
         };

@@ -26,7 +26,10 @@ class Server(paramiko.ServerInterface):
     def check_port_forward_request(self,address,port):
         listener=socket.socket();listener.bind(('127.0.0.1',0));listeners.append(listener);return listener.getsockname()[1]
     def check_channel_exec_request(self,channel,command):
-        request=json.loads(Path(shlex.split(command.decode())[-1]).read_text());requests.append(request)
+        text=command.decode()
+        if text=='true':
+            channel.send_exit_status(0);channel.shutdown_write();time.sleep(.05);channel.close();return True
+        request=json.loads(Path(shlex.split(text)[-1]).read_text());requests.append(request)
         def reply():
             op=request['op'];options=request.get('options') or {};status=0
             if op=='fixture_error':

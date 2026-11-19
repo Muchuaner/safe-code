@@ -15,26 +15,42 @@ import time
 import uuid
 
 VERSION=re.compile(r'^(?:Beta-)?\d{1,4}\.\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$')
-OPERATIONS={'account','localization','desktop','chrome','input','claude','ssh','cloud','mount_install','mount_apply','connection','ip_policy','directory_list'}
-SIGNALS={'package_lock_wait','dns_failure','disk_full','package_fetch_failed','package_interrupted','remote_started','packages_present','request_uploaded','job_started','ssh_authenticated','agent_ready','package_unpacking','package_configuring'}
-ERRORS={'ssh_auth_failed','ssh_timeout','ssh_connection_failed','network_error','json_invalid','mount_failed','mount_timeout','mount_target_invalid','deployment_busy','none','cancelled','directory_not_found','file_not_found','access_denied','timeout','crypto_error','http_error','io_error','invalid_argument','operation_failed'}|SIGNALS
+LEGACY_OPERATIONS={'account','localization','desktop','chrome','input','claude','ssh','cloud','mount_install','mount_apply','connection','ip_policy','directory_list'}
+OPERATIONS=LEGACY_OPERATIONS|{
+    'account_customization','locale_customization','deployment_settings','desktop_launch','desktop_display',
+    'directory_create','mount_reconnect','cloud_launch','cloud_public','resource_stats','environment_assessment',
+    'codex_bridge_start','codex_bridge_stop','codex_bridge_restore','codex_launch',
+    'claude_desktop_start','claude_desktop_stop','claude_desktop_restore','claude_desktop_launch',
+    'desktop_key_enable','desktop_key_disable','desktop_key_restore','desktop_key_request',
+    'gateway_enable','gateway_status','gateway_reconnect','gateway_open','gateway_key_list','gateway_usage',
+    'gateway_key_issue','gateway_key_update','gateway_key_revoke','gateway_settings','gateway_port','gateway_origin',
+    'login_restore',
+}
+LEGACY_SIGNALS={'package_lock_wait','dns_failure','disk_full','package_fetch_failed','package_interrupted','remote_started','packages_present','request_uploaded','job_started','ssh_authenticated','agent_ready','package_unpacking','package_configuring'}
+SIGNALS=LEGACY_SIGNALS|{'claude_download_started','claude_download_verified'}
+ERRORS={'ssh_auth_failed','ssh_timeout','ssh_connection_failed','network_error','json_invalid','mount_failed','mount_timeout','mount_target_invalid','deployment_busy','none','cancelled','directory_not_found','file_not_found','access_denied','timeout','crypto_error','http_error','io_error','invalid_argument','operation_failed'}|LEGACY_SIGNALS
+RELAY_ERRORS={'gateway_invalid_request','gateway_auth_failed','gateway_conflict','gateway_rate_limited',
+              'gateway_not_supported','gateway_upstream_failed'}
 SITES={'unknown','account_draft_clear','account_draft_save','account_draft_read','remote_task','directory_mount','connection'}
 def validate_diagnostic(report,extended=False):
     fields={'operation','outcome','errorKind','failureSite','durationSeconds','signals','omittedLines'}
     if extended:fields.add('stage')
     if extended and (not isinstance(report,dict) or report.get('stage') not in SIGNALS|{'started'}):raise ValueError('诊断阶段无效')
     if not isinstance(report,dict) or set(report)!=fields:raise ValueError('诊断字段不受支持')
-    for key,allowed in [('operation',OPERATIONS),('outcome',{'success','failure','cancelled'}),('errorKind',ERRORS),('failureSite',SITES)]:
+    operations=OPERATIONS if extended else LEGACY_OPERATIONS
+    errors=ERRORS|RELAY_ERRORS if extended else ERRORS
+    for key,allowed in [('operation',operations),('outcome',{'success','failure','cancelled'}),('errorKind',errors),('failureSite',SITES)]:
         if not isinstance(report[key],str) or report[key] not in allowed:raise ValueError('诊断值不受支持')
     if not extended and report['errorKind'] in {'ssh_auth_failed','ssh_timeout','ssh_connection_failed','network_error','json_invalid','mount_failed','mount_timeout','mount_target_invalid','deployment_busy'}:raise ValueError('旧版诊断错误码无效')
     for key,maximum in [('durationSeconds',86400),('omittedLines',1000000)]:
         if type(report[key]) is not int or not 0<=report[key]<=maximum:raise ValueError('诊断数值无效')
     if (report['outcome']=='success')!=(report['errorKind']=='none'):raise ValueError('诊断结果不一致')
     if not isinstance(report['signals'],list) or len(report['signals'])>64:raise ValueError('诊断日志数量无效')
+    signals=SIGNALS if extended else LEGACY_SIGNALS
     previous=0
     for signal in report['signals']:
         if not isinstance(signal,dict) or set(signal)!={'seconds','code'}:raise ValueError('诊断日志字段无效')
-        if not isinstance(signal['code'],str) or signal['code'] not in SIGNALS:raise ValueError('诊断日志值无效')
+        if not isinstance(signal['code'],str) or signal['code'] not in signals:raise ValueError('诊断日志值无效')
         if type(signal['seconds']) is not int or not previous<=signal['seconds']<=report['durationSeconds']:raise ValueError('诊断日志时间无效')
         previous=signal['seconds']
 
@@ -92,7 +108,7 @@ class Store:
 class RateLimit:
     def __init__(self):self.salt=secrets.token_bytes(32);self.items={};self.lock=threading.Lock()
     def allow(self,address,kind):
-        now=time.monotonic();window=3600 if kind in ['feedback','diagnostics'] else 60;limit=5 if kind=='feedback' else 20 if kind=='diagnostics' else 120
+        now=time.monotonic();window=3600 if kind in ['feedback','diagnostics'] else 60;limit=5 if kind=='feedback' else 40 if kind=='diagnostics' else 120
         key=(kind,hmac.new(self.salt,address.encode(),hashlib.sha256).digest())
         with self.lock:
             self.items={k:v for k,v in self.items.items() if now-v[0]<3600}

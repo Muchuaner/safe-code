@@ -3,13 +3,17 @@
 import base64,contextlib,fcntl,hashlib,ipaddress,json,os,pwd,re,secrets,shlex,shutil,subprocess,sys,time,tempfile
 from pathlib import Path
 STATE=Path('/var/lib/safe-code')
+SECRETS_PATH=Path('/etc/davfs2/secrets')
 REDACTIONS=[]
 JOB_DIR=None
 class OperationError(RuntimeError):
     def __init__(self,code,message):super().__init__(message);self.code=code
 
+ERROR_CODES={'json_invalid','access_denied','timeout','operation_failed','invalid_argument','deployment_busy','mount_failed','mount_timeout','mount_target_invalid','package_lock_wait','package_fetch_failed','dns_failure','disk_full','package_interrupted'}
+
 def error_code(error):
-    if isinstance(error,OperationError):return error.code
+    code=getattr(error,'code',None)
+    if code in ERROR_CODES:return code
     if isinstance(error,json.JSONDecodeError):return 'json_invalid'
     if isinstance(error,PermissionError):return 'access_denied'
     if isinstance(error,subprocess.TimeoutExpired):return 'timeout'
@@ -193,6 +197,25 @@ if operation=='host_bridge':
         if proof.returncode or proof.stdout.strip()!=user_sid:raise ValueError('本机 Windows 账户身份与授权不匹配，未生成可用状态。')
     import shlex
     print(json.dumps({'command':'ssh -F '+shlex.quote(str(config))+' '+alias,'verified':True}));sys.exit(0)
+if operation=='desktop_gateway':
+    import base64,hashlib,re,subprocess
+    client=request.get('clientId','')
+    if not re.fullmatch('[a-f0-9]{32}',client) or relative!=pathlib.Path('.local/state/safe-code/desktop-gateway')/client:raise ValueError('Desktop 网关目录无效。')
+    if request.get('action')=='start':
+        claude=base/'.local/bin/claude'
+        if not claude.is_file() or not os.access(claude,os.X_OK):raise ValueError('请先为工作用户部署 Claude Code。')
+        help_result=subprocess.run([str(claude),'--help'],cwd=str(base),capture_output=True,text=True,timeout=20)
+        if help_result.returncode or not all(flag in help_result.stdout+help_result.stderr for flag in ['--tools','--strict-mcp-config','--include-partial-messages']):raise ValueError('请先更新 Claude Code，Desktop 桥接需要工具限制与流式事件支持。')
+    data=base64.b64decode(request['source']);digest=hashlib.sha256(data).hexdigest()
+    library=base/'.local/share/safe-code/desktop-gateway';library.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if not library.resolve().is_relative_to(base):raise ValueError('Desktop 网关程序路径越界。')
+    script=library/(digest+'.py')
+    if script.is_symlink():raise ValueError('Desktop 网关程序不能是链接。')
+    if script.exists() and script.read_bytes()!=data:raise ValueError('Desktop 网关文件已被修改。')
+    if not script.exists():script.write_bytes(data);script.chmod(0o600)
+    result=subprocess.run(['/usr/bin/python3','-B',str(script),'--manage',str(target)],input=json.dumps(request),text=True,capture_output=True,timeout=35)
+    if result.returncode:raise ValueError('VPS Desktop 网关启动/停止未确认；未返回配置或凭据。')
+    print(result.stdout.strip());sys.exit(0)
 if operation=='codex_bridge':
     import base64,fcntl,hashlib,re,shlex,socket,struct,subprocess,time
     if relative!=pathlib.Path('.local/state/safe-code/codex-bridge'):raise ValueError('适配器管理路径无效。')
@@ -640,22 +663,48 @@ def file_sha256(file):
     for block in iter(lambda:file.read(1024*1024),b''):digest.update(block)
     return digest.hexdigest()
 
-def download_claude():
+PARITY_CHECK=Path('/opt/safe-code/verify-示例环境-runtime.py')
+
+def has_pinned_model_runtime():
+    return os.uname().nodename=='fixture-gateway' and (PARITY_CHECK.exists() or PARITY_CHECK.is_symlink())
+
+def verify_pinned_model_runtime(service):
+    metadata=PARITY_CHECK.lstat()
+    if PARITY_CHECK.is_symlink() or not PARITY_CHECK.is_file() or metadata.st_uid!=0 or metadata.st_mode&0o022:
+        raise RuntimeError('示例环境 固定运行环境的校验脚本权限异常。')
+    command=['systemd-run','--quiet','--wait','--collect','--pipe','--property=User=workspace',
+             '--property=NoNewPrivileges=yes','--property=EnvironmentFile=/home/workspace/.config/safe-code/anthropic-simulator.env']
+    if service=='cloudcli':
+        command+=['--setenv=HOST=127.0.0.1','--setenv=SERVER_PORT=3001',
+                  '--setenv=CLAUDE_CLI_PATH=/home/workspace/.local/bin/claude',
+                  '--setenv=PATH=/opt/safe-code/node/bin:/usr/bin:/bin']
+    run(command+['/usr/bin/python3','-I','-B',str(PARITY_CHECK),service],timeout=20)
+
+def download_claude(target):
     import platform,socket,urllib.request,urllib.error
     target_platform={'x86_64':'linux-x64','aarch64':'linux-arm64'}.get(platform.machine())
     if not target_platform:raise RuntimeError('Claude Code 当前仅支持 x86_64 或 ARM64 Ubuntu。')
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,req,fp,code,msg,headers,newurl):
+            return None
+
+    opener=urllib.request.build_opener(NoRedirect())
     base='https://downloads.claude.ai/claude-code-releases'
-    target=Path(__file__).resolve().parent/('claude-payload-'+secrets.token_hex(16))
-    def fetch(url):return urllib.request.urlopen(url,timeout=45)
+    def fetch(path):return opener.open(base+path,timeout=45)
     try:
         log('正在通过 VPS 网络获取 Claude Code 官方版本和校验信息…')
-        with fetch(base+'/stable') as response:release=response.read(128).decode().strip()
+        with fetch('/stable') as response:release=response.read(129).decode('ascii',errors='replace').strip()
         if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',release):raise RuntimeError('Claude Code 官方版本信息无效。')
-        with fetch(base+'/'+release+'/manifest.json') as response:manifest=json.loads(response.read(1024*1024))
-        digest=manifest['platforms'][target_platform]['checksum']
-        if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest):raise RuntimeError('Claude Code 官方校验信息无效。')
+        with fetch('/'+release+'/manifest.json') as response:manifest_bytes=response.read(1024*1024+1)
+        try:
+            if len(manifest_bytes)>1024*1024:raise ValueError('manifest size')
+            digest=json.loads(manifest_bytes)['platforms'][target_platform]['checksum']
+        except (ValueError,KeyError,TypeError) as error:
+            raise RuntimeError('Claude Code 官方校验信息无效。') from error
+        if not isinstance(digest,str) or not re.fullmatch('[a-fA-F0-9]{64}',digest):raise RuntimeError('Claude Code 官方校验信息无效。')
         received=0;progress=time.monotonic();started=progress
-        with fetch(base+'/'+release+'/'+target_platform+'/claude') as response, target.open('xb') as output:
+        with fetch('/'+release+'/'+target_platform+'/claude') as response, target.open('xb') as output:
             target.chmod(0o600)
             while True:
                 block=response.read(1024*1024)
@@ -667,9 +716,9 @@ def download_claude():
                 if time.monotonic()-progress>=10:
                     log('VPS 正在下载 Claude Code：已接收 '+str(received//1024//1024)+' MB…');progress=time.monotonic()
         with target.open('rb') as source:
-            if file_sha256(source)!=digest:raise RuntimeError('Claude Code 下载文件校验失败，未执行安装。')
+            if file_sha256(source)!=digest.lower():raise RuntimeError('Claude Code 下载文件校验失败，未执行安装。')
         log('VPS 下载完成，官方 Claude Code 文件校验通过。')
-        return {'claudePayload':str(target),'claudeSha256':digest,'claudeVersion':release}
+        return release
     except Exception as error:
         target.unlink(missing_ok=True)
         if isinstance(error,(TimeoutError,socket.timeout)):raise OperationError('timeout','VPS 下载 Claude Code 官方文件超时。') from error
@@ -679,31 +728,18 @@ def download_claude():
         raise
 
 def setup_claude(options):
-    a=account();apt(['curl','ca-certificates','git','tmux'])
-    payload=options.get('claudePayload')
-    if payload:
-        source=Path(payload);expected=options.get('claudeSha256','');release=options.get('claudeVersion','')
-        if source.parent!=Path(__file__).resolve().parent or source.is_symlink() or not re.fullmatch('claude-payload-[a-f0-9]{32}',source.name):raise RuntimeError('Claude Code 安装文件路径无效。')
-        if not re.fullmatch('[a-f0-9]{64}',expected) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',release):raise RuntimeError('Claude Code 校验信息无效。')
-        with source.open('rb') as f:
-            if file_sha256(f)!=expected:raise RuntimeError('Claude Code 文件校验失败，未执行安装。')
-        staged=Path('/opt/safe-code')/('claude-verified-'+expected)
-        with tempfile.NamedTemporaryFile(dir='/opt/safe-code',delete=False) as f:
-            temporary=Path(f.name)
-            with source.open('rb') as original:shutil.copyfileobj(original,f)
-        try:
-            with temporary.open('rb') as f:
-                if file_sha256(f)!=expected:raise RuntimeError('Claude Code 文件校验失败，未执行安装。')
-            temporary.chmod(0o555);os.replace(temporary,staged)
-            log('官方 Claude Code 文件校验通过，正在为工作用户安装…')
-            user_files('install_claude','.local/bin/claude',source=str(staged),release=release)
-        finally:temporary.unlink(missing_ok=True);staged.unlink(missing_ok=True);source.unlink(missing_ok=True)
-    else:
-        target=Path('/opt/safe-code/install-claude.sh')
-        script=run(['curl','-fsSL','--connect-timeout','10','--max-time','60','--retry','2','https://claude.ai/install.sh']).stdout
-        write(target,script,0o755)
-        log('使用官方原生安装器为普通工作用户安装 Claude Code。')
-        stream(['runuser','-u',a['username'],'--','env','-i','HOME='+str(home()),'PATH=/usr/local/bin:/usr/bin:/bin','LANG=C.UTF-8','bash',str(target),'stable'])
+    if has_pinned_model_runtime():
+        verify_pinned_model_runtime('claude')
+        log('示例环境 已使用校验通过的固定版 Claude Code。')
+        return
+    account();apt(['curl','ca-certificates','git','tmux'])
+    with tempfile.TemporaryDirectory(prefix='claude-install-',dir='/opt/safe-code') as directory:
+        source=Path(directory)/'claude'
+        release=download_claude(source)
+        # The verified file can be read, but cannot be replaced by the work user.
+        source.chmod(0o444);Path(directory).chmod(0o755)
+        log('正在为普通工作用户安装已校验的 Claude Code…')
+        user_files('install_claude','.local/bin/claude',source=str(source),release=release)
     value=version(home()/'.local/bin/claude')
     if not value:raise RuntimeError('Claude Code 安装后未找到有效程序。')
     user_files('append_unique','.profile',content='export PATH="$HOME/.local/bin:$PATH"',mode=0o644)
@@ -742,6 +778,15 @@ def setup_cloud_onboarding(options):
     return report
 
 def setup_cloud(options):
+    if has_pinned_model_runtime():
+        verify_pinned_model_runtime('cloudcli')
+        preflight=run(['systemctl','show','-p','ExecStartPre','--value','safe-code-cloudcli.service']).stdout
+        if str(PARITY_CHECK) not in preflight:
+            raise RuntimeError('示例环境 CloudCLI 缺少固定版本启动校验，未重新配置服务。')
+        if not active('safe-code-cloudcli'):
+            run(['systemctl','start','safe-code-cloudcli.service'],timeout=30)
+        log('示例环境 已使用校验通过的 CloudCLI，继续通过现有 HTTPS 入口访问。')
+        return
     secure_root_directory('/mnt/safe-code',0o755)
     a=account();apt(['curl','xz-utils','ca-certificates','git'])
     setup_git_identity()
@@ -777,6 +822,8 @@ def setup_cloud(options):
 
 def setup_cloud_public(options):
     require_ubuntu()
+    if has_pinned_model_runtime():
+        raise RuntimeError('示例环境 CloudCLI 使用已有的 HTTPS 双重验证入口，无需直开 3001 端口。')
     service_path=Path('/etc/systemd/system/safe-code-cloudcli.service')
     if not service_path.exists() or not active('safe-code-cloudcli'):
         log('正在准备 CloudCLI 基础服务…')
@@ -942,6 +989,90 @@ def codex_bridge(options):
         parameters.update({'files':files,'node':str(node),'claude':str(claude),'sourceHash':CODEX_BRIDGE_SOURCE_HASH,'username':a['username']})
     return json.loads(user_files('codex_bridge','.local/state/safe-code/codex-bridge',action=action,**parameters).stdout)
 
+def safe_code_api(options):
+    action=options.get('action')
+    if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public'):
+        raise RuntimeError('未知 Safe Code API 管理操作。')
+    entry=pwd.getpwnam(account()['username'])
+    if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
+    script=Path('/opt/safe-code/desktop-api/server.py')
+    if not script.is_file():raise RuntimeError('当前 VPS 尚未安装 Safe Code API 管理服务。')
+    directory=Path(entry.pw_dir)/'.local/state/safe-code-desktop-api'
+    command=['runuser','-u',entry.pw_name,'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin',
+             'LANG=C.UTF-8','/usr/bin/python3','-B',str(script),'--state',str(directory)]
+    if action == 'set_port':
+        return change_safe_code_api_port(command, options)
+    return safe_code_api_admin(command, options)
+
+def safe_code_api_admin(command, options, timeout=12):
+    process = run([*command, 'admin'], check=False, stdin=json.dumps(options), timeout=timeout)
+    try:
+        value = json.loads(process.stdout)
+        if process.returncode or not isinstance(value, dict):
+            raise ValueError()
+    except ValueError:
+        raise RuntimeError('当前 VPS 的 Safe Code API 管理服务尚未更新或无法访问。')
+    if value.get('error'):
+        raise RuntimeError(value['error'])
+    return value['value']
+
+def change_safe_code_api_port(command, options):
+    port = options.get('port')
+    if type(port) is not int or not 1024 <= port <= 65535:
+        raise ValueError('监听端口必须是 1024 到 65535 之间的整数。')
+    secure_root_directory(STATE, 0o700)
+    with (STATE/'desktop-api-port.lock').open('a') as guard:
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('正在修改网关监听端口，请稍后重试。') from None
+        current = safe_code_api_admin(command, {'action': 'settings'})
+        previous = current['port']
+        if previous != options.get('expectedPort'):
+            raise RuntimeError('监听端口已变更，请重新打开网关设置。')
+        if port == previous:
+            return current
+        if current['busy']:
+            raise RuntimeError('网关还有正在执行或排队的请求，请等网关空闲后再保存。')
+        run([*command, 'configure-port', str(previous), str(port)], timeout=10)
+        try:
+            return restart_safe_code_api(command, port)
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+            try:
+                run([*command, 'configure-port', str(port), str(previous), '--rollback'], timeout=10)
+                restart_safe_code_api(command, previous)
+            except (RuntimeError, OSError, subprocess.TimeoutExpired):
+                raise RuntimeError('新端口启动失败，原端口也未能恢复，请检查 VPS 上的 Safe Code API 服务。') from None
+            raise RuntimeError('新端口启动失败，已恢复原监听端口。') from None
+
+def restart_safe_code_api(command, port):
+    run(['systemctl', 'restart', 'safe-code-desktop-api.service'], timeout=30)
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        try:
+            current = safe_code_api_admin(command, {'action': 'settings'}, timeout=2)
+            if current['port'] == port:
+                return current
+        except (RuntimeError, subprocess.TimeoutExpired):
+            pass
+        time.sleep(0.2)
+    raise RuntimeError('Safe Code API 未在预期端口启动。')
+
+def desktop_gateway(options):
+    client=options.get('clientId','')
+    if not re.fullmatch('[a-f0-9]{32}',client):raise ValueError('Desktop 网关客户端标识无效。')
+    action=options.get('action','')
+    if action not in ['start','stop']:raise ValueError('Desktop 网关操作无效。')
+    if action=='start' and (not re.fullmatch('[A-Za-z0-9_-]{43}',options.get('token','')) or not re.fullmatch('[a-f0-9]{32}',options.get('instance',''))):raise ValueError('Desktop 本机通道凭据无效。')
+    node=Path('/opt/safe-code/node/bin/node')
+    if not node.exists():
+        candidate=shutil.which('node')
+        if not candidate:raise ValueError('请先部署 CloudCLI 或 Codex 接入所需的 Node.js 20+ 组件。')
+        node=Path(candidate)
+    if action=='start' and int(run([str(node),'-p','process.versions.node.split(".")[0]']).stdout.strip())<20:raise ValueError('Desktop 网关需要 Node.js 20 或更高版本。')
+    parameters={**options,'node':str(node),'bridgeHash':CODEX_BRIDGE_SOURCE_HASH}
+    return json.loads(user_files('desktop_gateway','.local/state/safe-code/desktop-gateway/'+client,**parameters).stdout)
+
 def host_bridge(options):
     client=options.get('clientId','');action=options.get('action','')
     if not re.fullmatch('[a-f0-9]{20}',client):raise RuntimeError('本机控制标识无效。')
@@ -954,7 +1085,7 @@ def host_bridge(options):
 
 def mount_client(options):
     client=options.get('clientId','')
-    if not re.fullmatch('[a-f0-9]{20}',client):raise RuntimeError('挂载客户端标识无效。')
+    if not re.fullmatch('[a-f0-9]{20}',client):raise OperationError('invalid_argument','挂载客户端标识无效。')
     return client
 
 def remove_mounts(options):
@@ -969,7 +1100,7 @@ def remove_mounts(options):
     for alias,destination in zip(previous.get('aliases',[]),previous.get('paths',[])):
         try:user_files('remove_alias',str(Path(alias).relative_to(home())),destination=destination)
         except Exception:log('用户已修改目录入口，保留该入口，不执行管理员删除。')
-    secrets_file=Path('/etc/davfs2/secrets')
+    secrets_file=SECRETS_PATH
     if secrets_file.exists():
         lines=secrets_file.read_text().splitlines()
         urls=set(previous.get('urls',[]))
@@ -978,73 +1109,138 @@ def remove_mounts(options):
     record.unlink();warning=sync_cloud_mount_projects() if options.get('syncProjects',True) else None
     return {'clientId':client,'paths':[],'cloudWarning':warning}
 
+def mounted_paths():
+    return {line.split()[4] for line in Path('/proc/self/mountinfo').read_text().splitlines()}
+
+def mount_secret_lines(client,urls):
+    if not SECRETS_PATH.exists():return []
+    return [line for line in SECRETS_PATH.read_text().splitlines() if line=='# safe-code-'+client or any(line.startswith(url+' ') for url in urls)]
+
+def write_mount_secrets(client,urls,user='',password='',extra=None):
+    lines=SECRETS_PATH.read_text().splitlines() if SECRETS_PATH.exists() else []
+    urls=set(urls)
+    lines=[line for line in lines if line!='# safe-code-'+client and not any(line.startswith(url+' ') for url in urls)]
+    if extra is None:
+        lines.append('# safe-code-'+client)
+        lines.extend(url+' '+user+' '+password for url in urls)
+    else:lines.extend(extra)
+    write(SECRETS_PATH,'\n'.join(lines)+'\n',0o600)
+
+def mount_davfs(target,url,config,uid,gid):
+    try:completed=subprocess.run(['mount','-t','davfs',url,str(target),'-o','conf='+str(config)+',uid='+str(uid)+',gid='+str(gid)+',file_mode=0600,dir_mode=0700,noexec,nosuid,nodev'],input='',text=True,capture_output=True,timeout=75)
+    except subprocess.TimeoutExpired:raise OperationError('mount_timeout','建立目录挂载超时，请检查 SSH 文件通道后重试。')
+    if completed.returncode:raise OperationError('mount_failed','目录挂载失败：'+(completed.stderr or completed.stdout or '')[-800:])
+    if not os.path.ismount(str(target)):raise OperationError('mount_failed','目标未成为实际挂载点。')
+
+def link_mount_alias(alias,target):
+    try:user_files('alias',str(Path(alias).relative_to(home())),destination=str(target))
+    except Exception as error:raise OperationError('mount_target_invalid','无法创建目录入口：'+str(error)) from error
+
+def restore_mounts(client,previous,secret_lines):
+    """新配置失败后恢复原记录和凭据；剩余缺失项交给守护进程 mount_recover。"""
+    if not previous or not previous.get('aliases') or not secret_lines:return False
+    aliases=previous.get('aliases',[]);urls=previous.get('urls',[])
+    if len(aliases)!=len(urls):return False
+    record=STATE/('mount-'+client+'.json')
+    write(record,json.dumps({'paths':[],'urls':urls,'aliases':aliases}),0o600)
+    write_mount_secrets(client,urls,extra=secret_lines)
+    config=STATE/('mount-'+client)/'davfs2.conf'
+    if not config.exists():return False
+    entry=pwd.getpwnam(account()['username']);uid=entry.pw_uid;gid=entry.pw_gid
+    targets=previous.get('paths',[])
+    if len(targets)>len(aliases):return False
+    mounted=[]
+    for target,url,alias in zip(targets,urls,aliases):
+        target=Path(target);secure_root_directory(target,0o755)
+        log('恢复原目录挂载：'+str(target));mount_davfs(str(target),url,config,uid,gid)
+        mounted.append(str(target));write(record,json.dumps({'paths':mounted,'urls':urls,'aliases':aliases}),0o600)
+        link_mount_alias(alias,str(target))
+    return bool(mounted)
+
 def mount_project_paths(client,aliases,previous_targets):
     managed=Path('/mnt/safe-code')/account()['username']/client
     registry=STATE/('mount-project-paths-'+client+'.json')
     saved=json.loads(registry.read_text()) if registry.exists() else {}
     targets=[previous_targets.get(alias,saved.get(alias,str(managed/('p'+hashlib.sha256(alias.encode()).hexdigest()[:20])))) for alias in aliases]
-    if len(set(targets))!=len(targets) or any(Path(path).parent!=managed or not re.fullmatch(r'm[0-9]+|p[a-f0-9]{20}',Path(path).name) for path in targets):raise RuntimeError('挂载项目路径记录异常，已保留现有挂载。')
+    if len(set(targets))!=len(targets) or any(Path(path).parent!=managed or not re.fullmatch(r'm[0-9]+|p[a-f0-9]{20}',Path(path).name) for path in targets):raise OperationError('mount_target_invalid','挂载项目路径记录异常，已保留现有挂载。')
     return targets,registry,{**saved,**dict(zip(aliases,targets))}
 
 def apply_mounts(options,recover=False):
     a=account();client=mount_client(options)
-    if not package_installed('davfs2'):raise RuntimeError('请先安装目录挂载组件。')
+    if not package_installed('davfs2'):raise OperationError('operation_failed','请先安装目录挂载组件。')
     port=options.get('port');user=options.get('username');password=options.get('password','');mappings=options.get('mappings',[])
-    if not isinstance(port,int) or not 1024<=port<=65535 or user!='safecode' or not re.fullmatch('[a-f0-9]{48}',password):raise RuntimeError('文件通道认证参数无效。')
-    if not 1<=len(mappings)<=12:raise RuntimeError('请选择 1–12 组目录。')
+    if not isinstance(port,int) or not 1024<=port<=65535 or user!='safecode' or not re.fullmatch('[a-f0-9]{48}',password):raise OperationError('invalid_argument','文件通道认证参数无效。')
+    if not 1<=len(mappings)<=12:raise OperationError('invalid_argument','请选择 1–12 组目录。')
     REDACTIONS.append(password)
     listeners=run(['ss','-H','-lnt','sport = :'+str(port)]).stdout
-    if '127.0.0.1:'+str(port) not in listeners or any(x in listeners for x in ['0.0.0.0:'+str(port),'*:'+str(port),'[::]:'+str(port)]):raise RuntimeError('反向文件端口未限定为回环地址，请检查 sshd 的 GatewayPorts 设置。')
+    if '127.0.0.1:'+str(port) not in listeners or any(x in listeners for x in ['0.0.0.0:'+str(port),'*:'+str(port),'[::]:'+str(port)]):raise OperationError('mount_failed','反向文件端口未限定为回环地址，请检查 sshd 的 GatewayPorts 设置。')
     aliases=[]
     previous_record=STATE/('mount-'+client+'.json')
     previous=json.loads(previous_record.read_text()) if previous_record.exists() else {}
     previous_targets=dict(zip(previous.get('aliases',[]),previous.get('paths',[])))
+    previous_secret_lines=mount_secret_lines(client,previous.get('urls',[])) if not recover else []
     log('正在检查服务器目录…')
     for mapping in mappings:
         value=mapping.get('remote','');target=Path(value)
-        if not target.is_absolute() or '..' in target.parts or not target.parent.resolve().is_relative_to(home()):raise RuntimeError('挂载目标必须位于工作用户的主目录下。')
-        if target==home():raise RuntimeError('不能覆盖整个用户目录。')
-        if str(target) in aliases:raise RuntimeError('挂载目标不能重复。')
-        if any(target.is_relative_to(Path(alias)) or Path(alias).is_relative_to(target) for alias in aliases):raise RuntimeError('挂载目录不能相互包含，请选择独立的目录。')
-        user_files('check_alias',str(target.relative_to(home())),destination=previous_targets.get(str(target),''))
+        if not target.is_absolute() or '..' in target.parts or not target.parent.resolve().is_relative_to(home()):raise OperationError('mount_target_invalid','挂载目标必须位于工作用户的主目录下。')
+        if target==home():raise OperationError('mount_target_invalid','不能覆盖整个用户目录。')
+        if str(target) in aliases:raise OperationError('mount_target_invalid','挂载目标不能重复。')
+        if any(target.is_relative_to(Path(alias)) or Path(alias).is_relative_to(target) for alias in aliases):raise OperationError('mount_target_invalid','挂载目录不能相互包含，请选择独立的目录。')
+        try:user_files('check_alias',str(target.relative_to(home())),destination=previous_targets.get(str(target),''))
+        except Exception as error:raise OperationError('mount_target_invalid',str(error)) from error
         aliases.append(str(target))
     targets,path_registry,remembered_paths=mount_project_paths(client,aliases,previous_targets)
-    if not recover:remove_mounts({'clientId':client,'syncProjects':False})
-    managed=Path('/mnt/safe-code');secure_root_directory(managed,0o755);managed=managed/a['username'];secure_root_directory(managed,0o755);managed=managed/client;secure_root_directory(managed,0o755)
-    existing_mounts={line.split()[4] for line in Path('/proc/self/mountinfo').read_text().splitlines()}
-    if recover and (not previous or previous.get('aliases')!=aliases or not set(previous.get('paths',[])).issubset(set(targets))):raise RuntimeError('原挂载记录不一致，已保留现有挂载，请检查后重新保存。')
-    for target in targets:
-        if target not in existing_mounts:secure_root_directory(target,0o755)
-    if not Path('/dev/fuse').exists():run(['modprobe','fuse'])
-    directory=STATE/('mount-'+client);directory.mkdir(mode=0o700,exist_ok=True)
-    config=directory/'davfs2.conf'
-    write(config,'use_locks 0\ndelay_upload 0\ncache_size 1024\nconnect_timeout 10\nread_timeout 120\nretry 5\nmax_retry 30\nmax_upload_attempts 1000000\n',0o600)
+    if recover and (not previous or previous.get('aliases')!=aliases or not set(previous.get('paths',[])).issubset(set(targets))):raise OperationError('mount_target_invalid','原挂载记录不一致，已保留现有挂载，请检查后重新保存。')
+    log('开始应用目录挂载配置…')
+    existing_mounts=mounted_paths()
+    # 先完成不会破坏旧挂载的目录、配置和 FUSE 检查，再卸载旧挂载。
+    try:
+        managed=Path('/mnt/safe-code');secure_root_directory(managed,0o755);managed=managed/a['username'];secure_root_directory(managed,0o755);managed=managed/client;secure_root_directory(managed,0o755)
+        for target in targets:
+            if target not in existing_mounts:secure_root_directory(target,0o755)
+        directory=STATE/('mount-'+client);directory.mkdir(mode=0o700,exist_ok=True)
+        config=directory/'davfs2.conf'
+        write(config,'use_locks 0\ndelay_upload 0\ncache_size 1024\nconnect_timeout 10\nread_timeout 120\nretry 5\nmax_retry 30\nmax_upload_attempts 1000000\n',0o600)
+        if not Path('/dev/fuse').exists():run(['modprobe','fuse'])
+    except OperationError:raise
+    except Exception as error:raise OperationError('access_denied','创建目录挂载环境失败：'+str(error)) from error
     uid=pwd.getpwnam(a['username']).pw_uid;gid=pwd.getpwnam(a['username']).pw_gid
     urls=['http://127.0.0.1:'+str(port)+'/m'+str(i)+'/' for i in range(len(targets))]
-    if recover and previous.get('urls')!=urls:raise RuntimeError('原挂载通道已变化，未卸载现有目录，请人工检查。')
+    if recover and previous.get('urls')!=urls:raise OperationError('mount_target_invalid','原挂载通道已变化，未卸载现有目录，请人工检查。')
+    old_removed=False
     if not recover:
-        path=Path('/etc/davfs2/secrets');old=path.read_text() if path.exists() else ''
-        write(path,old.rstrip()+'\n# safe-code-'+client+'\n'+'\n'.join(url+' '+user+' '+password for url in urls)+'\n',0o600)
+        try:remove_mounts({'clientId':client,'syncProjects':False})
+        except Exception as error:raise OperationError('mount_failed','未能卸载原有目录：'+str(error)) from error
+        old_removed=True
     record=STATE/('mount-'+client+'.json')
-    if not recover:write(record,json.dumps({'paths':[],'urls':urls,'aliases':aliases}),0o600)
     mounted=[x for x in targets if x in existing_mounts] if recover else []
     try:
+        if not recover:
+            write_mount_secrets(client,urls,user,password)
+            write(record,json.dumps({'paths':[],'urls':urls,'aliases':aliases}),0o600)
         for target,url,alias in zip(targets,urls,aliases):
             if target in mounted:continue
             target=Path(target)
-            log('建立加密文件通道：'+str(target))
-            try:completed=subprocess.run(['mount','-t','davfs',url,str(target),'-o','conf='+str(config)+',uid='+str(uid)+',gid='+str(gid)+',file_mode=0600,dir_mode=0700,noexec,nosuid,nodev'],input='',text=True,capture_output=True,timeout=75)
-            except subprocess.TimeoutExpired:raise OperationError('mount_timeout','建立目录挂载超时，请检查 SSH 文件通道后重试。')
-            if completed.returncode:raise OperationError('mount_failed','目录挂载失败：'+completed.stderr[-800:])
-            if not os.path.ismount(target):raise RuntimeError('目标未成为实际挂载点。')
+            log('建立加密文件通道：'+str(target));mount_davfs(str(target),url,config,uid,gid)
             mounted.append(str(target));write(record,json.dumps({'paths':[x for x in targets if x in mounted],'urls':urls,'aliases':aliases}),0o600)
-            user_files('alias',str(Path(alias).relative_to(home())),destination=str(target))
+            link_mount_alias(alias,str(target))
         # Keep legacy m0/m1 paths after unmount too, so upgrading retains IDs.
         write(path_registry,json.dumps(remembered_paths),0o600)
         warning=sync_cloud_mount_projects()
         return {'clientId':client,'paths':aliases,'managedPaths':mounted,'cloudWarning':warning}
-    except Exception:
-        if not recover:remove_mounts({'clientId':client})
+    except Exception as error:
+        cleanup_error=None
+        if not recover:
+            try:remove_mounts({'clientId':client,'syncProjects':False})
+            except Exception as cleanup:cleanup_error=cleanup
+        if old_removed and cleanup_error is None:
+            try:
+                restored=restore_mounts(client,previous,previous_secret_lines)
+                log('新挂载未完成，已恢复原目录挂载。' if restored else '新挂载未完成，已保留原目录记录，等待挂载守护恢复。')
+            except Exception as restore_error:log('恢复原目录挂载未完成：'+str(restore_error))
+        if cleanup_error is not None:
+            code=error.code if isinstance(error,OperationError) else 'mount_failed'
+            raise OperationError(code,str(error)+'\n清理未完成：'+str(cleanup_error)) from error
         raise
 
 def start_job(request):
@@ -1052,12 +1248,6 @@ def start_job(request):
     if operation not in LONG_OPERATIONS:raise RuntimeError('此操作不能作为后台安装任务。')
     job=secrets.token_hex(16);directory=STATE/'jobs'/job;directory.mkdir(mode=0o700,parents=True)
     request={**request,'background':False,'jobId':job}
-    options=request.get('options') or {}
-    if operation=='claude' and options.get('claudePayload'):
-        source=Path(options['claudePayload'])
-        if source.parent!=Path(__file__).resolve().parent or source.is_symlink() or not re.fullmatch('claude-payload-[a-f0-9]{32}',source.name):raise RuntimeError('Claude Code 安装文件路径无效。')
-        target=directory/source.name;shutil.copyfile(source,target);target.chmod(0o600)
-        request={**request,'options':{**options,'claudePayload':str(target)}}
     write(directory/'request.json',json.dumps(request),0o600)
     write(directory/'metadata.json',json.dumps({'jobId':job,'operation':operation,'created':time.time()}),0o600)
     for name in ['agent.py','network.py']:
@@ -1105,9 +1295,6 @@ def poll_job(job,offset):
 def main():
     global JOB_DIR
     require_ubuntu() # 必须先检查系统，再创建任何目录或写入配置。
-    if sys.argv[1]=='--claude-download':
-        if os.geteuid()!=0:raise RuntimeError('需要安装管理员权限。')
-        result(download_claude());return
     if sys.argv[1]=='--list-directories':
         if os.geteuid()!=0:raise RuntimeError('需要安装管理员权限。')
         result(list_directories(json.loads(base64.b64decode(sys.argv[2]))));return
@@ -1125,6 +1312,7 @@ def main():
     if op=='account_info':result(account());return
     if op=='list_directories':result(list_directories(request.get('options') or {}));return
     if op=='create_directory':result(create_directory(request.get('options') or {}));return
+    if op=='safe_code_api':result(safe_code_api(request.get('options') or {}));return
     if op=='desktop_login_probe':
         options=request.get('options') or {};path=Path('/var/log/xrdp-sesman.log');size=path.stat().st_size
         offset=options.get('offset',size)
@@ -1153,6 +1341,7 @@ def main():
             if op=='ip_rollback':result(network.rollback(options['token']));return
             raise RuntimeError('未知网络操作。')
         if op=='codex_bridge':result(codex_bridge(options));return
+        if op=='desktop_gateway':result(desktop_gateway(options));return
         if op=='host_bridge':result(host_bridge(options));return
         if op=='mount_apply':result(apply_mounts(options));return
         if op=='mount_recover':result(apply_mounts(options,recover=True));return
@@ -1160,7 +1349,8 @@ def main():
         mapping={'account':setup_account,'localization':setup_locale,'desktop':setup_desktop,'chrome':setup_chrome,'input':setup_input,'claude':setup_claude,'ssh':setup_ssh,'mount_install':install_mount,'cloud':setup_cloud,'cloud_public':setup_cloud_public,'cloud_setup':setup_cloud_onboarding}
         if op not in mapping:raise RuntimeError('未知部署操作。')
         log('开始部署：'+op)
-        if (op=='account' and not read_config()) or op in ['localization','desktop','chrome','input','claude','cloud','mount_install']:prepare_system()
+        if (op=='account' and not read_config()) or op in ['localization','desktop','chrome','input','claude','cloud','mount_install']:
+            if op not in ('claude','cloud') or not has_pinned_model_runtime():prepare_system()
         mapping[op](options)
         result(inspect())
 

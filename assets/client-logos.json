@@ -1,0 +1,18 @@
+{
+  "claude-client.png": {
+    "source": "https://claude.ai/apple-touch-icon.png",
+    "page": "https://claude.ai/",
+    "owner": "Anthropic",
+    "sha256": "7cc4dedd98fdb563e214fbf59994fdd03bb3e1c918a5f5035453253186489b89",
+    "retrieved": "2026-11-18",
+    "modified": false
+  },
+  "codex-client.webp": {
+    "source": "https://chatgpt.com/cdn/assets/favicon-180x180-ee49640db59e.webp",
+    "page": "https://chatgpt.com/codex",
+    "owner": "OpenAI",
+    "sha256": "19708325a6bbd461be38abcf80987f2d772ff38bc69aa66543ddf5baef4ae833",
+    "retrieved": "2026-11-18",
+    "modified": false
+  }
+}

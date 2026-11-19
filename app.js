@@ -4,8 +4,9 @@ let connectionTimer;
 let ipQueryController;
 let serverConnection = { ingressIp: '', egressIp: '' };
 let ipPolicy = { lockIngress: false, lockEgress: false };
-let detectedRegion = 'us_ny';
-let localeSelection = 'auto';
+let localeSelection = '';
+let accountSettingsSaved = false;
+let localeSaving = false;
 const localePresets = {
   jp: {name:'日本',timezone:'Asia/Tokyo',language:'日语',locale:'ja_JP.UTF-8'},
   us_ny: {name:'美国 · 纽约',timezone:'America/New_York',language:'英语（美国）',locale:'en_US.UTF-8'},
@@ -15,7 +16,9 @@ const localePresets = {
   de: {name:'德国',timezone:'Europe/Berlin',language:'德语',locale:'de_DE.UTF-8'},
   kr: {name:'韩国',timezone:'Asia/Seoul',language:'韩语',locale:'ko_KR.UTF-8'}
 };
-function currentLocale(){return localePresets[localeSelection==='auto'?detectedRegion:localeSelection]||null;}
+function currentLocale(){return Object.hasOwn(localePresets,localeSelection)?localePresets[localeSelection]:null;}
+function deploymentSettingsReady(){return accountSettingsSaved&&currentLocale()!==null;}
+function resetDeploymentSettings(){accountSettingsSaved=false;localeSelection='';accountDraftPending=false;}
 let runToken = 0;
 let busy = false;
 let currentMode = 'deployment';
@@ -28,7 +31,7 @@ let taskLogs = [];
 let accountDraftPending=false;
 const tasks = [
   ['更新系统并设置工作用户', '先等待系统更新、更新软件包，再设置工作用户和机器名称。'],
-  ['本土化设置', '按出口 IP 所在地匹配时区与系统语言。'],
+  ['本土化设置', '点击「自定义」选择所在地、时区与系统语言。'],
   ['安装虚拟桌面', '配置 XFCE 与远程桌面，保留断线后的工作状态。'],
   ['安装 Chrome', '安装 Chrome 浏览器，配置桌面启动入口。'],
   ['安装中文输入法', '配置 Fcitx5 拼音输入法与中文字体。'],
@@ -103,7 +106,7 @@ function isDeveloperHost(host){return ['127.0.0.1','localhost','::1','[::1]'].in
 function enterDeveloperPreview(){
   stopWork();serverConnection={ingressIp:'127.0.0.1',egressIp:'127.0.0.1'};
   $('#password').value='';$('#server-ingress').textContent='127.0.0.1';$('#server-address').textContent='127.0.0.1';$('#server-user').textContent='developer';
-  states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');detectedRegion='us_ny';
+  states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');resetDeploymentSettings();
   $('#rating-state').textContent='示例数据';$('#ip-location').textContent='开发预览';$('#ip-score').textContent='—';$('#score-unit').textContent='';
   let banner=$('#developer-preview');if(!banner){banner=document.createElement('div');banner.id='developer-preview';banner.className='developer-preview';$('.window>.titlebar').insertBefore(banner,$('.window-controls'));}
   banner.replaceChildren(document.createTextNode('开发预览 · 未连接服务器 '));
@@ -116,45 +119,45 @@ $('#login-form').onsubmit=event=>{
   event.preventDefault();if(window.__safeCodeDesktop){showAppMessage('客户端核心模块未就绪，无法连接。');return;}const ip=$('#ip').value.trim();const username=$('#username').value.trim();
   if(isDeveloperHost(ip)){enterDeveloperPreview();return;}
   if(!ip || !username){$('#connection-message').textContent='请填写 IP 地址和用户名。';$('#connection-message').className='connection-message error';return;}
-  const startConnect=()=>{
-    $('#login-form').querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#back').disabled=true;
-    $('#connect').textContent='正在连接…';$('#connection-message').textContent='正在建立 SSH 连接，请稍候…';$('#connection-message').className='connection-message connecting';
-    connectionTimer=setTimeout(()=>{
-      serverConnection = { ingressIp: ip, egressIp: ip };
-      $('#password').value='';$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp;$('#server-user').textContent=username;
-      states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');selecting=false;selectedTasks.clear();renderTasks();resetLogin();switchMode('deployment');$('#maintenance-result').close();showScreen('workspace');queryIpInfo(serverConnection.egressIp);
-    },1400);
-  };
-  if(window.openGuideDialog)window.openGuideDialog(startConnect);
-  else startConnect();
+  $('#login-form').querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#back').disabled=true;
+  $('#connect').textContent='正在连接…';$('#connection-message').textContent='正在建立 SSH 连接，请稍候…';$('#connection-message').className='connection-message connecting';
+  connectionTimer=setTimeout(()=>{
+    serverConnection = { ingressIp: ip, egressIp: ip };
+    $('#password').value='';$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp;$('#server-user').textContent=username;
+      states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');resetDeploymentSettings();selecting=false;selectedTasks.clear();renderTasks();resetLogin();switchMode('deployment');$('#maintenance-result').close();showScreen('workspace');queryIpInfo(serverConnection.egressIp);
+  },1400);
 };
 function renderTasks(){
+  const ready=deploymentSettingsReady();
+  const preset=currentLocale();
   $('#steps').replaceChildren(...tasks.map(([title,description],i)=>{
     const row=document.createElement('article');row.className='step '+states[i];
     const number=document.createElement('span');number.className='step-number';number.textContent=String(i+1);
     const copy=document.createElement('div');copy.className='step-copy';
     const heading=document.createElement('h3');heading.textContent=title;
-    const desc=document.createElement('p');desc.className=taskLogs[i]?'task-log':'';const preset=currentLocale();const detail=i===1?(preset?preset.name+' · '+preset.timezone+' · '+preset.locale:($('#rating-state').textContent==='查询中'?'正在识别出口 IP 的归属地…':'未能自动匹配所在地，请先设置时区与语言。')):description;desc.textContent=taskLogs[i]||detail;desc.setAttribute('role','status');desc.setAttribute('aria-live','polite');copy.append(heading,desc);
-    const button=document.createElement('button');button.className='deploy-button';button.textContent=i===0&&accountDraftPending&&states[i]==='done'?'更新':states[i]==='done'?'已完成':states[i]==='running'?'部署中…':'开始部署';button.disabled=busy||(states[i]==='done'&&!(i===0&&accountDraftPending))||(i===1&&!currentLocale());button.setAttribute('aria-label',title+'：'+button.textContent);button.onclick=()=>deployOne(i);
+    const desc=document.createElement('p');desc.className=taskLogs[i]?'task-log':'';const detail=i===1&&preset?preset.name+' · '+preset.timezone+' · '+preset.locale:description;desc.textContent=taskLogs[i]||detail;desc.setAttribute('role','status');desc.setAttribute('aria-live','polite');copy.append(heading,desc);
+    const button=document.createElement('button');button.className='deploy-button';button.textContent=i===0&&accountDraftPending&&states[i]==='done'?'更新':states[i]==='done'?'已完成':states[i]==='running'?'部署中…':'开始部署';button.disabled=busy||!ready||!canDeployTask(i);button.setAttribute('aria-label',title+'：'+button.textContent);button.onclick=()=>deployOne(i);
     if(selecting){
-      const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.className='task-checkbox';checkbox.disabled=states[i]==='done'||busy||(i===1&&!currentLocale());checkbox.checked=states[i]!=='done'&&selectedTasks.has(i);checkbox.setAttribute('aria-label','选择'+title);
+      const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.className='task-checkbox';checkbox.disabled=states[i]==='done'||busy||!ready;checkbox.checked=states[i]!=='done'&&selectedTasks.has(i);checkbox.setAttribute('aria-label','选择'+title);
       checkbox.onchange=()=>{if(checkbox.checked)selectedTasks.add(i);else selectedTasks.delete(i);updateBatchControls();};
       row.append(checkbox);if(states[i]==='done')row.classList.add('unselectable');
     }
-    if(i===0||i===1){const settings=document.createElement('button');settings.className='deploy-button locale-settings-button';settings.textContent='自定义';settings.setAttribute('aria-label',i===0?'自定义工作用户和机器名称':'自定义本土化');settings.disabled=busy;settings.onclick=i===1?openLocalization:()=>openAccountSettings();row.append(number,copy,settings,button);}else row.append(number,copy,button);return row;
+    if(i===0||i===1){const settings=document.createElement('button');settings.className='deploy-button locale-settings-button';settings.textContent='自定义';settings.setAttribute('aria-label',i===0?'自定义工作用户和机器名称':'自定义本土化');settings.disabled=busy||(window.__safeCodeDesktop&&!!$('#developer-preview'));settings.onclick=i===1?openLocalization:()=>openAccountSettings();row.append(number,copy,settings,button);}else row.append(number,copy,button);return row;
   }));
   const completed=states.filter(state=>state==='done').length;
   $('#overall-status').textContent=completed===tasks.length?'全部配置完成':completed+' / '+tasks.length+' 已完成';
-  $('#overall-detail').textContent=completed===tasks.length?'开发环境已就绪。':'可单项部署，或选择所需项目批量部署。';
-  $('#deploy-all').disabled=busy||completed===tasks.length;$('#deploy-all').textContent=completed===tasks.length?'部署完成':busy?'正在部署…':'一键部署';
+  const finished=completed===tasks.length;
+  $('#overall-detail').textContent=!ready&&(!finished||accountDraftPending)?'请先分别打开前两项「自定义」并保存设置。':finished?'开发环境已就绪。':'可单项部署，或选择所需项目批量部署。';
+  $('#deploy-all').disabled=busy||!ready||finished;$('#deploy-all').textContent=finished?'部署完成':busy?'正在部署…':'一键部署';
   updateBatchControls();
 }
+function canDeployTask(index){return states[index]!=='done'||(index===0&&accountDraftPending);}
 function updateBatchControls(){
   $('#cancel-selection').hidden=!selecting;
   $('.deployment-heading > span').textContent=selecting?'勾选要部署的项目，已完成项不可选。':'按步骤部署，或一次完成。';
   if(selecting){
     $('#deploy-all').textContent='开始部署（'+selectedTasks.size+' 项）';
-    $('#deploy-all').disabled=busy||selectedTasks.size===0;
+    $('#deploy-all').disabled=busy||!deploymentSettingsReady()||selectedTasks.size===0;
     $('#overall-detail').textContent='已选择 '+selectedTasks.size+' 项，仅执行勾选的步骤。';
   }
 }
@@ -174,10 +177,10 @@ function updateTaskLog(index,message){
 }
 async function simulateTask(index,token){
   if(window.__safeCodeDesktop)throw new Error('桌面客户端不允许使用模拟部署。');
-  if(index===1&&!currentLocale())return false;
+  if(!deploymentSettingsReady())return false;
   states[index]='running';
   const preset=currentLocale();
-  const messages=index===1?(preset?['核对出口 IP 归属地…','设置时区为 '+preset.timezone+'…','生成 '+preset.locale+' 语言环境…','应用'+preset.language+'系统语言与时间格式…','本土化设置完成：'+preset.timezone+' / '+preset.locale]:['无法确定所在地，请先完成本土化设置。']):deploymentLogs[index];
+  const messages=index===1?['读取已保存的本土化设置…','设置时区为 '+preset.timezone+'…','生成 '+preset.locale+' 语言环境…','应用'+preset.language+'系统语言与时间格式…','本土化设置完成：'+preset.timezone+' / '+preset.locale]:deploymentLogs[index];
   for(let i=0;i<messages.length;i++){
     if(token!==runToken)return false;
     if(i===messages.length-1)states[index]='done';
@@ -186,9 +189,9 @@ async function simulateTask(index,token){
   }
   return true;
 }
-async function deployOne(index){if(busy||states[index]==='done')return;selecting=false;selectedTasks.clear();busy=true;const token=++runToken;await simulateTask(index,token);if(token!==runToken)return;busy=false;renderTasks();}
+async function deployOne(index){if(busy||!deploymentSettingsReady()||!canDeployTask(index))return;selecting=false;selectedTasks.clear();busy=true;const token=++runToken;await simulateTask(index,token);if(token!==runToken)return;busy=false;renderTasks();}
 $('#deploy-all').onclick=async()=>{
-  if(busy)return;
+  if(busy||!deploymentSettingsReady())return;
   if(!selecting){selecting=true;selectedTasks.clear();renderTasks();return;}
   const queue=[...selectedTasks].filter(i=>states[i]!=='done').sort((a,b)=>a-b);
   if(!queue.length)return;
@@ -207,15 +210,12 @@ function isPublicIpv4(ip){
 async function queryIpInfo(ip){
   if(ipQueryController)ipQueryController.abort();
   if(!isPublicIpv4(ip)){
-    detectedRegion='us_ny';renderTasks();
     $('#rating-state').textContent='';$('#ip-location').textContent='美国 · 纽约';$('#ip-score').textContent='85';$('#score-unit').textContent=' / 100';
-    $('#score-source').textContent='Net.Coffee · IP 评分';$('#score-source').href='https://ip.net.coffee/claude/';
     $('#score-source').title='当前为示例 IP，归属地与评分仅为界面示意；真实查询暂支持公网 IPv4。';return;
   }
-  detectedRegion=null;renderTasks();const controller=new AbortController();ipQueryController=controller;
+  const controller=new AbortController();ipQueryController=controller;
   const timeout=setTimeout(()=>controller.abort(),35000);
   $('#rating-state').textContent='查询中';$('#ip-location').textContent='正在查询…';$('#ip-score').textContent='—';$('#score-unit').textContent='';
-  $('#score-source').href='https://ip.net.coffee/ip/'+encodeURIComponent(ip);
   try{
     const response=await fetch('https://ip.net.coffee/api/ip/lookup/'+encodeURIComponent(ip),{signal:controller.signal,credentials:'omit',referrerPolicy:'no-referrer'});
     if(!response.ok)throw new Error('查询失败');const data=await response.json();if(ipQueryController!==controller)return;
@@ -224,7 +224,6 @@ async function queryIpInfo(ip){
     const score=data.trust_score;const valid=typeof score==='number'&&Number.isFinite(score)&&score>=0&&score<=100;
     $('#ip-score').textContent=valid?String(score):'—';$('#score-unit').textContent=valid?' / 100':'';$('#rating-state').textContent=geo.source;
     $('#score-source').title='定位优先采用 Net.Coffee 多源综合结果；评分可能按网段缓存，并非 Claude 官方评分。';
-    const regionMap={jp:'jp',sg:'sg',gb:'gb',de:'de',kr:'kr'};detectedRegion=geo.code==='us'?({'New York':'us_ny','Los Angeles':'us_la'}[geo.city]||null):(regionMap[geo.code]||null);renderTasks();
   }catch{if(ipQueryController!==controller)return;$('#rating-state').textContent='暂不可用';$('#ip-location').textContent='暂无归属地';$('#ip-score').textContent='—';$('#score-unit').textContent='';}
   finally{clearTimeout(timeout);}
 }
@@ -277,18 +276,26 @@ $('#mount-form').onsubmit=e=>{
 
 function updateLocalePreview(){
   const key=$('#locale-region').value;
-  const preset=localePresets[key==='auto'?detectedRegion:key];
+  const preset=Object.hasOwn(localePresets,key)?localePresets[key]:null;
   $('#locale-timezone').textContent=preset?.timezone||'待选择';
   $('#locale-language').textContent=preset?.language||'待选择';
   $('#locale-code').textContent=preset?.locale||'待选择';
-  $('#locale-hint').textContent=preset?'中文输入法不受系统语言影响。':'未能确定时区，请手动选择所在地。';
-  $('#localization-form button[type="submit"]').disabled=!preset;
+  $('#locale-hint').textContent=preset?'保存后需部署才会应用。':'请先选择所在地。';
+  $('#localization-form button[type="submit"]').disabled=localeSaving||!preset;
 }
 function openLocalization(){ $('#locale-region').value=localeSelection;updateLocalePreview();$('#localization-dialog').showModal(); }
+function saveLocaleChoice(region){
+  if(localeSelection!==region){states[1]='pending';taskLogs[1]='';selectedTasks.delete(1);}
+  localeSelection=region;
+  renderTasks();
+  $('#localization-dialog').close();
+}
 $('#locale-region').onchange=updateLocalePreview;
-$('#close-localization').onclick=()=>$('#localization-dialog').close();
+$('#close-localization').onclick=()=>{if(!localeSaving)$('#localization-dialog').close();};
+$('#localization-dialog').addEventListener('cancel',event=>{if(localeSaving)event.preventDefault();});
 $('#localization-form').onsubmit=e=>{
-  e.preventDefault();localeSelection=$('#locale-region').value;states[1]='pending';taskLogs[1]='';selectedTasks.delete(1);renderTasks();$('#localization-dialog').close();
+  e.preventDefault();const region=$('#locale-region').value;
+  if(Object.hasOwn(localePresets,region))saveLocaleChoice(region);
 };
 const ipPickerControls=new Map();
 function closeIpPickers(){for(const {trigger,menu} of ipPickerControls.values()){menu.hidden=true;trigger.setAttribute('aria-expanded','false');}}
@@ -358,7 +365,7 @@ $('#ip-policy-form').onsubmit=e=>{
   $('#ip-policy-state').textContent=ipPolicy.lockIngress&&ipPolicy.lockEgress?'已锁定':ipPolicy.lockIngress||ipPolicy.lockEgress?'部分锁定':'未锁定';
   $('#ip-policy-summary').textContent=ipPolicy.lockEgress?'入口接入，指定住宅 IP 出站。':'入口用于接入，住宅 IP 用于出站。';
   $('#ip-policy-dialog').close();
-  if(oldExit!==serverConnection.egressIp){states[1]='pending';taskLogs[1]='';localeSelection='auto';detectedRegion=null;renderTasks();queryIpInfo(serverConnection.egressIp);}
+  if(oldExit!==serverConnection.egressIp)queryIpInfo(serverConnection.egressIp);
 };
 
 // 项目与社区链接。VPS 推广入口单独标注 sponsored。
@@ -376,7 +383,7 @@ function setEye(button,visible){button.innerHTML='<svg viewBox="0 0 24 24" aria-
 setEye($('#reveal'),false);
 document.querySelectorAll('[data-reveal]').forEach(button=>{setEye(button,false);button.onclick=()=>{const field=document.getElementById(button.dataset.reveal);const visible=field.type==='password';field.type=visible?'text':'password';setEye(button,visible);};});
 function openAccountSettings(){$('#account-settings').showModal();}
-$('#account-settings-form').onsubmit=e=>{e.preventDefault();$('#account-settings').close();states[0]='pending';renderTasks();};
+$('#account-settings-form').onsubmit=e=>{e.preventDefault();if(!e.currentTarget.reportValidity())return;accountSettingsSaved=true;$('#account-settings').close();states[0]='pending';renderTasks();};
 for(const id of ['server-ingress','server-address']){const value=document.getElementById(id);const eye=document.createElement('button');eye.className='ip-eye reveal';eye.type='button';eye.setAttribute('aria-label','隐藏'+(id==='server-ingress'?'入口':'出口')+' IP');setEye(eye,true);let visible=true;let actual='';eye.onclick=()=>{if(visible)actual=value.textContent;visible=!visible;value.textContent=visible?actual:'•••.•••.•••.•••';eye.setAttribute('aria-label',(visible?'隐藏':'显示')+' IP');setEye(eye,visible);};new MutationObserver(()=>{if(!visible&&value.textContent!=='•••.•••.•••.•••'){actual=value.textContent;value.textContent='•••.•••.•••.•••';}}).observe(value,{childList:true});value.after(eye);}
 for(const button of document.querySelectorAll('[data-open-services]'))button.onclick=()=>$('#services-dialog').showModal();
 for(const id of ['usage-consent','settings-usage-consent'])document.getElementById(id).onchange=e=>{const enabled=e.target.checked;$('#usage-consent').checked=enabled;$('#settings-usage-consent').checked=enabled;};
@@ -493,58 +500,13 @@ function initCloudRemoteDialog(){
 }
 initCloudRemoteDialog();
 
-let onGuideConfirm=null;
-function initGuideDialog(){
-  const dialog=$('#guide-dialog');
-  if(!dialog)return;
-  const footer=dialog.querySelector('.guide-footer-actions');dialog.append(footer);
-  const cancelBtn=$('#guide-cancel-btn');
-  const doneBtn=$('#guide-done-btn');
-  const closeBtn=$('#close-guide');
-
-  const open=(onConfirm)=>{
-    onGuideConfirm=typeof onConfirm==='function'?onConfirm:null;
-    if(onGuideConfirm){
-      if(cancelBtn)cancelBtn.hidden=false;
-      if(doneBtn)doneBtn.textContent='我已知晓，继续连接';
-    }else{
-      if(cancelBtn)cancelBtn.hidden=true;
-      if(doneBtn)doneBtn.textContent='我知道了';
-    }
-    dialog.showModal();
-  };
-  window.openGuideDialog=open;
-
-  const close=()=>{
-    dialog.close();
-    onGuideConfirm=null;
-  };
-
-  $('#header-guide-link')?.addEventListener('click',()=>window.openGuideDialog());
-  $('#bottom-guide-link')?.addEventListener('click',()=>window.openGuideDialog());
-  $('#notice-guide-link')?.addEventListener('click',()=>window.openGuideDialog());
-  $('#cloud-guide-link')?.addEventListener('click',()=>window.openGuideDialog());
-  closeBtn?.addEventListener('click',close);
-  cancelBtn?.addEventListener('click',close);
-  doneBtn?.addEventListener('click',()=>{
-    const cb=onGuideConfirm;
-    dialog.close();
-    onGuideConfirm=null;
-    if(cb)cb();
-  });
-  dialog.addEventListener('cancel',()=>{onGuideConfirm=null;});
-  dialog.addEventListener('keydown',e=>{
-    if(e.key==='Enter'&&doneBtn&&!doneBtn.disabled){
-      e.preventDefault();
-      doneBtn.click();
-    }
-  });
-}
-initGuideDialog();
-
 if(!window.__safeCodeDesktop)showScreen('notice');
 
 // 登录信息教程也可在普通浏览器预览。
 $('#login-help').onclick=()=>$('#login-help-dialog').showModal();
 $('#advanced-connect').onclick=()=>$('#advanced-dialog').showModal();
 $('#advanced-form').onsubmit=event=>{event.preventDefault();$('#advanced-dialog').close();};
+$('#enter-preview').onclick=()=>{
+  if(window.__safeCodeDesktop){showAppMessage('客户端核心模块未就绪，无法进入预览。');return;}
+  $('#advanced-dialog').close();enterDeveloperPreview();
+};
