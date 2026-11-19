@@ -4,6 +4,10 @@ using SafeCode.Core;
 namespace SafeCode.Desktop;
 internal static class ConnectionErrors
 {
+    public static bool CanRetry(Exception error) =>
+        error is (SocketException or SshConnectionException or SshOperationTimeoutException or TimeoutException or OperationCanceledException)
+        && !error.Message.Contains("Host key could not be verified", StringComparison.OrdinalIgnoreCase);
+
     public static string DescribeOperation(Exception error)=>error.Message.Contains("Host key could not be verified",StringComparison.OrdinalIgnoreCase)?"服务器主机密钥校验失败。请返回登录并重新连接；若提示指纹变化，请先在 VPS 控制台核对，确认后再继续。":error.Message;
     public static string Describe(Exception error)
     {

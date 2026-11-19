@@ -1,0 +1,17 @@
+[req]
+prompt = no
+distinguished_name = fixture
+
+[fixture]
+CN = Safe Code 214 WebFetch fixture
+
+[root]
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+nameConstraints = critical, permitted;DNS:api.anthropic.com, permitted;DNS:webfetch-fixture.test
+
+[server]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:api.anthropic.com,DNS:webfetch-fixture.test,DNS:redirect-target.webfetch-fixture.test

@@ -6,11 +6,45 @@ using SafeCode.Core;
 namespace SafeCode.Desktop;
 
 internal sealed record AccountDraft(string Username,string Hostname,string Password);
+internal sealed record DeploymentChoices(bool AccountSaved,string? LocaleRegion);
 public sealed record DesktopResolution(int Width=1280,int Height=800);
 internal sealed class ClientPreferences(string directory)
 {
     internal static readonly DesktopResolution[] Resolutions=[new(1024,768),new(1280,800),new(1366,768),new(1600,900),new(1920,1080),new(2560,1440),new(2560,1600)];
+    private string ClaudeDesktopWarningPath=>Path.Combine(directory,"claude-desktop-warning-accepted-v1");
+    public bool ClaudeDesktopWarningAccepted=>File.Exists(ClaudeDesktopWarningPath);
+    public void AcceptClaudeDesktopWarning()
+    {
+        Directory.CreateDirectory(directory);
+        using var marker=new FileStream(ClaudeDesktopWarningPath,FileMode.OpenOrCreate,FileAccess.Write,FileShare.ReadWrite);
+    }
     private string DraftPath(SshSession session)=>Path.Combine(directory,"account-drafts",Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(session.Host+":"+session.Port+":"+session.Fingerprint)))+(OperatingSystem.IsMacOS()?".aes":".dpapi"));
+    private string DeploymentLocalePath(SshSession session)=>DraftPath(session)+".locale";
+    public DeploymentChoices ReadDeploymentChoices(SshSession session)
+    {
+        string draft=DraftPath(session),localePath=DeploymentLocalePath(session);
+        bool accountSaved=File.Exists(draft)||
+            (session.Server?.Statuses.GetValueOrDefault("account")==true&&File.Exists(draft+".configured"));
+        string? region=File.Exists(localePath)?File.ReadAllText(localePath):null;
+        return new(accountSaved,region!=null&&DeploymentCatalog.FindLocale(region)!=null?region:null);
+    }
+    public DeploymentChoices SaveDeploymentLocale(SshSession session,string region)
+    {
+        if(DeploymentCatalog.FindLocale(region)==null)throw new ArgumentException("请选择有效的时区和系统语言。");
+        string path=DeploymentLocalePath(session);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string temporary=path+"."+Guid.NewGuid().ToString("N")+".new";
+        try{File.WriteAllText(temporary,region);File.Move(temporary,path,true);}
+        finally{File.Delete(temporary);}
+        return ReadDeploymentChoices(session);
+    }
+    public LocaleSettings RequireDeploymentChoices(SshSession session)
+    {
+        var settings=ReadDeploymentChoices(session);
+        if(!settings.AccountSaved||settings.LocaleRegion==null)
+            throw new InvalidOperationException("请先打开两个「自定义」，分别保存工作账户和本土化设置，再开始部署。");
+        return DeploymentCatalog.FindLocale(settings.LocaleRegion)!;
+    }
     public bool RequiresAccountConfirmation(SshSession session)=>session.Server?.Statuses.GetValueOrDefault("account")==true||File.Exists(DraftPath(session)+".configured");
     public AccountDraft? ReadDraft(SshSession session)
     {

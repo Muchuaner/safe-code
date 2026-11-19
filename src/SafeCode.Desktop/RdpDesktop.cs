@@ -21,6 +21,7 @@ internal sealed class RdpDesktop : F.Form
     private DesktopResolution presetResolution;
     private RdpResizeMode resizeMode;
     private readonly RdpResizePreferences? resizePreferences;
+    private readonly Action<Exception?>? displayOperationCompleted;
     private bool zoomSupported;
     private bool connectionConfigured;
     private Rectangle windowedBounds;
@@ -32,9 +33,10 @@ internal sealed class RdpDesktop : F.Form
     private int resizeAttempts;
     private DateTime toolbarVisibleUntil;
 
-    internal RdpDesktop(DesktopResolution? resolution = null, RdpResizePreferences? resizePreferences = null)
+    internal RdpDesktop(DesktopResolution? resolution = null, RdpResizePreferences? resizePreferences = null, Action<Exception?>? displayOperationCompleted = null)
     {
         this.resizePreferences = resizePreferences;
+        this.displayOperationCompleted = displayOperationCompleted;
         resizeMode = resizePreferences?.Read() ?? RdpResizeMode.Original;
         currentResolution = presetResolution = resolution ?? new();
         Text = "Safe Code · 远程桌面";
@@ -44,7 +46,7 @@ internal sealed class RdpDesktop : F.Form
         KeyPreview = true;
         var minimize = new F.ToolStripButton("最小化");
         var disconnect = new F.ToolStripButton("断开");
-        fullscreenButton.Click += (_, _) => ToggleFullscreen();
+        fullscreenButton.Click += (_, _) => ApplyDisplayChange(ToggleFullscreen);
         minimize.Click += (_, _) => WindowState = F.FormWindowState.Minimized;
         disconnect.Click += (_, _) => Close();
         foreach (var (mode, label) in new[]
@@ -115,17 +117,29 @@ internal sealed class RdpDesktop : F.Form
         try { resizePreferences?.Save(selected); }
         catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException)
         {
+            displayOperationCompleted?.Invoke(error);
             F.MessageBox.Show(this, "无法保存显示模式，请检查本机应用数据目录。", Text);
             return;
         }
-        var previous = resizeMode;
-        resizeMode = selected;
-        UpdateResizeMenu();
-        LayoutViewport();
-        if (selected == RdpResizeMode.Dynamic || previous == RdpResizeMode.Dynamic)
-            QueueDisplayUpdate();
-        else
-            ShowResolution();
+        ApplyDisplayChange(() =>
+        {
+            var previous = resizeMode;
+            resizeMode = selected;
+            UpdateResizeMenu();
+            LayoutViewport();
+            if (selected == RdpResizeMode.Dynamic || previous == RdpResizeMode.Dynamic)
+                QueueDisplayUpdate();
+            else
+                ShowResolution();
+        });
+    }
+
+    private void ApplyDisplayChange(Action change)
+    {
+        Exception? failure = null;
+        try { change(); }
+        catch (Exception error) { failure = error; throw; }
+        finally { displayOperationCompleted?.Invoke(failure); }
     }
 
     private void ShowResolution()
@@ -286,7 +300,7 @@ internal sealed class RdpDesktop : F.Form
     protected override void WndProc(ref F.Message message)
     {
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == FullscreenHotkey)
-        { ToggleFullscreen(); return; }
+        { ApplyDisplayChange(ToggleFullscreen); return; }
         base.WndProc(ref message);
     }
 

@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-6b4a3a?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-macOS 版提供 Apple Silicon 与 Intel 两种安装包，安装、构建与验证范围见 [Mac 使用说明](docs/MACOS.md)。
+macOS 版支持 Apple Silicon（arm64），安装、构建与验证范围见 [Mac 使用说明](docs/MACOS.md)。
 
 ## ✨ 功能
 
@@ -26,9 +26,9 @@ macOS 版提供 Apple Silicon 与 Intel 两种安装包，安装、构建与验�
 | 🧩 | **Codex 接入 Claude（实验）** | 可选第三方适配器，提供独立供应商配置；默认关闭，真实模型兼容性尚未验收 |
 | 🌐 | **CloudCLI** | 安装 CloudCLI，并通过 SSH 隧道一键打开网页 |
 | 🛡️ | **IP 管理** | 只选择服务器检测到的 IP，独立应用并验证出口，失败自动回退 |
-| 🧭 | **时区与语言** | 按出口 IP 推荐时区和语言，也可手动选择 |
+| 🧭 | **时区与语言** | 手动选择时区和系统语言 |
 | ⬆️ | **在线更新** | 标题与底部醒目提示新版本，校验安装包后由你确认安装 |
-| 🧰 | **故障诊断** | 默认勾选、可关闭，仅上报固定步骤与错误类型，不上传原始日志、凭据或路径 |
+| 🧰 | **故障诊断** | 默认关闭，主动开启后仅上报固定步骤与错误类型，不上传原始日志、凭据或路径 |
 
 ## 贡献者
 

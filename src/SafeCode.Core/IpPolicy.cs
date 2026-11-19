@@ -1,10 +1,14 @@
 using Renci.SshNet;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace SafeCode.Core;
 public sealed partial class SshSession
 {
+    public TimeSpan IpVerificationTimeout {get;init;}=TimeSpan.FromSeconds(55);
+    public TimeSpan IpRollbackTimeout {get;init;}=TimeSpan.FromSeconds(25);
+    public TimeSpan IpSessionRollbackTimeout {get;init;}=TimeSpan.FromSeconds(12);
     private async Task<SshClient> ProbeIngressAsync(string ingress,CancellationToken ct)
     {
         if(connection==null)throw new InvalidOperationException("尚未连接。");
@@ -17,10 +21,12 @@ public sealed partial class SshSession
     }
     private async Task WaitIpPolicyAsync(string token,string ingress,CancellationToken ct)
     {
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromSeconds(55));
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(IpVerificationTimeout);
         while(true)
         {
-            deadline.Token.ThrowIfCancellationRequested();
+            if(ct.IsCancellationRequested)ct.ThrowIfCancellationRequested();
+            // 独立 deadline 到期是验证超时，不是用户取消；保留可区分的错误类别。
+            if(deadline.IsCancellationRequested)throw new TimeoutException("等待新入口生效超时。");
             try
             {
                 using var probe=await ProbeIngressAsync(ingress,deadline.Token);
@@ -28,14 +34,41 @@ public sealed partial class SshSession
                 await command.ExecuteAsync(deadline.Token);
                 if(command.ExitStatus==0){using var doc=JsonDocument.Parse(command.Result);if(doc.RootElement.GetProperty("ready").GetBoolean())return;}
             }
-            catch(OperationCanceledException){throw;}
+            catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
+            catch(OperationCanceledException){throw new TimeoutException("等待新入口生效超时。");}
             catch(Exception){Log?.Invoke("等待网络规则生效，正在重新验证入口…");}
-            await Task.Delay(750,deadline.Token);
+            try{await Task.Delay(750,deadline.Token);}
+            catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
+            catch(OperationCanceledException){throw new TimeoutException("等待新入口生效超时。");}
+        }
+    }
+    private async Task<T> RequestOverControlAsync<T>(string operation, object? options, CancellationToken ct)
+    {
+        // 紧急回退不能在 SSH 已建立时再依赖新的 SFTP/TCP 连接：入口锁定后新连接可能被
+        // 丢弃，而当前控制通道仍可执行命令。请求体只含操作和短期 token。
+        if(client?.IsConnected!=true)throw new InvalidOperationException("SSH 已断开。");
+        string path=remoteDirectory+"/control-"+Guid.NewGuid().ToString("N")+".json";
+        string payload=Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{op=operation,options,background=false},JsonDefaults.Options)));
+        try
+        {
+            await ExecuteTextAsync(prefix+"sh -c "+Quote("umask 077; printf %s "+Quote(payload)+" | base64 -d > "+Quote(path)),ct);
+            string output=await ExecuteTextAsync(prefix+"python3 -u "+Quote(remoteDirectory+"/agent.py")+" "+Quote(path),ct);
+            string? json=output.Split('\n').LastOrDefault(x=>x.StartsWith("SC_RESULT:",StringComparison.Ordinal));
+            if(json==null)throw new RemoteOperationException("远端回退任务未返回结果。","operation_failed");
+            return JsonSerializer.Deserialize<T>(json[10..],JsonDefaults.Options)??throw new InvalidDataException("远端回退结果无效。");
+        }
+        finally
+        {
+            if(client?.IsConnected==true)
+            {
+                using var cleanupDeadline=new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                try{await ExecuteTextAsync(prefix+"rm -f -- "+Quote(path),cleanupDeadline.Token);}catch{}
+            }
         }
     }
     private async Task<bool> TryRollbackIpAsync(string token,string originalIngress,string proposedIngress)
     {
-        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        using var deadline=new CancellationTokenSource(IpRollbackTimeout);
         foreach(string ingress in new[]{originalIngress,proposedIngress}.Distinct())
         {
             try
@@ -83,9 +116,24 @@ public sealed partial class SshSession
         }
         catch(Exception error)
         {
+            // 新入口不可达时，已建立的 SSH 会话通常仍在 established 白名单内。
+            // 先尝试新连接回退；仍失败则通过当前会话直接执行独立回退，避免把服务器
+            // 留在新入口不可达、旧入口被阻断且待处理记录阻塞重试的状态。
             bool rollbackRequested=await TryRollbackIpAsync(prepared.Token,originalIngress,policy.IngressIp);
-            if(!applied&&!rollbackRequested)try{await RequestAsync<JsonElement>("ip_rollback",new{token=prepared.Token},ct);}catch{}
-            throw new InvalidOperationException(error.Message+"\n"+(applied?(rollbackRequested?"验证未通过，已执行回退。请重新连接原入口确认状态。":"验证未通过；服务器设有 120 秒独立回退保护，请稍后重新连接原入口确认状态。") :"未提交网络变更，原网络设置保留。"));
+            if(!rollbackRequested&&!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    using var rollbackDeadline=CancellationTokenSource.CreateLinkedTokenSource(ct);rollbackDeadline.CancelAfter(IpSessionRollbackTimeout);
+                    var result=await RequestOverControlAsync<JsonElement>("ip_rollback",new{token=prepared.Token},rollbackDeadline.Token);
+                    rollbackRequested=result.ValueKind!=JsonValueKind.Object||!result.TryGetProperty("rolledBack",out var rolledBack)||rolledBack.ValueKind!=JsonValueKind.False;
+                }
+                catch(Exception){}
+            }
+            string suffix=applied?(rollbackRequested?"验证未通过，已执行回退。请重新连接原入口确认状态。":"验证未通过；服务器设有 120 秒独立回退保护，请稍后重新连接原入口确认状态。") :"未提交网络变更，原网络设置保留。";
+            Exception cause=error;
+            if(error is OperationCanceledException&&!ct.IsCancellationRequested)cause=new TimeoutException("等待新入口生效超时。",error);
+            throw new InvalidOperationException(error.Message+"\n"+suffix,cause);
         }
         finally{candidate?.Dispose();}
     }

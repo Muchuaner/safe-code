@@ -23,12 +23,32 @@ if(args.Length>1&&args[0]=="algorithm-fixture"){
     await Check(false);
     typeof(SshSession).GetField("client",flags)!.SetValue(session,initial);
     typeof(SshSession).GetField("remoteDirectory",flags)!.SetValue(session,"/tmp/fixture");
-    typeof(SshSession).GetProperty("Server")!.SetValue(session,new ServerInfo{Architecture="x86_64"});
-    var download=(Task<(object Options,string Path)>)typeof(SshSession).GetMethod("PrepareClaudePayloadAsync",flags)!.Invoke(session,new object[]{CancellationToken.None})!;
-    var prepared=await download;if(prepared.Path!="/tmp/fixture/claude-payload-fixture")throw new Exception("未优先使用 VPS 下载结果。");
-    Console.WriteLine("CLAUDE_VPS_DOWNLOAD_PRECEDES_LOCAL_HTTP_PASSED");
+    var deployed=await session.RequestAsync<ServerInfo>("claude");
+    if(!deployed.Statuses.GetValueOrDefault("claude"))throw new Exception("VPS 后台安装任务没有返回就绪状态。");
+    bool remoteFailure=false;
+    try{await session.RequestAsync<ServerInfo>("claude");}
+    catch(RemoteOperationException error){remoteFailure=error.Code=="dns_failure"&&error.Message=="VPS 下载失败";}
+    if(!remoteFailure)throw new Exception("VPS 下载失败未原样传回。");
+    Console.WriteLine("CLAUDE_VPS_JOB_WITHOUT_CLIENT_PAYLOAD_PASSED");
     File.WriteAllText(mode,"changed");await Check(true);
     Console.WriteLine("ADDED_HOST_KEY_TYPE_PRESERVES_SFTP_AND_TUNNEL; REPLACED_KEY_REJECTED");return 0;
+}
+if(args.Length>1&&args[0]=="ssh-known-hosts-option"){
+    Console.WriteLine(SshClientOptions.UserKnownHostsFile(args[1]));return 0;
+}
+if(args.Length>1&&args[0]=="ip-rollback-fixture"){
+    using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string directory=c.GetProperty("directory").GetString()!;int port=c.GetProperty("port").GetInt32();
+    using var client=new Renci.SshNet.SshClient("127.0.0.1",port,"fixture","fixture-only");client.HostKeyReceived+=(_,e)=>e.CanTrust=Convert.ToBase64String(e.HostKey)==c.GetProperty("key").GetString();await client.ConnectAsync(default);
+    using var session=new SshSession(Path.Combine(directory,"settings")){IpVerificationTimeout=TimeSpan.FromSeconds(1),IpRollbackTimeout=TimeSpan.FromSeconds(1),IpSessionRollbackTimeout=TimeSpan.FromSeconds(5)};
+    var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+    void Set(string name,object value)=>typeof(SshSession).GetField(name,flags)!.SetValue(session,value);
+    Set("client",client);Set("connection",new ConnectionSettings("127.0.0.1","fixture","fixture-only",port));Set("trustedKey",Convert.FromBase64String(c.GetProperty("key").GetString()!));Set("remoteDirectory",directory);
+    typeof(SshSession).GetProperty("Server")!.SetValue(session,new ServerInfo{Architecture="x86_64"});
+    bool rolledBack=false;
+    try{await session.ApplyIpPolicyAsync(new IpPolicySettings("127.0.0.1","203.0.113.1",true,true,port));}
+    catch(InvalidOperationException error)when(error.InnerException is TimeoutException&&error.Message.Contains("已执行回退")){rolledBack=true;}
+    if(!rolledBack)throw new Exception("新连接不可达时未通过现有控制通道执行回退。");
+    Console.WriteLine("IP_ROLLBACK_USES_ESTABLISHED_CONTROL_CHANNEL");return 0;
 }
 if(args.Length>1&&args[0]=="mount-fixture"){
     using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var c=doc.RootElement;string directory=c.GetProperty("directory").GetString()!;int port=c.GetProperty("port").GetInt32();

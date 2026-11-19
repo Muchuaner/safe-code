@@ -14,6 +14,14 @@ internal static class MacSelfTest
         string Feed(string suffix)=>JsonSerializer.Serialize(new{tag_name="Beta-0.4.4.2",draft=false,prerelease=true,assets=new[]{new{name="SafeCode-Beta-0.4.4.2-"+suffix,browser_download_url="https://github.com/Muchuaner/safe-code/releases/download/Beta-0.4.4.2/SafeCode-Beta-0.4.4.2-"+suffix,digest="sha256:"+new string('a',64),size=123}}});
         using(var win=JsonDocument.Parse(Feed("Setup-x64.exe")))if(ClientServices.ParseRelease(win.RootElement,"Beta-0.4.4.1","macOS-arm64.dmg").CanInstall)throw new Exception("Mac 更新误选 Windows 安装包。");
         using(var mac=JsonDocument.Parse(Feed("macOS-arm64.dmg")))if(!ClientServices.ParseRelease(mac.RootElement,"Beta-0.4.4.1","macOS-arm64.dmg").CanInstall||ClientServices.ParseRelease(mac.RootElement,"Beta-0.4.4.1","macOS-x64.dmg").CanInstall)throw new Exception("架构筛选失败。");
+        var profile=MacClaudeDesktopBridge.MakeProfile("http://127.0.0.1:18899","fixture-local-token",
+            [new("claude-fixture-opus","Opus",["low","high"],true,"opus"),
+             new("claude-fixture-classifier","Classifier",["low"],false,null,true)]);
+        var model=profile["inferenceModels"]!.AsArray().Single()!;
+        if((string?)model["name"]!="claude-fixture-opus"||(string?)model["maxEffort"]!="high"||
+           (string?)profile["claudeCodeSettings"]?["env"]?["CLAUDE_CODE_AUTO_MODE_MODEL"]!="claude-fixture-classifier")
+            throw new Exception("Mac Claude Desktop 模型和分类器配置错误。");
+        Console.WriteLine("MAC_CLAUDE_PROFILE_CHAT_AND_CLASSIFIER_CONFIGURATION_OK");
         string fingerprint=new('A',64);
         var rdp=MacClients.FreeRdpArguments(new(22119,"fixture",fingerprint),new("workspace","fixture password"),
             new(2560,1600),RdpResizeMode.Dynamic,true);

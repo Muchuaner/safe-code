@@ -5,6 +5,9 @@ using System.Security.Cryptography;
 using SafeCode.Desktop;
 
 void Assert(bool value,string message){if(!value)throw new Exception(message);}
+if(args.Length==1&&args[0]=="--diagnostic-operations"){
+ Console.WriteLine(JsonSerializer.Serialize(DiagnosticTrace.Operations));return;
+}
 if(args.Length==2&&args[0]=="--diagnostic-fixture"){
  var trace=new DiagnosticTrace("chrome",0);trace.Observe("Waiting for cache lock: password=must-not-upload 203.0.113.7");
  File.WriteAllText(args[1],JsonSerializer.Serialize(new{schema=2,eventId=trace.Id,version=ClientServices.Version,context=new{installationId=Guid.NewGuid().ToString(),sessionId=Guid.NewGuid().ToString(),operationId=trace.Id},report=trace.Finish(new InvalidOperationException("Waiting for cache lock /var/lib/dpkg/lock-frontend"))},SafeCode.Core.JsonDefaults.Options));return;
@@ -23,7 +26,10 @@ if(args.Contains("--live")){
 var handler=new FakeHandler();
 try{
  using(var client=new ClientServices(directory,handler)){
-  Assert(handler.Bodies.Count==0,"sent before consent");await client.SetConsentAsync(false,false);await client.SetConsentAsync(false,true);Assert(handler.Bodies.Count==0,"opt-out sent telemetry");
+  using var defaults=JsonDocument.Parse(JsonSerializer.Serialize(client.Preferences()));
+  Assert(!defaults.RootElement.GetProperty("enabled").GetBoolean()&&!defaults.RootElement.GetProperty("diagnosticsEnabled").GetBoolean(),"reporting was selected by default");
+  await client.SetConsentAsync(true,false);Assert(handler.Bodies.Count==0,"sent before consent confirmation");
+  await client.SetConsentAsync(false,true);Assert(handler.Bodies.Count==0,"opt-out sent telemetry");
   await client.SetConsentAsync(true,true);await client.SetConsentAsync(true,true);Assert(handler.Bodies.Count==1,"launch was not deduplicated");
   using var doc=JsonDocument.Parse(handler.Bodies[0]);Assert(doc.RootElement.EnumerateObject().Select(p=>p.Name).Order().SequenceEqual(new[]{"schema","eventId","installationId","version","os","eventType"}.Order()),"unexpected telemetry fields");
   await client.SetConsentAsync(false,false);await client.SendFeedbackAsync("Explicit user feedback",default);Assert(handler.Bodies.Count==2,"feedback failed after optout");using var feedback=JsonDocument.Parse(handler.Bodies[1]);Assert(!feedback.RootElement.TryGetProperty("installationId",out _),"feedback contains install identifier");
@@ -45,7 +51,7 @@ try{
  var diagnosticDirectory=Path.Combine(directory,"diagnostics");var diagnosticHandler=new FakeHandler();
  using(var diagnosticClient=new ClientServices(diagnosticDirectory,diagnosticHandler))
  {
-  Assert(!diagnosticClient.DiagnosticsAllowed&&JsonSerializer.Serialize(diagnosticClient.Preferences()).Contains("\"diagnosticsEnabled\":true"),"diagnostics must be checked by default but blocked before confirmation");
+  Assert(!diagnosticClient.DiagnosticsAllowed&&JsonSerializer.Serialize(diagnosticClient.Preferences()).Contains("\"diagnosticsEnabled\":false"),"diagnostics must be off by default");
   var beforeConsent=new DiagnosticTrace("chrome",diagnosticClient.DiagnosticGeneration);beforeConsent.Observe("Waiting for cache lock /var/lib/dpkg/lock-frontend password=super-secret");
   await diagnosticClient.SendDiagnosticAsync(beforeConsent,new DirectoryNotFoundException("C:\\Users\\private\\account-drafts\\secret.dpapi"),default);
   Assert(diagnosticHandler.Bodies.Count==0,"diagnostics sent before consent");
@@ -73,11 +79,56 @@ try{
  Assert(DiagnosticTrace.ErrorKind(new Renci.SshNet.Common.SshAuthenticationException("private"))=="ssh_auth_failed","SSH auth unclassified");
  Assert(DiagnosticTrace.ErrorKind(new Renci.SshNet.Common.SshOperationTimeoutException("private"))=="ssh_timeout","SSH timeout unclassified");
  Assert(DiagnosticTrace.ErrorKind(new SafeCode.Core.RemoteOperationException("private","mount_failed"))=="mount_failed","remote error lost");
+ Assert(DiagnosticTrace.ErrorKind(new SafeCode.Core.RemoteOperationException("private","mount_target_invalid"))=="mount_target_invalid","remote mount target code lost");
+ Assert(DiagnosticTrace.ErrorKind(new SafeCode.Core.RemoteOperationException("private","invalid_argument"))=="invalid_argument","remote argument code lost");
+ Assert(DiagnosticTrace.ErrorKind(new SafeCode.Core.RemoteOperationException("private","deployment_busy"))=="deployment_busy","remote busy code lost");
+ foreach(var (status,kind) in new (int,string)[]{(400,"gateway_invalid_request"),(401,"gateway_auth_failed"),(403,"gateway_auth_failed"),(409,"gateway_conflict"),(429,"gateway_rate_limited"),(501,"gateway_not_supported"),(503,"gateway_upstream_failed")}){
+  Assert(DiagnosticTrace.ErrorKind(new HttpRequestException("secret header",(Exception?)null,(HttpStatusCode)status))==kind,"gateway HTTP status lost");
+ }
+ Assert(DiagnosticTrace.ErrorKind(new HttpRequestException(HttpRequestError.SecureConnectionError,"private endpoint"))=="crypto_error","gateway TLS failure lost");
+ using(var argsDocument=JsonDocument.Parse("""{"action":"issue","activation_code":"private","step":"gateway_key_issue","operation":"gateway_key_issue"}""")){
+  var argsValue=argsDocument.RootElement;
+  Assert(DiagnosticTrace.OperationFor("safeCodeApi.manage",argsValue)=="gateway_key_issue","gateway creation not instrumented");
+  Assert(DiagnosticTrace.OperationFor("deploy",argsValue)==null&&DiagnosticTrace.OperationFor("job.resume",argsValue)==null,"unsafe operation alias accepted");
+ }
+ using(var argsDocument=JsonDocument.Parse("""{"action":"usage","background":true,"keyId":"private"}""")){
+  var argsValue=argsDocument.RootElement;
+  Assert(DiagnosticTrace.GatewayOperation(argsValue)=="gateway_usage"&&DiagnosticTrace.IsBackgroundOperation("gateway_usage",argsValue),"gateway poll not sampled");
+ }
+ var claudeTrace=new DiagnosticTrace("claude",0);
+ claudeTrace.Observe("正在通过 VPS 网络获取 Claude Code 官方版本和校验信息…");
+ claudeTrace.Observe("VPS 下载完成，官方 Claude Code 文件校验通过。");
+ var claudeReport=claudeTrace.Finish(null);
+ Assert(claudeReport.Stage=="claude_download_verified"&&claudeReport.Signals.Length==2,"Claude verification milestones lost");
+ Assert(DiagnosticTrace.FailureSite("mount_apply",new DirectoryNotFoundException("local only"))=="directory_mount","local mount error marked remote");
+ Assert(DiagnosticTrace.FailureSite("mount_apply",new SafeCode.Core.RemoteOperationException("private","mount_target_invalid"))=="remote_task","remote mount error lost");
+ Assert(DiagnosticTrace.FailureSite("ip_policy",new InvalidOperationException("local guard"))=="unknown","local IP guard marked remote");
+ Assert(DiagnosticTrace.FailureSite("ip_policy",new TimeoutException("verification"))=="remote_task","IP verification timeout marked local");
+ Assert(DiagnosticTrace.FailureSite("connection",new Renci.SshNet.Common.SshConnectionException("private"))=="connection","SSH connection site lost");
+ var localMountTrace=new DiagnosticTrace("mount_apply",0);var localMountReport=localMountTrace.Finish(new DirectoryNotFoundException("local only"));
+ Assert(localMountReport.FailureSite=="directory_mount"&&localMountReport.ErrorKind=="directory_not_found","local mount report misclassified");
+ var errorStageTrace=new DiagnosticTrace("localization",0);errorStageTrace.Observe("任务请求已上传，正在启动远端操作…");
+ var errorStageReport=errorStageTrace.Finish(new InvalidOperationException("DNS 域名解析失败"));
+ Assert(errorStageReport.ErrorKind=="dns_failure"&&errorStageReport.Stage=="request_uploaded","error code leaked into stage");
+ var mountStageTrace=new DiagnosticTrace("mount_apply",0);mountStageTrace.Observe("任务请求已上传，正在启动远端操作…");mountStageTrace.Observe("开始应用目录挂载配置…");
+ var mountStageReport=mountStageTrace.Finish(new SafeCode.Core.RemoteOperationException("private","mount_failed"));
+ Assert(mountStageReport.Stage=="remote_started"&&mountStageReport.ErrorKind=="mount_failed","mount phase stage lost");
+ var startedOnly=new DiagnosticTrace("localization",0).Finish(new InvalidOperationException("DNS 域名解析失败"));
+ Assert(startedOnly.Stage=="started","error-only trace invented a phase");
+ var noRegress=new DiagnosticTrace("ip_policy",0);noRegress.Observe("任务请求已上传，正在启动远端操作…");noRegress.Observe("服务器正在独立应用设置，断线不会中止自动回退…");noRegress.Observe("任务请求已上传，正在启动远端操作…");
+ Assert(noRegress.Finish(new TimeoutException("verification")).Stage=="remote_started","later request regressed stage");
+ var ipPhase=new DiagnosticTrace("ip_policy",0);ipPhase.Observe("任务请求已上传，正在启动远端操作…");ipPhase.Observe("所需组件已安装，跳过重复下载。");ipPhase.Observe("服务器正在独立应用设置，断线不会中止自动回退…");
+ Assert(ipPhase.Finish(new TimeoutException("verification")).Stage=="remote_started","IP apply phase did not advance");
+ var packagePhase=new DiagnosticTrace("account",0);packagePhase.Observe("开始部署：account");packagePhase.Observe("所需组件已安装，跳过重复下载。");packagePhase.Observe("Unpacking package-fixture");
+ Assert(packagePhase.Finish(new InvalidOperationException("dpkg fixture")).Stage=="package_unpacking","package phase did not advance");
  var priorityHandler=new FakeHandler();var priorityDirectory=Path.Combine(directory,"priority");
  using(var priority=new ClientServices(priorityDirectory,priorityHandler)){
   await priority.SetConsentAsync(false,true);
+  priority.SetDiagnosticConsent(true);
   for(int i=0;i<25;i++)await priority.SendDiagnosticAsync(new DiagnosticTrace("chrome",priority.DiagnosticGeneration),null,default);
-  Assert(priorityHandler.Bodies.Count==2,"success reports consumed failure budget");
+  Assert(priorityHandler.Bodies.Count==1,"duplicate successful reports were sent");
+  for(int i=0;i<25;i++)await priority.SendDiagnosticAsync(priority.BeginDiagnostic("resource_stats",background:true)!,null,default);
+  Assert(priorityHandler.Bodies.Count==2,"poll blocked a separate feature or consumed success quota");
   var failure=new DiagnosticTrace("mount_apply",priority.DiagnosticGeneration);failure.Observe("任务请求已上传，正在启动远端操作…");
   string? issue=priority.RecordFailure(failure,new SafeCode.Core.RemoteOperationException("private","mount_failed"));
   await priority.SendDiagnosticAsync(failure,new SafeCode.Core.RemoteOperationException("private","mount_failed"),default);
@@ -87,6 +138,15 @@ try{
   Assert(issue==correlation.GetProperty("operationId").GetString(),"displayed issue lost");
   Assert(JsonElement.DeepEquals(feedbackPacket.RootElement.GetProperty("context").GetProperty("correlation"),correlation),"feedback not linked to diagnostic");
   Assert(feedbackPacket.RootElement.GetProperty("context").GetProperty("report").GetProperty("stage").GetString()=="request_uploaded","failure stage lost");
+  for(int i=0;i<25;i++){
+   var pollTrace=priority.BeginDiagnostic("gateway_status",background:true)!;
+   Assert(priority.RecordFailure(pollTrace,new IOException("private endpoint"))==null,"background error replaced foreground issue");
+   await priority.SendDiagnosticAsync(pollTrace,new IOException("private endpoint"),default);
+  }
+  Assert(priorityHandler.Bodies.Count==5,"duplicate poll failures exhausted reporting quota");
+  await priority.SendFeedbackAsync("后台轮询后保留用户操作",default);
+  using var afterBackground=JsonDocument.Parse(priorityHandler.Bodies[5]);
+  Assert(JsonElement.DeepEquals(afterBackground.RootElement.GetProperty("context").GetProperty("correlation"),correlation),"background failure replaced feedback correlation");
   string install=correlation.GetProperty("installationId").GetString()!;
   using(var reload=new ClientServices(priorityDirectory,new FakeHandler())){
    await reload.SetConsentAsync(false,true);var h=new DiagnosticTrace("chrome",reload.DiagnosticGeneration);
@@ -95,12 +155,35 @@ try{
    Assert(prefs.RootElement.GetProperty("diagnosticInstallationId").GetString()==install,"diagnostic installation not persisted");
   }
   priority.SetDiagnosticConsent(false);await priority.SendFeedbackAsync("关闭诊断后的反馈",default);
-  using var optedOut=JsonDocument.Parse(priorityHandler.Bodies[4]);Assert(optedOut.RootElement.GetProperty("context").ValueKind==JsonValueKind.Null,"optout feedback leaked correlation");
+  using var optedOut=JsonDocument.Parse(priorityHandler.Bodies[6]);Assert(optedOut.RootElement.GetProperty("context").ValueKind==JsonValueKind.Null,"optout feedback leaked correlation");
   using var cleared=JsonDocument.Parse(File.ReadAllText(Path.Combine(priorityDirectory,"usage-preferences.json")));Assert(cleared.RootElement.GetProperty("diagnosticInstallationId").GetString()=="","optout retained diagnostic identifier");
  }
  var migratedDirectory=Path.Combine(directory,"diagnostic-migration");Directory.CreateDirectory(migratedDirectory);
- File.WriteAllText(Path.Combine(migratedDirectory,"usage-preferences.json"),"{\"enabled\":false,\"confirmed\":true}");
- using(var migrated=new ClientServices(migratedDirectory,new FakeHandler()))Assert(!migrated.DiagnosticsAllowed&&!migrated.NoticeWasConfirmed&&JsonSerializer.Serialize(migrated.Preferences()).Contains("\"diagnosticsEnabled\":true"),"migration must retain selection and await updated notice");
+ File.WriteAllText(Path.Combine(migratedDirectory,"usage-preferences.json"),"{\"enabled\":true,\"diagnosticsEnabled\":true,\"confirmed\":true,\"diagnosticNoticeVersion\":2}");
+ var legacyHandler=new FakeHandler();
+ using(var migrated=new ClientServices(migratedDirectory,legacyHandler)){
+  await migrated.ConfirmConsentAsync();
+  await migrated.SendDiagnosticAsync(new DiagnosticTrace("chrome",migrated.DiagnosticGeneration),null,default);
+  Assert(migrated.NoticeWasConfirmed&&!migrated.DiagnosticsAllowed&&legacyHandler.Bodies.Count==0,"legacy defaults re-enabled reporting at startup");
+  migrated.SetDiagnosticConsent(true);
+ }
+ using(var optedIn=new ClientServices(migratedDirectory,new FakeHandler()))
+  Assert(optedIn.DiagnosticsAllowed,"explicit selection did not survive restart");
+ var previousScope=Path.Combine(directory,"previous-diagnostic-scope");Directory.CreateDirectory(previousScope);
+ File.WriteAllText(Path.Combine(previousScope,"usage-preferences.json"),"{\"enabled\":true,\"diagnosticsEnabled\":true,\"confirmed\":true,\"diagnosticNoticeVersion\":2,\"optInVersion\":1,\"diagnosticInstallationId\":\""+Guid.NewGuid()+"\"}");
+ var scopeHandler=new FakeHandler();
+ using(var expanded=new ClientServices(previousScope,scopeHandler)){
+  Assert(expanded.BeginDiagnostic("gateway_enable")==null,"old installation opt-in authorized wider scope");
+  await expanded.ConfirmConsentAsync();
+  Assert(scopeHandler.Bodies.Count==1,"scope migration lost separately authorized launch statistics");
+  using var launch=JsonDocument.Parse(scopeHandler.Bodies[0]);
+  Assert(launch.RootElement.GetProperty("eventType").GetString()=="launch","unexpected initial report after scope migration");
+  expanded.SetDiagnosticConsent(true);
+  await expanded.SendDiagnosticAsync(expanded.BeginDiagnostic("gateway_enable")!,null,default);
+  Assert(scopeHandler.Bodies.Count==2,"new diagnostic opt-in not applied");
+  using var newDiagnostic=JsonDocument.Parse(scopeHandler.Bodies[1]);
+  Assert(newDiagnostic.RootElement.GetProperty("report").GetProperty("operation").GetString()=="gateway_enable","unexpected new diagnostic operation");
+ }
  var saveFailureDirectory=Path.Combine(directory,"diagnostic-save-failure");
  using(var saveFailure=new ClientServices(saveFailureDirectory,new FakeHandler()))
  {

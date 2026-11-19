@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/SafeCode.Core/IntegrationUsage.cs" Link="IntegrationUsage.cs" />
+    <Compile Include="../../src/SafeCode.Core/IntegrationTray.cs" Link="IntegrationTray.cs" />
+    <Compile Include="../../src/SafeCode.Core/CodexUsageSource.cs" Link="CodexUsageSource.cs" />
+    <Compile Include="../../src/SafeCode.Core/ClaudeUsageSource.cs" Link="ClaudeUsageSource.cs" />
+  </ItemGroup>
+</Project>

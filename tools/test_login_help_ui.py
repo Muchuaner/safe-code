@@ -21,6 +21,8 @@ with sync_playwright() as p:
     case 'notice.state':result={accepted:true};break;
     case 'connect':result={ready:true,server:window.server};break;
     case 'account.draft.get':result=window.savedDraft;break;
+    case 'deployment.settings.get':result={accountSaved:window.accountUsed,localeRegion:window.localeRegion||null};break;
+    case 'deployment.locale.save':window.localeRegion=message.args.region;result={accountSaved:window.accountUsed,localeRegion:window.localeRegion};break;
     case 'account.change.status':result={requiresConfirmation:window.accountUsed};break;
     case 'account.draft.save':window.savedDraft=message.args;window.accountUsed=true;result=true;break;
     case 'deploy':window.server.statuses.account=true;window.savedDraft=null;result=window.server;break;
@@ -49,6 +51,9 @@ with sync_playwright() as p:
  page.get_by_role('button',name='自定义工作用户和机器名称').click();page.locator('#account-settings-form [type=submit]').click()
  page.wait_for_function("window.calls.filter(x=>x.op==='account.draft.save').length===1");assert not page.locator('#app-message-dialog').is_visible()
  assert page.evaluate("window.calls.filter(x=>x.op==='deploy').length")==0
+ assert page.locator('#deploy-all').is_disabled()
+ page.get_by_role('button',name='自定义本土化').click();page.locator('#locale-region').select_option('jp')
+ page.locator('#localization-form [type=submit]').click();page.wait_for_function("!document.querySelector('#deploy-all').disabled")
  page.get_by_role('button',name='自定义工作用户和机器名称').click();page.locator('#custom-password').fill('fixture-new-password');page.locator('#account-settings-form [type=submit]').click()
  page.get_by_role('button',name='我不改了',exact=True).wait_for();page.screenshot(path=str(evidence/'account-warning.png'));page.get_by_role('button',name='我不改了',exact=True).click()
  page.wait_for_function("!document.querySelector('#account-settings-form [type=submit]').disabled")
