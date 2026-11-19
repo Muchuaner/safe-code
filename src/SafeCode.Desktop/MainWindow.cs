@@ -68,6 +68,7 @@ public sealed class MainWindow : Window
         }
         if(arguments.Length>=3&&arguments[0]=="--updates-acceptance"){dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Updates-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;}
         services=new ClientServices(dataDirectory);preferences=new ClientPreferences(dataDirectory);
+        clients.ResizePreferences=new RdpResizePreferences(dataDirectory);
         this.arguments = arguments; Title = "Safe Code"; Width = 360; Height = 536;
         MinWidth = 360; MinHeight = 500; WindowStartupLocation = WindowStartupLocation.CenterScreen;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResize; Background = Brushes.White;

@@ -9,7 +9,7 @@ internal sealed record AccountDraft(string Username,string Hostname,string Passw
 public sealed record DesktopResolution(int Width=1280,int Height=800);
 internal sealed class ClientPreferences(string directory)
 {
-    internal static readonly DesktopResolution[] Resolutions=[new(1024,768),new(1280,800),new(1366,768),new(1600,900),new(1920,1080)];
+    internal static readonly DesktopResolution[] Resolutions=[new(1024,768),new(1280,800),new(1366,768),new(1600,900),new(1920,1080),new(2560,1440),new(2560,1600)];
     private string DraftPath(SshSession session)=>Path.Combine(directory,"account-drafts",Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(session.Host+":"+session.Port+":"+session.Fingerprint)))+(OperatingSystem.IsMacOS()?".aes":".dpapi"));
     public bool RequiresAccountConfirmation(SshSession session)=>session.Server?.Statuses.GetValueOrDefault("account")==true||File.Exists(DraftPath(session)+".configured");
     public AccountDraft? ReadDraft(SshSession session)

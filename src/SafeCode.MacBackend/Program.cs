@@ -21,6 +21,7 @@ internal sealed class MacBackend : IDisposable
     private readonly ClientServices services;
     private readonly ClientPreferences preferences;
     private readonly MacClients clients;
+    private readonly RdpResizePreferences desktopDisplay;
     private readonly SemaphoreSlim writer=new(1),mutation=new(1);
     private readonly CancellationTokenSource lifetime=new();
     private readonly ConcurrentDictionary<string,DiagnosticTrace> traces=new();
@@ -32,7 +33,7 @@ internal sealed class MacBackend : IDisposable
     private DownloadedInstaller? update;
     private int connectionPending,activeMutations,serial;
     private string step="";
-    public MacBackend(string directory,bool offline){this.directory=directory;this.offline=offline;services=new(directory);preferences=new(directory);clients=new(directory);hostControl=new(directory);}
+    public MacBackend(string directory,bool offline){this.directory=directory;this.offline=offline;services=new(directory);preferences=new(directory);clients=new(directory);desktopDisplay=new(directory);hostControl=new(directory);}
     public async Task RunAsync()
     {
         _=PublishStatusAsync();await EmitAsync(new{type="ready"});
@@ -50,7 +51,7 @@ internal sealed class MacBackend : IDisposable
         try
         {
             using var doc=JsonDocument.Parse(line);var root=doc.RootElement;id=root.GetProperty("id").GetString()??"";operation=root.GetProperty("op").GetString()??"";var args=root.GetProperty("args");
-            bool modifies=operation is "deploy" or "job.resume" or "mount.apply" or "mount.install" or "cloud.install" or "cloud.expose" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "app.shutdown" or "connection.reauthenticate";
+            bool modifies=operation is "deploy" or "job.resume" or "mount.apply" or "mount.install" or "cloud.install" or "cloud.expose" or "ip.apply" or "terminal" or "desktop" or "desktop.resolution.save" or "host.enable" or "host.disable" or "app.shutdown" or "connection.reauthenticate";
             if(modifies){if(!await mutation.WaitAsync(0))throw new InvalidOperationException("已有任务正在执行，请等待完成。");gate=true;Interlocked.Increment(ref activeMutations);}
             var diagnosticOperation=DiagnosticTrace.OperationFor(operation,args);
             if(diagnosticOperation!=null&&services.DiagnosticsAllowed){trace=new(diagnosticOperation,services.DiagnosticGeneration);traces[diagnosticOperation]=trace;}
@@ -159,9 +160,22 @@ internal sealed class MacBackend : IDisposable
             case "account.change.status":return new{requiresConfirmation=preferences.RequiresAccountConfirmation(RequireSession())};
             case "account.draft.save":preferences.SaveDraft(RequireSession(),new(Read("username"),Read("hostname"),Read("password")));return true;
             case "account":return await RequireSession().RequestAsync<AccountInfo>("account_info",null,ct);
-            case "desktop.resolution.get":return preferences.ReadResolution();
-            case "desktop.resolution.save":preferences.SaveResolution(new(args.GetProperty("width").GetInt32(),args.GetProperty("height").GetInt32()));return new{windows=0,dynamicUpdated=0,deferred=1};
-            case "desktop":await EmitAsync(new{type="openFile",path=await clients.DesktopAsync(RequireSession(),preferences.ReadResolution(),ct)});return true;
+            case "desktop.resolution.get":
+                var resolution=preferences.ReadResolution();
+                return new{resolution.Width,resolution.Height,displayMode=desktopDisplay.Read().ToString(),fullscreen=desktopDisplay.ReadFullscreen()};
+            case "desktop.resolution.save":
+                var mode=Read("displayMode",desktopDisplay.Read().ToString()) switch {
+                    "Original"=>RdpResizeMode.Original,"Scale"=>RdpResizeMode.Scale,"Dynamic"=>RdpResizeMode.Dynamic,
+                    _=>throw new ArgumentException("请选择支持的远程桌面显示模式。")
+                };
+                preferences.SaveResolution(new(args.GetProperty("width").GetInt32(),args.GetProperty("height").GetInt32()));
+                desktopDisplay.Save(mode);
+                if(args.TryGetProperty("fullscreen",out _)) desktopDisplay.SaveFullscreen(Flag("fullscreen"));
+                return new{windows=0,dynamicUpdated=0,deferred=1};
+            case "desktop":
+                var path=await clients.DesktopAsync(RequireSession(),preferences.ReadResolution(),desktopDisplay,ct);
+                if(path!=null)await EmitAsync(new{type="openFile",path});
+                return true;
             case "terminal":step="ssh";await clients.OpenTerminalAsync(RequireSession(),ct);return RequireSession().Server;
             case "cloud.install":step="cloud";return await RequireSession().RequestAsync<ServerInfo>("cloud",null,ct);
             case "cloud.open":

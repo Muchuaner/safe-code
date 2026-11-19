@@ -30,6 +30,11 @@ macOS 版提供 Apple Silicon 与 Intel 两种安装包，安装、构建与验�
 | ⬆️ | **在线更新** | 标题与底部醒目提示新版本，校验安装包后由你确认安装 |
 | 🧰 | **故障诊断** | 默认勾选、可关闭，仅上报固定步骤与错误类型，不上传原始日志、凭据或路径 |
 
+## 贡献者
+
+- [yziyan123](https://github.com/yziyan123) 提供 Windows 远程桌面动态分辨率、全屏和固定分辨率下的等比缩放方案，见 [#4](https://github.com/Muchuaner/safe-code/pull/4) 和 [#8](https://github.com/Muchuaner/safe-code/pull/8)。
+- [SuperGh2233](https://github.com/SuperGh2233) 提供 macOS 远程桌面的 SSH 隧道复用、稳定入口、RDP 探活和客户端检测方案，见 [#5](https://github.com/Muchuaner/safe-code/pull/5)。
+
 ---
 
 <p align="center">

@@ -23,11 +23,98 @@ internal sealed class MacClients(string directory)
         string literal="\""+command.Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r","\\r").Replace("\n","\\n")+"\"";
         await Run("/usr/bin/osascript",["-e","tell application \"Terminal\"","-e","activate","-e","do script "+literal,"-e","end tell"],ct);
     }
-    public async Task<string> DesktopAsync(SshSession session,DesktopResolution resolution,CancellationToken ct)
+    public async Task<string?> DesktopAsync(SshSession session,DesktopResolution resolution,
+        RdpResizePreferences display,CancellationToken ct)
     {
         if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
-        var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);uint port=await session.ForwardAsync(3389,ct);
-        string folder=Path.Combine(directory,"Desktops");Directory.CreateDirectory(folder);string path=Path.Combine(folder,"Safe Code-"+port+".rdp");
-        File.WriteAllText(path,"full address:s:127.0.0.1:"+port+"\nusername:s:"+account.Username+"\nprompt for credentials:i:1\nscreen mode id:i:1\ndesktopwidth:i:"+resolution.Width+"\ndesktopheight:i:"+resolution.Height+"\nauthentication level:i:2\nredirectclipboard:i:1\n");MacFiles.Protect(path);return path;
+        var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
+        string? freeRdp=FindFreeRdp();
+        var endpoint=await session.PrepareRemoteDesktopAsync(account.Username,freeRdp!=null,ct);
+        if(freeRdp!=null)
+        {
+            await OpenFreeRdpAsync(freeRdp,endpoint,account,resolution,display.Read(),display.ReadFullscreen(),ct);
+            return null;
+        }
+
+        string folder=Path.Combine(directory,"Desktops");
+        Directory.CreateDirectory(folder);
+        string path=Path.Combine(folder,"Safe Code-"+endpoint.ProfileId+".rdp");
+        string temp=path+"."+Guid.NewGuid().ToString("N")+".tmp";
+        try
+        {
+            var options=new FileStreamOptions{Mode=FileMode.CreateNew,Access=FileAccess.Write,Share=FileShare.None};
+            if(!OperatingSystem.IsWindows()) options.UnixCreateMode=UnixFileMode.UserRead|UnixFileMode.UserWrite;
+            using(var writer=new StreamWriter(temp,options))
+            {
+                writer.WriteLine("full address:s:127.0.0.1:"+endpoint.Port);
+                writer.WriteLine("username:s:"+account.Username);
+                writer.WriteLine("prompt for credentials:i:1");
+                writer.WriteLine("screen mode id:i:"+(display.ReadFullscreen()?2:1));
+                var mode=display.Read();
+                writer.WriteLine("dynamic resolution:i:"+(mode==RdpResizeMode.Dynamic?1:0));
+                writer.WriteLine("smart sizing:i:"+(mode==RdpResizeMode.Scale?1:0));
+                writer.WriteLine("desktopwidth:i:"+resolution.Width);
+                writer.WriteLine("desktopheight:i:"+resolution.Height);
+                writer.WriteLine("authentication level:i:2");
+                writer.WriteLine("redirectclipboard:i:1");
+                writer.WriteLine("bandwidthautodetect:i:1");
+                writer.WriteLine("networkautodetect:i:1");
+            }
+            File.Move(temp,path,true);
+            return path;
+        }
+        finally{File.Delete(temp);}
+    }
+
+    private static string? FindFreeRdp()
+    {
+        string bundled=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","RDP","sdl-freerdp"));
+        return new[]{bundled,"/opt/homebrew/bin/sdl-freerdp","/usr/local/bin/sdl-freerdp"}.FirstOrDefault(File.Exists);
+    }
+
+    internal static string[] FreeRdpArguments(RemoteDesktopConnection endpoint, AccountInfo account,
+        DesktopResolution resolution, RdpResizeMode mode, bool fullscreen)
+    {
+        if (endpoint.CertificateFingerprint is not { Length: 64 })
+            throw new InvalidOperationException("缺少经 SSH 获取的 RDP 证书指纹。");
+        if (account.Username.IndexOfAny(['\r','\n','\0'])>=0 || account.Password.IndexOfAny(['\r','\n','\0'])>=0)
+            throw new InvalidOperationException("远程桌面凭据包含不支持的换行或空字符。");
+        var arguments=new List<string> {
+            $"/v:127.0.0.1:{endpoint.Port}", "/u:"+account.Username, "/p:"+account.Password,
+            $"/size:{resolution.Width}x{resolution.Height}", "/sec:tls",
+            "/cert:deny,fingerprint:sha256:"+endpoint.CertificateFingerprint,
+            "+clipboard", "/log-level:OFF"
+        };
+        if (fullscreen) arguments.Add("/f");
+        if (mode==RdpResizeMode.Scale) arguments.Add("/smart-sizing");
+        if (mode==RdpResizeMode.Dynamic) arguments.Add("/dynamic-resolution");
+        return arguments.ToArray();
+    }
+
+    private static async Task OpenFreeRdpAsync(string path, RemoteDesktopConnection endpoint, AccountInfo account,
+        DesktopResolution resolution, RdpResizeMode mode, bool fullscreen, CancellationToken ct)
+    {
+        string[] arguments=FreeRdpArguments(endpoint,account,resolution,mode,fullscreen);
+        var start=new ProcessStartInfo(path) {
+            UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true
+        };
+        start.ArgumentList.Add("/args-from:stdin");
+        using var process=Process.Start(start)??throw new IOException("无法启动 FreeRDP。");
+        process.OutputDataReceived+=(_,_)=>{};
+        process.ErrorDataReceived+=(_,_)=>{};
+        process.BeginOutputReadLine();process.BeginErrorReadLine();
+        try
+        {
+            foreach(string argument in arguments)
+                await process.StandardInput.WriteLineAsync(argument.AsMemory(),ct);
+            process.StandardInput.Close();
+            await Task.Delay(350,ct);
+            if(process.HasExited)throw new IOException("FreeRDP 未能打开桌面。请确认已安装支持 SDL 的 FreeRDP 3，并检查 xrdp 的 TLS 和登录设置。");
+        }
+        catch
+        {
+            if (!process.HasExited) process.Kill();
+            throw;
+        }
     }
 }
