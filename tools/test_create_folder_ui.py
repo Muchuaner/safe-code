@@ -19,7 +19,7 @@ with sync_playwright() as p:
       queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
     }}};
     ''')
-    page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady')
+    page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady')
     page.evaluate("showScreen('workspace')");page.evaluate("document.querySelector('#mount-settings').onclick()")
     page.locator('[data-path=remote]').locator('..').get_by_role('button',name='选择目录').click()
     page.wait_for_function("!document.querySelector('#folder-confirm').disabled")

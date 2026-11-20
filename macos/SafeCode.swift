@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var busy = false, guarding = false, quitting = false, ready = false
     private var directory = URL(fileURLWithPath:NSHomeDirectory()).appendingPathComponent("Library/Application Support/Safe Code", isDirectory:true)
     private var resources: URL { Bundle.main.resourceURL! }
-    private var index: URL { resources.appendingPathComponent("Web/index.html") }
+    private var index: URL { resources.appendingPathComponent("Web/web/index.html") }
     private var smokeOutput: URL?
     private var servicesWindow: NSWindow?
     private var servicesWeb: WKWebView?
@@ -78,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var gatewayContext: String?
     private var gatewayMutationPending = false
     private var gatewayOpening = false
-    private var gatewayPage: URL { resources.appendingPathComponent("Web/gateway.html") }
+    private var gatewayPage: URL { resources.appendingPathComponent("Web/web/gateway.html") }
     private struct DialogSpec {
         let id: String
         let title: String

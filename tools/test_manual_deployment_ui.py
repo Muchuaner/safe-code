@@ -84,7 +84,7 @@ def test_manual_deployment():
 
                 page.route('**/*', route)
                 page.add_init_script(f'window.__safeCodePlatform = "{platform}";' + BRIDGE)
-                page.goto('https://safe-code.local/index.html')
+                page.goto('https://safe-code.local/web/index.html')
                 page.wait_for_function('window.safeCodeNativeReady')
 
                 def connect(ip):
