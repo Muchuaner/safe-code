@@ -807,29 +807,45 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       finally{openingClients.delete(button);onSettled();}
     }
     const keyDialog=$('#desktop-key-dialog'), keyInput=$('#desktop-key-input'), keyProgress=$('#desktop-key-progress');
+    const keyEnable=$('#desktop-key-enable'), keyReplace=$('#desktop-key-replace'), keyResume=$('#desktop-key-resume');
+    let keyReplacing=false;
+    function describeKey(op,args){
+      if(keyState.error)return (keyState.configured?'已保存 Key，暂未恢复接入。\n':'')+keyState.error;
+      if(keyState.running)return args?.replace||args?.useSaved?'已启用。\n请完全退出并重新打开 Claude Desktop 以应用更改。':
+        '已启用。\n首次接入请完全退出并重新打开 Claude Desktop。';
+      if(keyState.configured)return '已保存 Key，当前 Claude 配置未启用此接入。';
+      return op==='disable'?'已停用。\n请重新打开 Claude Desktop 以应用更改。':'尚未启用。';
+    }
     function renderKey(){
       const configured=keyState.configured;
-      $('#desktop-key-field').hidden=configured;
-      keyInput.disabled=keyBusy||configured;
-      $('#desktop-key-enable').hidden=configured;
-      $('#desktop-key-enable').disabled=keyBusy;
-      $('#desktop-key-disable').hidden=!configured;
+      const editing=!configured||keyReplacing;
+      $('#desktop-key-field').hidden=!editing;
+      keyInput.disabled=keyBusy||!editing;
+      keyEnable.hidden=!editing;
+      keyEnable.disabled=keyBusy;
+      keyEnable.textContent=keyReplacing?'验证并更换':'验证并启用';
+      keyReplace.hidden=!configured;
+      keyReplace.disabled=keyBusy;
+      keyReplace.textContent=keyReplacing?'取消更换':'更换 Key';
+      keyResume.hidden=!configured||keyState.running||keyReplacing;
+      keyResume.disabled=keyBusy;
+      $('#desktop-key-disable').hidden=!configured||keyReplacing;
       $('#desktop-key-disable').disabled=keyBusy;
-      $('#desktop-key-open').hidden=!keyState.running;
-      setLaunchAvailability('desktop-key-open',keyState.running&&!keyBusy);
+      $('#desktop-key-open').hidden=!keyState.running||keyReplacing;
+      setLaunchAvailability('desktop-key-open',keyState.running&&!keyBusy&&!keyReplacing);
       $('#desktop-key-close').disabled=keyBusy;
       renderClaudeDesktop();
     }
     async function keyAction(op,args={}){
       if(keyBusy)return;
       keyBusy=true;
-      keyProgress.textContent=op==='enable'?'正在验证 Key 并获取模型…':'正在读取接入状态…';
+      if(op==='enable')keyProgress.textContent=args.useSaved?'正在重新启用已保存的 Key…':'正在验证 Key 并获取模型…';
+      else keyProgress.textContent=op==='disable'?'正在停用接入…':'正在读取接入状态…';
       renderKey();
       try{
         keyState=await native('desktopKey.'+op,args);
-        keyProgress.textContent=keyState.error?((keyState.configured?'已保存 Key，暂未恢复接入。\n':'')+keyState.error):
-          keyState.running?'已启用。\n首次接入请完全退出并重新打开 Claude Desktop。':
-          keyState.configured?'已保存 Key，当前 Claude 配置未启用此接入。':op==='disable'?'已停用。\n请重新打开 Claude Desktop 以应用更改。':'尚未启用。';
+        if(op==='enable'&&keyState.running)keyReplacing=false;
+        keyProgress.textContent=describeKey(op,args);
       }catch(error){
         keyProgress.textContent=error.message;
       }finally{keyBusy=false;renderKey();}
@@ -841,13 +857,25 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#desktop-key-form').onsubmit=event=>{
       event.preventDefault();
       const key=keyInput.value.trim();
-      if(!keyBusy&&key){keyInput.value='';keyAction('enable',{key});}
+      if(!keyBusy&&!keyInput.disabled&&key){
+        keyInput.value='';
+        keyAction('enable',keyReplacing?{key,replace:true}:{key});
+      }
     };
+    keyReplace.onclick=()=>{
+      if(keyBusy)return;
+      keyReplacing=!keyReplacing;
+      keyInput.value='';
+      keyProgress.textContent=keyReplacing?'粘贴新的接入 Key，验证通过后切换。':describeKey();
+      renderKey();
+      if(keyReplacing)keyInput.focus();
+    };
+    keyResume.onclick=()=>keyAction('enable',{useSaved:true});
     $('#desktop-key-disable').onclick=()=>keyAction('disable');
     $('#desktop-key-open').onclick=()=>openLocalClient($('#desktop-key-open'),'claudeDesktop.open',renderKey,keyProgress);
     $('#desktop-key-close').onclick=()=>keyDialog.close();
     keyDialog.addEventListener('cancel',event=>{if(keyBusy)event.preventDefault();});
-    keyDialog.addEventListener('close',()=>{keyInput.value='';});
+    keyDialog.addEventListener('close',()=>{keyInput.value='';keyReplacing=false;});
     $('#claude-desktop-launch').onclick=()=>openLocalClient($('#claude-desktop-launch'),'claudeDesktop.open',renderClaudeDesktop);
     $('#codex-launch').onclick=()=>openLocalClient($('#codex-launch'),'codex.open',renderClaudeBridge);
     $('#claude-desktop-open').onclick=()=>openLocalClient($('#claude-desktop-open'),'claudeDesktop.open',renderClaudeDesktop,$('#claude-desktop-progress'));

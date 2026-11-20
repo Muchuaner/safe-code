@@ -294,7 +294,8 @@
 #desktop-key-form{padding:18px 22px}
 #desktop-key-form .config-description{margin:0 0 12px}
 #desktop-key-progress{min-height:1.5em;margin:0;line-height:1.55;white-space:pre-line;overflow-wrap:anywhere}
-#desktop-key-form .config-footer{padding-top:11px;margin-top:12px}
+#desktop-key-form .config-footer{padding-top:11px;margin-top:12px;justify-content:flex-start;gap:10px 14px;flex-wrap:wrap}
+#desktop-key-replace:not([hidden])~.primary{margin-left:auto}
 #desktop-key-form #desktop-key-open{height:auto;min-height:36px;padding:5px 8px;line-height:1.2;text-align:center;white-space:nowrap}
 #desktop-key-open>span{font:inherit}
 #desktop-key-dialog [hidden],#desktop-key-login[hidden],#desktop-key-settings[hidden]{display:none!important}
