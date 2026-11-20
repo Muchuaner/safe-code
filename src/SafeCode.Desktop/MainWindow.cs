@@ -246,7 +246,7 @@ public sealed class MainWindow : Window
             {
                 if(e.IsSuccess&&IsAcceptance){if(arguments[0]=="--updates-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunUpdateAcceptance()");else if(arguments[0]=="--ip-acceptance"){using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunIpAcceptance("+cfg.RootElement.GetRawText()+")");}else if(arguments[0]=="--maintenance-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunMaintenanceAcceptance()");else if(arguments[0]=="--connection-acceptance"){using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunConnectionAcceptance("+cfg.RootElement.GetRawText()+")");}else if(arguments[0]=="--services-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunServicesAcceptance()");else await RunAcceptanceAsync(arguments[1],arguments[2]);}
             };
-            browser.Source = new Uri("https://safe-code.local/index.html");
+            browser.Source = new Uri("https://safe-code.local/web/index.html");
         }
         catch (Exception error)
         {

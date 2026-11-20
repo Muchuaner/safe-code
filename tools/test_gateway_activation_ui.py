@@ -6,7 +6,7 @@ from playwright.sync_api import expect, sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GATEWAY_URL = 'https://safe-code.local/gateway.html'
+GATEWAY_URL = 'https://safe-code.local/web/gateway.html'
 CREATOR_URL = 'https://space.bilibili.com/49985881'
 
 NATIVE_FIXTURE = """
@@ -68,9 +68,9 @@ def test_gateway_activation():
                 url = route.request.url
                 if url == CREATOR_URL:
                     route.fulfill(status=200, body='External link fixture')
-                elif url in {f'https://safe-code.local/{name}' for name in
+                elif url in {f'https://safe-code.local/web/{name}' for name in
                              ('gateway.html', 'gateway.css', 'gateway.js', 'gateway-charts.js', 'gateway-status.js')}:
-                    route.fulfill(path=str(ROOT / url.rsplit('/', 1)[-1]))
+                    route.fulfill(path=str(ROOT / 'web' / url.rsplit('/', 1)[-1]))
                 else:
                     route.abort()
 

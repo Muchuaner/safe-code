@@ -56,7 +56,7 @@ with sync_playwright() as p:
         if f.is_file():r.fulfill(path=str(f))
         else:r.fulfill(status=404,body='')
     page.route('**/*',route)
-    page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady')
+    page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady')
     page.evaluate("showScreen('login')")
     page.evaluate("window.keyStatusFailure={error:'暂时无法读取接入状态'}")
     page.locator('#desktop-key-login').click()

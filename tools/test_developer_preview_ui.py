@@ -14,7 +14,7 @@ with sync_playwright() as p:
         if file.is_file():request.fulfill(path=str(file))
         else:request.fulfill(status=404,body='')
     page.route('**/*',route)
-    page.goto('https://safe-code.local/index.html')
+    page.goto('https://safe-code.local/web/index.html')
     assert page.locator('#notice-screen').is_visible()
     assert not page.locator('[id*="guide-"]').count()
     page.add_init_script('''

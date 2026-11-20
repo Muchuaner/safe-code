@@ -14,8 +14,9 @@ subprocess.run([a.dotnet,'publish',str(root/'src/SafeCode.Desktop/SafeCode.Deskt
 shutil.move(output/'SafeCode.Desktop.exe',output/'SafeCode.exe')
 for path in output.rglob('*.pdb'):path.unlink()
 # 浏览器概念稿的独立模拟客户端不随真实 Windows 客户端打包。
-(output/'Web'/'client-preview.html').unlink(missing_ok=True)
-for name in ['LICENSE','THIRD_PARTY_NOTICES.md']:shutil.copy2(root/name,output/name)
+(output/'Web'/'web'/'client-preview.html').unlink(missing_ok=True)
+shutil.copy2(root/'LICENSE',output/'LICENSE')
+shutil.copy2(root/'third_party'/'THIRD_PARTY_NOTICES.md',output/'THIRD_PARTY_NOTICES.md')
 shutil.copy2(root/'docs/WINDOWS.md',output/'使用说明.txt')
 legal=output/'licenses';legal.mkdir()
 assets=json.loads((root/'src/SafeCode.Desktop/obj/project.assets.json').read_text())

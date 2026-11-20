@@ -31,7 +31,7 @@ with sync_playwright() as p:
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result,error}));
         }}};
         ''')
-        page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady')
+        page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady')
         if remembered and notice:
             page.wait_for_function("calls.includes('connect')")
             if failure:

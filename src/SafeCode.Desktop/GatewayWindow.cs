@@ -9,7 +9,7 @@ namespace SafeCode.Desktop;
 
 internal sealed class GatewayWindow : Window
 {
-    private const string Page = "https://safe-code.local/gateway.html";
+    private const string Page = "https://safe-code.local/web/gateway.html";
     private const string CreatorChannel = "https://space.bilibili.com/49985881";
     private readonly WebView2 browser = new();
     private readonly Func<JsonElement, Task<JsonElement>> manage;

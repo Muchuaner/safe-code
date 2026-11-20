@@ -18,7 +18,7 @@ with sync_playwright() as p:
    queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
   }}};
  ''')
- page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady')
+ page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady')
  page.evaluate("showScreen('workspace');switchMode('maintenance');document.querySelector('#host-manage').onclick()")
  assert page.locator('#host-dialog').is_visible();assert not page.locator('#host-risk').is_checked();assert page.locator('#host-enable').is_disabled()
  assert '删除' in page.locator('.host-permission-note').inner_text();assert '管理员' in page.locator('.host-permission-note').inner_text()

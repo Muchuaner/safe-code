@@ -4,7 +4,7 @@
   <PropertyGroup><ApplicationIcon>../../assets/icons/safe-code-shortcut.ico</ApplicationIcon></PropertyGroup>
   <ItemGroup><Resource Include="../../assets/icons/safe-code-shortcut.ico" Link="Icons/safe-code-shortcut.ico" /></ItemGroup>
   <ItemGroup><PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" /></ItemGroup>
-  <ItemGroup><Content Include="../../index.html;../../styles.css;../../app.js;../../client-preview.html;../../native.js;../../qrcode.min.js;../../gateway.html;../../gateway.css;../../gateway.js;../../gateway-charts.js;../../gateway-status.js" Link="Web/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><Content Include="../../web/index.html;../../web/styles.css;../../web/app.js;../../web/client-preview.html;../../web/native.js;../../web/qrcode.min.js;../../web/gateway.html;../../web/gateway.css;../../web/gateway.js;../../web/gateway-charts.js;../../web/gateway-status.js" Link="Web/web/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><Content Include="../../assets/safe-code-logo.png" Link="Web/assets/safe-code-logo.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><Content Include="../../assets/server-login-tutorial.png" Link="Web/assets/server-login-tutorial.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><Content Include="../../assets/workspace-mascot.png" Link="Web/assets/workspace-mascot.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
