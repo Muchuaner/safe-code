@@ -5,7 +5,7 @@ internal sealed record ReleaseNumber(System.Version Base,bool Beta,int Revision)
 {
     public static ReleaseNumber? Parse(string value)
     {
-        var match=Regex.Match(value,@"^v?(?<beta>Beta-)?(?<major>\d{1,4})\.(?<minor>\d{1,4})\.(?<patch>\d{1,4})(?:\.(?<revision>\d{1,4}))?$");
+        var match=Regex.Match(value,@"^v?(?<beta>Beta-)?(?<major>[0-9]{1,4})\.(?<minor>[0-9]{1,4})\.(?<patch>[0-9]{1,4})(?:\.(?<revision>[0-9]{1,4}))?\z");
         if(!match.Success)return null;bool beta=match.Groups["beta"].Success;
         if(!beta&&match.Groups["revision"].Success)return null;
         return new(new(int.Parse(match.Groups["major"].Value),int.Parse(match.Groups["minor"].Value),int.Parse(match.Groups["patch"].Value)),beta,match.Groups["revision"].Success?int.Parse(match.Groups["revision"].Value):0);
