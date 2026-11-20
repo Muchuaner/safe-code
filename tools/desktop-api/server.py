@@ -29,7 +29,6 @@ PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中确认「保证自用」并启用公网。'
-DEVELOPMENT_ORIGIN = 'https://frp-egg.com:45143'
 # A shared promotional code, checked only at the gateway.
 ACTIVATION_CODE_SHA256 = bytes.fromhex('89debb851e3fc69c8e163a3b6462a3493e93d38ae8cf0132e419bd9e0b32d2b9')
 # Shared with DesktopKeyAccess. These bundled keys deter casual inspection only.
@@ -63,9 +62,7 @@ class PublicManager(Manager):
 
     def count_usage(self, message, turn_id='unbound'):
         with self.lock:
-            if turn_id.startswith('classifier_'):
-                self.accounting.model = '测试判定器'
-            elif isinstance(message.get('model'), str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}(?:\[1m\])?', message['model']):
+            if isinstance(message.get('model'), str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}(?:\[1m\])?', message['model']):
                 self.accounting.model = message['model']
             self.capture(turn_id)
             super().count_usage(message,turn_id)
@@ -340,8 +337,6 @@ class PublicServer(ThreadingHTTPServer):
                 self.queue.resize(concurrency)
             return {'concurrency': concurrency, 'concurrency_text': str(concurrency)}
         if operation == 'set_origin':
-            if self.development_channel:
-                raise ValueError('214 开发者渠道使用固定的 FRP 公网入口。')
             origin = validate_origin(request.get('origin'))
             atomic_write(self.root/PUBLIC_ORIGIN, origin)
             return self.manage({'action': 'settings'})
@@ -353,7 +348,6 @@ class PublicServer(ThreadingHTTPServer):
                 public_ip = bind
             active, waiting, _ = self.queue.snapshot()
             return {'bind': bind, 'port': port, 'publicIp': public_ip, 'origin': self.public_origin,
-                    'developmentChannel': self.development_channel,
                     'busy': bool(active or waiting)}
         if operation=='list':
             active, waiters, concurrency = self.queue.snapshot()
@@ -414,21 +408,10 @@ class PublicServer(ThreadingHTTPServer):
 
     @property
     def public_origin(self):
-        if self.development_channel:
-            return DEVELOPMENT_ORIGIN
         try:
             return (self.root/PUBLIC_ORIGIN).read_text()
         except FileNotFoundError:
             return self.config.get('publicOrigin', '')
-
-    @property
-    def development_channel(self):
-        return is_development_gateway(self.server_address[0])
-
-
-def is_development_gateway(bind):
-    return bind == '192.168.50.66' and socket.gethostname() == 'tom666'
-
 
 def configure_port(root, expected_port, port, *, check_available=True):
     if not 1024 <= port <= 65535:
@@ -500,9 +483,6 @@ def valid_activation_code(code):
 def issue(root, origin, output, activation_code=None):
     if not (root/PUBLIC_ENABLED).is_file():
         raise ValueError(PUBLIC_DISABLED_MESSAGE)
-    config_path = root/'config.json'
-    if config_path.is_file() and is_development_gateway(json.loads(config_path.read_text()).get('bind')):
-        origin = DEVELOPMENT_ORIGIN
     ticket,digest=make_key(root,origin)
     with output.open('x') as file:
         try:

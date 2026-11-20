@@ -2,7 +2,7 @@
 # Install from a directory containing server.py, management.py, pricing.py, desktop_gateway.py and codex_bridge.zip.
 set -euo pipefail
 user=${1:?usage: install.sh linux-user bind-ip [port] [public-ip]}
-bind=${2:?specify the address reachable by frpc}
+bind=${2:?specify the listener IP address}
 port=${3:-45143}
 public_ip=${4:-}
 home=$(getent passwd "$user" | cut -d: -f6)

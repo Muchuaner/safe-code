@@ -23,7 +23,7 @@ window.chrome = {webview: {postMessage({id, op, args}) {
   if (op === 'connect') {
     window.host = args.host;
     window.server = {osId: 'ubuntu', osVersion: '24.04', hostname: 'existing-host', username: 'workspace',
-      statuses: {account: true, localization: true}, timezone: 'America/Los_Angeles', systemLocale: 'en_US.UTF-8',
+      statuses: {account: true, localization: true}, timezone: 'America/New_York', systemLocale: 'en_US.UTF-8',
       homeDirectory: '/home/workspace', observedEgressIp: args.host, assignedIps: [args.host, '9.9.9.9']};
     result = {server: window.server};
   }
@@ -42,7 +42,7 @@ window.chrome = {webview: {postMessage({id, op, args}) {
     }
   }
   if (op === 'ip.info') {
-    result = {location: '美国 · 洛杉矶', regionCode: 'us', city: 'Los Angeles', score: 80, geoSource: '测试'};
+    result = {location: '美国 · 纽约', regionCode: 'us', city: 'New York', score: 80, geoSource: '测试'};
   }
   if (op === 'ip.apply') {
     window.server.observedEgressIp = args.egressIp;
@@ -93,7 +93,7 @@ def test_manual_deployment():
                     page.locator('#username').fill('root')
                     page.locator('#password').fill('fixture-password-only')
                     page.locator('#connect').click()
-                    expect(page.locator('#ip-location')).to_have_text('美国 · 洛杉矶')
+                    expect(page.locator('#ip-location')).to_have_text('美国 · 纽约')
 
                 def assert_all_locked():
                     row_deployments = page.locator('#steps .deploy-button:not(.locale-settings-button)')
@@ -114,7 +114,7 @@ def test_manual_deployment():
                 expect(locale).to_have_value('')
                 expect(locale_save).to_be_disabled()
                 assert '自动' not in locale.inner_text()
-                locale.select_option('us_la')
+                locale.select_option('us_ny')
                 page.locator('#close-localization').click()
                 locale_button.click()
                 expect(locale).to_have_value('')

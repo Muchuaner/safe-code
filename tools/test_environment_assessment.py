@@ -14,7 +14,7 @@ spec.loader.exec_module(probe)
 
 class AssessmentTests(unittest.TestCase):
     def sample(self, **changes):
-        sample = dict(timezone='America/Los_Angeles', languages=['en-US', 'en'], locale='en-US', offset=480,
+        sample = dict(timezone='America/New_York', languages=['en-US', 'en'], locale='en-US', offset=300,
                       simplifiedFonts=[], traditionalFonts=[], fontMeasurementAvailable=True, platform='Linux x86_64', userAgent='Linux Chrome')
         sample.update(changes)
         return sample

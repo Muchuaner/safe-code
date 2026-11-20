@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Desktop Messages API → 现有 VPS 桥接守护进程 → 原版 Claude Code。
 
-正式环境的模型请求只由远端 claude 进程发出。214 的显式测试配置可将判定请求转到本机模拟服务；不读取上游模型密钥。
+模型请求由远端 claude 进程发出。桥接服务不读取上游模型密钥。
 状态、会话及正文只在工作用户范围内；HTTP 仅回环监听，需独立随机 token。
 """
 import argparse
@@ -10,7 +10,6 @@ import copy
 from contextlib import closing
 import hashlib
 import hmac
-import http.client
 import json
 import os
 from pathlib import Path
@@ -224,145 +223,6 @@ def validate_request(data):
     if not isinstance(maximum, int) or isinstance(maximum, bool) or not 1 <= maximum <= 128000:
         raise GatewayError('max_tokens must be between 1 and 128000', 400)
     return data
-
-
-def classifier_test_route(home=None, hostname=None):
-    # Never activate test transport on a production host, even if a config was copied there.
-    if (hostname or os.uname().nodename) != 'tom666':return None
-    path = (Path(home) if home else Path.home())/'.config/safe-code/desktop-classifier-test.json'
-    if not path.exists():return None
-    if path.is_symlink() or path.stat().st_mode & 0o077 or path.stat().st_uid != os.getuid():
-        raise GatewayError('Invalid local classifier test configuration')
-    config = json.loads(path.read_text())
-    if config.get('kind') != '214-classifier-simulation' or config.get('port') != 18898 or config.get('model') != 'claude-sonnet-5' or not isinstance(config.get('token'),str) or not config['token']:
-        raise GatewayError('Invalid local classifier test route')
-    return config
-
-
-def desktop_auto_check(data):
-    """The Desktop-managed CLI can use the active chat model for both Auto stages."""
-    if not isinstance(data, dict) or data.get('tools') or data.get('stream'):
-        return False
-    model = data.get('model')
-    if not isinstance(model, str) or not MODEL.fullmatch(model):
-        return False
-    # The CLI adds 2048 tokens to the stage budget for some model families.
-    budget = data.get('max_tokens')
-    stops = data.get('stop_sequences')
-    if stops:
-        if stops not in (['</severity>'], ['</block>']) or budget not in (64, 2112):
-            return False
-    elif budget not in (256, 2304, 8192, 10240):
-        return False
-    # Only inspect the classifier envelope, never the command to be assessed.
-    # The CLI emits the delimiters as separate text blocks (sometimes separate messages).
-    messages = data.get('messages')
-    if not isinstance(messages, list):
-        return False
-    opened = closed = False
-    for message in messages:
-        if not isinstance(message, dict) or message.get('role') != 'user':
-            continue
-        content = message.get('content')
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict) or block.get('type') != 'text':
-                continue
-            text = block.get('text')
-            if not isinstance(text, str):
-                continue
-            if closed and ('<block>' in text or '<severity>' in text):
-                return True
-            if opened and text.strip() == '</transcript>':
-                closed = True
-            elif text.strip() == '<transcript>':
-                opened = True
-    return False
-
-
-def read_test_stream(response):
-    message = None
-    stream = StreamMessage()
-    total = 0
-    while line := response.readline(MAX_REQUEST + 1):
-        total += len(line)
-        if total > MAX_REQUEST:
-            break
-        if not line.startswith(b'data:'):
-            continue
-        event = json.loads(line[5:])
-        kind = event.get('type')
-        stream.feed(event)
-        if kind == 'message_start':
-            message = event['message']
-        elif kind == 'message_delta' and message is not None:
-            message['usage'].update(event.get('usage', {}))
-            message['stop_reason'] = event['delta']['stop_reason']
-            message['stop_sequence'] = event['delta'].get('stop_sequence')
-        elif kind == 'message_stop' and message is not None:
-            message['content'] = stream.partial()
-            return message
-        elif kind == 'error':
-            break
-    raise GatewayError('Local test model returned an incomplete stream', 502)
-
-
-def simulator_request(route, path, payload, *, stream=False, headers=None):
-    client = http.client.HTTPConnection('127.0.0.1', route['port'], timeout=30 if path == COUNT_TOKENS_PATH else 120)
-    try:
-        client.request('POST', path, json.dumps(payload).encode(), {
-            **(headers or {}), 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + route['token'],
-        })
-        response = client.getresponse()
-        if response.status != 200:
-            if path == COUNT_TOKENS_PATH and response.status in (400, 413, 429):
-                raise GatewayError('Local simulator rejected token counting request', response.status)
-            raise GatewayError('Local test model transport unavailable; no fallback', 502)
-        if stream:
-            return read_test_stream(response)
-        body = response.read(MAX_REQUEST+1)
-        if len(body) > MAX_REQUEST:
-            raise GatewayError('Local test model response is too large', 502)
-        return json.loads(body)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
-        raise GatewayError('Local test model transport unavailable; no fallback', 502)
-    finally:client.close()
-
-
-def test_messages_request(route, payload):
-    result = simulator_request(route, MESSAGES_PATH, payload, stream=bool(payload.get('stream')))
-    if not isinstance(result, dict) or result.get('type') != 'message' or result.get('model') != payload['model']:
-        raise GatewayError('Invalid local test model response', 502)
-    return result
-
-
-def run_test_classifier(route, data):
-    if data.get('tools'):raise GatewayError('The test classifier model accepts no tools',400)
-    requested_model = data['model']
-    # Keep the native model and exact controls from Desktop up to the simulator.
-    # The compatibility route also accepts the bridge's legacy model aliases.
-    payload = dict(data)
-    if not requested_model.startswith('claude-'):
-        payload['model'] = route['model']
-    if data.get('stream'):
-        payload['stream'] = False
-    result = test_messages_request(route, payload)
-    if result.get('stop_reason') not in ('end_turn','max_tokens','stop_sequence'):
-        raise GatewayError('Invalid local test classifier response',502)
-    if any(b.get('type')=='tool_use' for b in result.get('content',[])):
-        raise GatewayError('Unexpected classifier tool response',502)
-    return {**result, 'model': requested_model}
-
-
-def native_web_search_request(data):
-    if not isinstance(data, dict):
-        return False
-    tools = data.get('tools')
-    if not isinstance(tools, list) or len(tools) != 1 or not isinstance(tools[0], dict):
-        return False
-    tool = tools[0]
-    return tool.get('type') == 'web_search_20250305' and tool.get('name') == 'web_search'
 
 
 def desktop_title(messages):
@@ -901,15 +761,11 @@ class Manager:
         self.webfetch_slots = threading.BoundedSemaphore(1)
         self.models_lock = threading.Lock()
         self.models = None
-        self.classifier_test = classifier_test_route()
 
     def catalog(self):
         with self.models_lock:
             if self.models is None:
                 self.models = native_model_catalog()
-                if self.classifier_test:
-                    for model in self.models['data']:
-                        if model['id']==self.classifier_test['model']:model['auto_mode_classifier']=True
             return self.models
 
     def count_usage(self, message, turn_id='unbound'):
@@ -949,69 +805,11 @@ class Manager:
             and any(call['name'].rsplit('__', 1)[-1] == name for call in c.pending.values())
         ), None)
 
-    def run_test_web_search(self, data, session_header):
-        tool = data['tools'][0]
-        if tool.keys() & {'allowed_domains', 'blocked_domains', 'user_location'}:
-            raise GatewayError('The test provider cannot enforce WebSearch domain or location restrictions', 400)
-        uses = tool.get('max_uses')
-        if set(tool) != {'type', 'name', 'max_uses'} or type(uses) is not int or not 1 <= uses <= 8:
-            raise GatewayError('Unsupported native WebSearch tool options', 400)
-        model = data.get('model')
-        if not isinstance(model, str) or not model.startswith('claude-') or not MODEL.fullmatch(model):
-            raise GatewayError('A native Claude model identifier is required', 400)
-        maximum = data.get('max_tokens')
-        if type(maximum) is not int or not 1 <= maximum <= 128000:
-            raise GatewayError('max_tokens must be between 1 and 128000', 400)
-        messages = data.get('messages')
-        if (not isinstance(messages, list) or not messages or not all(
-                isinstance(message, dict) and message.get('role') in ('user', 'assistant') for message in messages)
-                or messages[0]['role'] != 'user'):
-            raise GatewayError('Invalid web search messages', 400)
-        scope = conversation_scope(data, session_header)
-        with self.lock:
-            parent = self.pending_tool(scope, 'WebSearch')
-            if parent is None:
-                raise GatewayError('No WebSearch tool call is pending in this conversation', 409)
-            parent.last_used = time.monotonic()
-        response = test_messages_request(self.classifier_test, data)
-        if (response.get('stop_reason') not in ('end_turn', 'max_tokens', 'pause_turn', 'stop_sequence', 'refusal')
-                or not isinstance(response.get('usage'), dict)
-                or not isinstance(response.get('content'), list)
-                or any(block.get('type') == 'tool_use' for block in response['content'])):
-            raise GatewayError('Invalid local web search response', 502)
-        turn = 'websearch_' + uuid.uuid4().hex
-        self.count_usage(response, turn)
-        self.record_result(turn, response['usage'])
-        return response
-
     def count_input_tokens(self, data, headers=None):
-        if not self.classifier_test:
-            raise GatewayError('Token counting is unavailable on this CLI bridge', 501)
-        model = data.get('model') if isinstance(data, dict) else None
-        if not isinstance(model, str) or not model.startswith('claude-') or not MODEL.fullmatch(model):
-            raise GatewayError('A native Claude model identifier is required', 400)
-        messages = data.get('messages')
-        if not isinstance(messages, list) or not messages or 'stream' in data:
-            raise GatewayError('Invalid token counting request', 400)
-        reply = simulator_request(self.classifier_test, COUNT_TOKENS_PATH, data, headers=headers)
-        tokens = reply.get('input_tokens') if isinstance(reply, dict) else None
-        if type(tokens) is not int or tokens < 0:
-            raise GatewayError('Invalid local token counting response', 502)
-        return {'input_tokens': tokens}
+        raise GatewayError('Token counting is unavailable on this CLI bridge', 501)
 
     def run(self, data, context_1m=False, session_header=None):
         requested_model = data.get('model') if isinstance(data, dict) else None
-        if self.classifier_test and native_web_search_request(data):
-            return self.run_test_web_search(data, session_header)
-        if self.classifier_test and (requested_model == self.classifier_test['model'] or desktop_auto_check(data)):
-            if not data.get('tools'):
-                response = run_test_classifier(self.classifier_test,data)
-                self.started += 1
-                self.count_usage(response,'classifier_'+uuid.uuid4().hex)
-                return response
-            # Older Desktop profiles offered the test-only classifier in the chat picker.
-            # For an existing tool-bearing chat, use the native CLI's regular Sonnet alias.
-            data = {**data, 'model':'sonnet'}
         data=validate_request(data)
         if context_1m and not data['model'].endswith('[1m]'):
             data = {**data, 'model': data['model']+'[1m]'}

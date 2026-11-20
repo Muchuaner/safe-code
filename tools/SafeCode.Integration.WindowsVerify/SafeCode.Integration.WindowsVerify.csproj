@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0-windows</TargetFramework><EnableWindowsTargeting>true</EnableWindowsTargeting><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
-  <ItemGroup><FrameworkReference Include="Microsoft.WindowsDesktop.App" /></ItemGroup>
-  <ItemGroup>
-    <Compile Include="../../src/SafeCode.Desktop/ClaudeDesktopBridge.cs" Link="ClaudeDesktopBridge.cs" />
-    <Compile Include="../../src/SafeCode.Desktop/LocalSecrets.cs" Link="LocalSecrets.cs" />
-    <ProjectReference Include="../../src/SafeCode.Core/SafeCode.Core.csproj" />
-  </ItemGroup>
-</Project>

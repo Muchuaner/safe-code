@@ -13,6 +13,7 @@ with sync_playwright() as p:
    if(m.op==='claudeDesktop.start')window.desktopFixture={active:true,managed:true,configured:true,installed:true,endpoint:'http://127.0.0.1:18899'};
    if(m.op==='claudeDesktop.stop')window.desktopFixture={active:false,managed:false,configured:false,installed:true};
    const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:
+     m.op==='desktopKey.status'?{configured:false,running:false}:
      m.op==='notice.state'?{accepted:false}:
      m.op==='host.status'?{enabled:false,state:'disabled',alias:'',command:'',message:'未启用'}:
      m.op==='bridge.status'?{running:false}:
@@ -44,7 +45,7 @@ with sync_playwright() as p:
  page.locator('#host-close').click()
  # With a ready work account, the Mac settings surface offers SSH enable and stop.
  page.evaluate("showScreen('login')")
- page.locator('#ip').fill('192.168.50.66')
+ page.locator('#ip').fill('192.0.2.42')
  page.locator('#username').fill('fixture')
  page.locator('#password').fill('fixture-only')
  page.locator('#connect').click()
@@ -86,7 +87,7 @@ with sync_playwright() as p:
  resumed.clock.install()
  resumed.add_init_script(main_fixture.replace("window.__safeCodeAcceptance=true;", "window.resumeAttempts=0;")
    .replace("m.op==='notice.state'?{accepted:false}:", """m.op==='notice.state'?{accepted:true}:
-     m.op==='gateways.resume-settings'?{host:'192.168.50.66',username:'fixture',password:'fixture-only',port:22}:""")
+     m.op==='gateways.resume-settings'?{host:'192.0.2.42',username:'fixture',password:'fixture-only',port:22}:""")
    .replace("m.op==='connect'?{server:", """m.op==='connect'&&++window.resumeAttempts===1?{retryable:true}:
      m.op==='connect'?{server:"""))
  resumed.goto((root/'index.html').as_uri())

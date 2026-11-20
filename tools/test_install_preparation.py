@@ -86,7 +86,7 @@ class Installation(unittest.TestCase):
                     self.assertEqual(source.stat().st_mode&0o777,0o444)
                     self.assertEqual(source.parent.stat().st_mode&0o777,0o755)
                 else:self.assertEqual((action,path),('append_unique','.profile'))
-            with patch.object(a,'has_pinned_model_runtime',return_value=False),patch.object(a,'account'),patch.object(a,'apt'),patch.object(a,'log'),patch.object(a,'home',return_value=Path(workspace)),patch.object(a,'version',return_value='2.1.311'),patch.object(a.tempfile,'TemporaryDirectory',return_value=Mock(__enter__=Mock(return_value=staging),__exit__=Mock())),patch.object(a,'download_claude',side_effect=fetch) as download,patch.object(a,'user_files',side_effect=user_files) as install:
+            with patch.object(a,'account'),patch.object(a,'apt'),patch.object(a,'log'),patch.object(a,'home',return_value=Path(workspace)),patch.object(a,'version',return_value='2.1.311'),patch.object(a.tempfile,'TemporaryDirectory',return_value=Mock(__enter__=Mock(return_value=staging),__exit__=Mock())),patch.object(a,'download_claude',side_effect=fetch) as download,patch.object(a,'user_files',side_effect=user_files) as install:
                 a.setup_claude({'claudePayload':'/tmp/unapproved'})
             download.assert_called_once_with(Path(staging)/'claude')
             self.assertEqual(install.call_count,2)
@@ -119,30 +119,4 @@ class Installation(unittest.TestCase):
             self.assertEqual(start.call_args.args[0][-2:],[str(directory/'agent.py'),str(directory/'request.json')])
             download.assert_not_called()
 
-    def test_fixed_214_maintenance_preserves_verified_components(self):
-        with patch.object(a,'has_pinned_model_runtime',return_value=True), \
-             patch.object(a,'verify_pinned_model_runtime') as verify, patch.object(a,'log'), \
-             patch.object(a,'run',return_value=Mock(stdout=str(a.PARITY_CHECK))) as run, \
-             patch.object(a,'active',return_value=True), patch.object(a,'require_ubuntu'), \
-             patch.object(a,'apt') as apt, patch.object(a,'stream') as stream, \
-             patch.object(a,'download_claude') as fetch:
-            a.setup_claude({})
-            a.setup_cloud({})
-            with self.assertRaisesRegex(RuntimeError,'双重验证入口'):
-                a.setup_cloud_public({})
-            self.assertEqual([c.args[0] for c in verify.call_args_list],['claude','cloudcli'])
-            run.assert_called_once_with(['systemctl','show','-p','ExecStartPre','--value','safe-code-cloudcli.service'])
-            apt.assert_not_called()
-            stream.assert_not_called()
-            fetch.assert_not_called()
-
-    def test_failed_214_validation_does_not_fall_back_to_installation(self):
-        with patch.object(a,'has_pinned_model_runtime',return_value=True), \
-             patch.object(a,'verify_pinned_model_runtime',side_effect=RuntimeError('invalid lockfile')), \
-             patch.object(a,'apt') as apt, patch.object(a,'stream') as stream, patch.object(a,'download_claude') as fetch:
-            for operation in (lambda: a.setup_claude({}), lambda: a.setup_cloud({})):
-                with self.assertRaisesRegex(RuntimeError,'invalid lockfile'):operation()
-            apt.assert_not_called()
-            stream.assert_not_called()
-            fetch.assert_not_called()
 if __name__=='__main__':unittest.main()

@@ -396,7 +396,7 @@ class SafeCodeApiTest(unittest.TestCase):
                 settings = manage('settings')
                 self.assertEqual(settings, {'bind': '127.0.0.1', 'port': public.server_port,
                                             'publicIp': None, 'origin': 'https://fixture.example',
-                                            'developmentChannel': False, 'busy': False})
+                                            'busy': False})
                 with public.queue.slot(self.digests[0]):
                     self.assertTrue(manage('settings')['busy'])
                 public.config['publicIp'] = '8.8.8.8'
@@ -450,8 +450,8 @@ class SafeCodeApiTest(unittest.TestCase):
                 self.assertIn(legacy_id, key_ids)
                 self.assertEqual(manage('list', details=True)['stats']['requests'], 0)
                 self.assertEqual(post('/v1/messages',key,False)[0],401)
-                self.assertEqual(post(counter_path,key)[0],401)
-                self.assertEqual(post(counter_path)[0],401)
+                self.assertEqual(post(counter_path,key,False)[0],401)
+                self.assertEqual(post(counter_path,body=False)[0],401)
                 self.assertEqual(post(counter_path,legacy_key)[0],501)
                 counter=manage('issue',note='Token count only',rpm=1)
                 counter_key=decode_new_ticket(counter['ticket'])['key']
@@ -478,18 +478,6 @@ class SafeCodeApiTest(unittest.TestCase):
                 self.assertEqual(decode_new_ticket(manage('issue', note='设备二', rpm=10)['ticket'])['url'], origin)
                 with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0}) as reopened:
                     self.assertEqual(reopened.manage({'action':'settings'})['origin'], origin)
-                with patch.object(server.socket, 'gethostname', return_value='tom666'):
-                    self.assertTrue(server.is_development_gateway('192.168.50.66'))
-                    self.assertFalse(server.is_development_gateway('8.8.8.8'))
-                with patch.object(server.socket, 'gethostname', return_value='other-vps'):
-                    self.assertFalse(server.is_development_gateway('192.168.50.66'))
-                with patch.object(server, 'is_development_gateway', return_value=True):
-                    settings = manage('settings')
-                    self.assertTrue(settings['developmentChannel'])
-                    self.assertEqual(settings['origin'], server.DEVELOPMENT_ORIGIN)
-                    self.assertIn('error', admin_request('set_origin', origin=origin))
-                    issued = manage('issue', origin='https://wrong.fixture.example')
-                    self.assertEqual(decode_new_ticket(issued['ticket'])['url'], server.DEVELOPMENT_ORIGIN)
                 admin.shutdown()
             public.shutdown()
 
