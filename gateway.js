@@ -500,10 +500,6 @@ function renderSettings(value) {
   byId('settings-bind').value = value.bind;
   byId('settings-port').value = value.port;
   byId('settings-origin').value = value.origin || '';
-  byId('settings-origin').readOnly = !!value.developmentChannel;
-  byId('settings-origin-hint').textContent = value.developmentChannel
-    ? '示例环境 开发者渠道。新密钥自动使用上方的 FRP 公网入口。'
-    : '创建密钥时使用此地址。外部地址或端口变更后，请重新签发密钥。';
   byId('settings-fields').hidden = false;
   updateSettingsButtons();
 }
@@ -646,7 +642,7 @@ function updateSettingsButtons() {
   const port = byId('settings-port');
   const origin = byId('settings-origin');
   byId('save-settings').disabled = operationPending || !settings || !port.validity.valid || port.valueAsNumber === settings.port;
-  byId('save-origin').disabled = operationPending || !settings || origin.readOnly || !origin.validity.valid ||
+  byId('save-origin').disabled = operationPending || !settings || !origin.validity.valid ||
     !origin.value.startsWith('https://') || origin.value === settings.origin;
 }
 byId('settings-port').oninput = updateSettingsButtons;

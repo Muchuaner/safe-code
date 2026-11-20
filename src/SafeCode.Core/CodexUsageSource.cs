@@ -123,7 +123,7 @@ public sealed class CodexUsageSource
             foreach(string path in Directory.EnumerateFiles(directory,"*.jsonl"))yield return path;
         }
     }
-    // 示例环境 证据：2026\11\17 目录内文件本地时间 06:04、UTC 前一日 22:04，Codex 用本地日期分目录。
+    // Codex stores session files in directories named for the local date.
     internal static string SessionDateFolder(string root,DateTime localDate)
         =>Path.Combine(root,localDate.ToString("yyyy"),localDate.ToString("MM"),localDate.ToString("dd"));
     private static async Task<(string? Provider,string? SessionId)> ReadMetaAsync(string path,CancellationToken ct)

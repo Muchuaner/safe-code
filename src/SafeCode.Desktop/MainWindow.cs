@@ -49,21 +49,11 @@ public sealed class MainWindow : Window
     private readonly ConnectionSettings? supportSettings;
     private readonly string? supportFingerprint;
     private bool IsAcceptance=>arguments.Length>=3&&(arguments[0]=="--acceptance"||arguments[0]=="--services-acceptance"||arguments[0]=="--connection-acceptance"||arguments[0]=="--maintenance-acceptance"||arguments[0]=="--ip-acceptance"||arguments[0]=="--updates-acceptance");
-    private bool CanReportDiagnostics=>!IsAcceptance&&!arguments.Contains("--desktop-vps-test");
+    private bool CanReportDiagnostics=>!IsAcceptance;
     private readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SafeCode");
     public MainWindow(string[] arguments)
     {
         this.arguments=arguments;
-        if(arguments.Contains("--desktop-vps-test"))
-        {
-            var saved=LocalSecrets.Load();
-            if(saved?.Host!="192.0.2.66"||saved.Username!="root")throw new InvalidOperationException("Desktop VPS 测试仅允许已保存的 示例环境 虚拟机连接。");
-            string original=dataDirectory;
-            dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-DesktopVps-Test");
-            Directory.CreateDirectory(dataDirectory);LocalSecrets.DirectoryOverride=dataDirectory;LocalSecrets.Save(saved);
-            foreach(string file in new[]{"host-fingerprints.json","known_hosts","notice-accepted-v2"})
-                if(File.Exists(Path.Combine(original,file)))File.Copy(Path.Combine(original,file),Path.Combine(dataDirectory,file),true);
-        }
         if(arguments.Contains("--acceptance")||arguments.Contains("--services-acceptance"))dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Acceptance");
         if(arguments.Contains("--connection-acceptance")){dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Connection-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;}
         if(arguments.Contains("--maintenance-acceptance")){
@@ -462,7 +452,6 @@ public sealed class MainWindow : Window
             case "notice.claudeDesktop.state": return preferences.ClaudeDesktopWarningAccepted;
             case "notice.claudeDesktop.accept": preferences.AcceptClaudeDesktopWarning();return true;
             case "connect":
-                if(arguments.Contains("--desktop-vps-test")&&Read("host")!="192.0.2.66")throw new InvalidOperationException("隔离测试配置只允许连接 示例环境 的测试虚拟机。");
                 if(session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true||claudeDesktop?.Running==true)throw new InvalidOperationException("正在保护挂载目录或本机控制通道，请先停用并安全卸载再更换连接。");
                 if(connectionPending)throw new InvalidOperationException("连接正在处理中，请稍候。");
                 if(gatewayWindow?.Busy==true)throw new InvalidOperationException("请等待当前密钥操作完成。");

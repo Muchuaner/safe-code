@@ -8,10 +8,12 @@ node_modules/
 artifacts/
 **/bin/
 **/obj/
-.local/
 /.agents/skills/quarkclouddrive/
 dist/
 *.user
 
 __pycache__/
 *.pyc
+
+/AGENT.md
+/AGENTS.md
