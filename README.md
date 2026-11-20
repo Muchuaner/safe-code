@@ -40,7 +40,3 @@ macOS 版支持 Apple Silicon（arm64），安装、构建与验证范围见 [Ma
 <p align="center">
   <a href="docs/WINDOWS.md">使用说明</a> · <a href="https://qm.qq.com/q/cyUWAwYKQg">QQ 群</a> · <a href="https://www.rainyun.com/Agentom_">VPS 推荐</a>
 </p>
-
-<p align="center">
-  <sub>面向海外中文用户，中国大陆禁止使用</sub>
-</p>
