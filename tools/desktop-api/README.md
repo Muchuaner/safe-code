@@ -1,16 +1,14 @@
 # Safe Code API
 
-Linux 服务以现有 Claude Code 工作账户运行。FRP 用 TCP 转发到安装时指定的 Linux 地址和端口，TLS 在 Linux 服务上终止。214 的公网入口为 `frp-egg.com:45143`，内网目标为 `192.168.50.66:45143`。每个新设备可以单独签发一份 Key，方便日后撤销。
+Linux 服务以现有 Claude Code 工作账户运行。可以直连 VPS，也可以使用 TCP 中转连接安装时指定的监听地址，TLS 在 Linux 服务上终止。可以为每台设备单独签发一份 Key，方便日后撤销。
 
 公网调用默认关闭，本机 Claude Desktop 仍可使用 SSH 桥接。在连接 VPS 的 Safe Code 客户端，进入「维护模式 → 本地 Claude Desktop 接入 → 设置 → 公网启用」，阅读警告后点击「保证自用」才会启用 VPS 的独立 API。启用状态保存在该 VPS 的工作账户中，重启后仍有效。此前签发的密钥在确认后恢复可用。随后点击「管理网关」，在独立窗口搜索、创建、修改或撤销密钥，并查看逐把密钥的请求和用量。完整密钥仅在创建时显示。
 
 客户端确认 VPS 已开通公网后，会记住该 SSH 账户和已验证的主机指纹。下次启动时，保存的登录信息可用就自动恢复管理连接。网络短暂中断会自动重连。若服务器身份变化或登录密码失效，需要核对后继续。主窗口底部显示公网并发和排队，网关总览同时显示 VPS 上 Claude 订阅的 5 小时与 7 天剩余额度。订阅用量由 VPS 向 Anthropic 查询并缓存五分钟，密钥和订阅登录凭据均不会出现在监控响应中。
 
-「网关总览 → 网关设置」显示 Linux 网关实际监听的 IP 和端口。直接监听公网 IP 时显示「公网 IP」。如果 VPS 的公网地址由云平台映射，可在安装时用第四个参数传入该公网 IP，窗口会同时显示公网 IP 和本地监听 IP。214 虚拟机使用本地监听地址。保存新端口会重启服务，启动失败时尝试恢复原端口。若使用 FRP，请同步更新其目标端口。若外部访问地址或端口也变更，请用新的 HTTPS 地址重新签发密钥。
+「网关总览 → 网关设置」显示 Linux 网关实际监听的 IP 和端口。直接监听公网 IP 时显示「公网 IP」。如果 VPS 的公网地址由云平台映射，可在安装时用第四个参数传入该公网 IP，窗口会同时显示公网 IP 和本地监听 IP。保存新端口会重启服务，启动失败时尝试恢复原端口。若使用 TCP 中转，请同步更新其目标端口。若外部访问地址或端口也变更，请用新的 HTTPS 地址重新签发密钥。
 
 首次签发前，在「网关设置」中保存公网 HTTPS 地址。创建密钥只需填写备注和每分钟请求上限，网关会将已保存的公网地址写入接入凭证。保存公网地址本身无需重启服务。
-
-214 测试虚拟机通过主机名 `tom666` 和监听 IP `192.168.50.66` 匹配开发者渠道。网关设置显示固定的 FRP 入口 `https://frp-egg.com:45143`，该地址自动写入新签发的凭证。公网启用确认和 TLS 证书校验仍然适用。
 
 用量分析可切换近 1 小时、24 小时和 7 天，查看请求与 Token 吞吐、处理和排队耗时分布、请求结果以及错误与限流趋势。并发与排队显示实时状态，模型用量显示历史累计值。图表使用网关已有的请求日志，明细保留 30 天，列表可查看最近 30 条。请求日志只保存模型、密钥 ID 等统计字段。
 
@@ -20,18 +18,18 @@ Safe Code API 默认同时处理一个 Messages 请求。管理员可以在「�
 
 创建或编辑密钥时可填写累计美元额度，留空不限额。余额等于累计额度减已用金额。请求完成后扣除实际观测用量的估算费用，余额用完则后续 Messages 请求返回 HTTP 402。一笔在余额为正时开始的请求可能使余额变为负数。提高累计额度即可补充余额。
 
-部署时将本目录的 `install.sh`、`server.py`、`management.py`、`pricing.py`、项目中的 `src/SafeCode.Core/Remote/desktop_gateway.py` 和该桥接使用的 `codex_bridge.zip` 放到同一目录。以管理员身份运行以下命令。
+部署时将本目录的 `install.sh`、`server.py`、`management.py`、`pricing.py`、项目中的 `src/SafeCode.Core/Remote/desktop_gateway.py` 和该桥接使用的 `codex_bridge.zip` 放到同一目录。将示例中的账户名、监听地址和端口替换为你的配置，再以管理员身份运行以下命令。
 
 ```sh
-bash install.sh workspace 192.168.50.66 45143
+bash install.sh workspace 192.0.2.10 45143
 systemctl status safe-code-desktop-api
 ```
 
-在客户端确认「保证自用」并启用公网后，也可在 Linux 工作账户下签发一份 Key。签发命令将 Key 写入指定的新文件，并输出可用于撤销的 Key ID。通过私密渠道将文件交给设备的使用者。
+在客户端确认「保证自用」并启用公网后，也可在 Linux 工作账户下签发一份 Key。用实际可达的 HTTPS 地址替换示例域名，签发命令会将 Key 写入指定的新文件，并输出可用于撤销的 Key ID。通过私密渠道将文件交给设备的使用者。
 
 ```sh
 state="$HOME/.local/state/safe-code-desktop-api"
-python3 /opt/safe-code/desktop-api/server.py --state "$state" issue https://frp-egg.com:45143 "$state/laptop.key"
+python3 /opt/safe-code/desktop-api/server.py --state "$state" issue https://gateway.example.com:45143 "$state/laptop.key"
 ```
 
 在新设备上安装官方 Claude Desktop，打开 SafeCode 登录页的「Safe Code API 接入」，粘贴整行 Key，点击「验证并启用」。首次启用后完全退出并重开 Claude Desktop。聊天时保持 SafeCode 运行，再次启动 SafeCode 会恢复本机接入。在同一入口停用可恢复之前选用的 Claude 配置。

@@ -1,65 +1,31 @@
 # Safe Code for macOS
 
-Beta-0.4.4.19 的 macOS 安装包支持 Apple 芯片（arm64）和 macOS 15 或以后版本。最低系统版本按 [.NET 10 支持列表](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md) 设定。
+## 安装
 
-打开对应 DMG，将 Safe Code.app 拖入 Applications。应用自带 .NET 核心，不需要安装 Python、Node.js、.NET SDK、WebView2 或 Windows 模拟器。系统 WKWebView 承载界面，AppKit 提供窗口、文件夹选择器、剪贴板和菜单栏面板。设置、目录、进度与确认等对话框在各自的 AppKit 窗口中打开。嵌套对话框关闭后回到原表单。
+支持 Apple 芯片（arm64）和 macOS 15 或更新版本。下载 `SafeCode-版本-macOS-arm64.dmg`，打开镜像后将 Safe Code 拖入「应用程序」。安装包自带 .NET，界面由系统的 WKWebView 和 AppKit 提供。[下载 macOS 安装包](https://github.com/Muchuaner/safe-code/releases)
 
-这是本地临时签名的开发包，未完成 Apple Developer ID 签名与公证。下载的开发包可能被 Gatekeeper 拦截；只有确认来源后才在系统设置的隐私与安全性页面选择打开，不要关闭系统安全检查。正式分发需使用开发者证书重新签名并提交 Apple 公证。
+如果发布说明标明该版本尚未通过 Apple 公证，macOS 可能会拦截首次启动。核对来源和安装包 SHA-256 后，可在系统设置的「隐私与安全性」中按提示允许打开。
 
-## 功能
+## 连接和部署
 
-SSH 指纹确认、Ubuntu 部署、工作账户草稿、IP 设置、目录浏览与新建、多目录挂载、大文件传输、断线守护、安全卸载和 CloudCLI 原生项目联动复用现有核心。关闭有任务或挂载的窗口会保留菜单栏守护；菜单栏提供主界面、重连和安全退出。退出前必须确认同步卸载成功。
+打开 Safe Code 并填写 Ubuntu VPS 的 SSH 地址、端口和管理员登录信息。首次连接时核对主机指纹。部署要求 Ubuntu 22.04 或 24.04 x86_64、可用的 systemd，以及 root 或具备免密 sudo 的登录账户。
 
-“SSH 终端”调用系统 Terminal 和 /usr/bin/ssh，使用独立配置、专用密钥和已核验服务器指纹，不把密码写进终端脚本或命令参数。首次使用可能由 macOS 询问是否允许控制 Terminal。
+在部署页分别保存工作账户和本地化设置，再选择要安装的组件。重新连接同一台服务器后可以继续查看部署进度。维护模式提供 SSH 终端、远程桌面、目录挂载和 CloudCLI。
 
-“远程桌面”通过 SSH 连接服务器的回环端口 3389。Safe Code 复用隧道并先验证 RDP 握手。已安装 SDL FreeRDP 3 时，应用通过进程的标准输入传入工作账户凭据，并核对从已验证 SSH 隧道获取的 RDP TLS 证书指纹。密码仍由服务器验证。也可使用 Windows App 或默认 RDP 客户端打开不含密码的连接文件，凭据和证书提示由该客户端处理。
+SSH 终端调用 macOS 的 Terminal 和 SSH 客户端。登录信息与工作账户草稿在本机加密保存，密钥保存在登录钥匙串。需要读取已保存的登录信息时，按 macOS 提示授权即可。
 
-可在「分辨率设置」选择原始大小、等比缩放或动态分辨率，以及启动时全屏。设置从下次打开桌面起生效。使用 Windows App 或其他默认 RDP 客户端时，显示行为取决于客户端支持。
+## 远程桌面和目录挂载
 
-登录信息和工作账户草稿以 AES-256-GCM 加密保存，加密密钥放在 macOS 登录钥匙串。启动时仅尝试静默读取，无法读取时可直接手动登录 VPS。需要使用已保存的登录信息时，可在登录页主动点击读取并按系统提示授权。应用数据位于 ~/Library/Application Support/Safe Code，目录仅当前用户可访问。应用不会读取或迁移 Windows DPAPI 数据，也不会写入 Codex 或 CC Switch 配置。
+远程桌面复用已验证的 SSH 隧道。可在「分辨率设置」中选择原始大小、等比缩放、动态分辨率及启动时全屏。安装 SDL FreeRDP 3 时可由 Safe Code 提交工作账户凭据。使用 Windows App 或其他默认 RDP 客户端时，由相应客户端处理凭据和显示设置。
 
-## 本机远程控制
+目录挂载支持多组本机目录与服务器目录。挂载使用期间请保持应用运行。菜单栏提供显示主界面、重连和安全退出，退出前等待目录同步和卸载完成。
 
-默认关闭。Mac 版接入 macOS 系统已有的“远程登录”，不自行启用系统服务，不修改 sshd、允许用户列表或防火墙。
+## Claude Desktop 接入
 
-使用前，需本人在系统设置 → 通用 → 共享中开启远程登录，并仅允许当前账户。允许后，本功能给当前用户 authorized_keys 添加专用受限公钥，通过已有本机 22 端口建立服务器回环反向通道，核验 Darwin 系统与真实用户 UID。此权限可以运行命令、读写或删除当前用户可访问的文件；macOS 隐私权限和需要密码的 sudo 操作仍由系统控制。
+要使用已签发的 Key，打开「Safe Code API 接入」，粘贴 Key 并点「验证并启用」。已保存的 Key 可以更换、重新启用或停用。操作完成后，请完全退出并重新打开 Claude Desktop。[网关与 Key 使用说明](https://github.com/Muchuaner/safe-code/blob/main/tools/desktop-api/README.md)
 
-停用会撤销当前专用公钥、断开反向通道并清理服务器专用身份；不会替用户关闭原来启用的系统远程登录。应用异常中断后，再次启动会先撤销自己的残留公钥，不会自动恢复控制。没有显式测试授权时不启用本机控制。
+若使用 SSH 接入，连接 VPS 后从维护模式打开「本地 Claude Desktop 接入」的设置，按提示启用。使用任一接入方式时请保持 Safe Code 运行。
 
-## Claude Desktop SSH 接入
+## 更新和反馈
 
-连接 VPS 并部署工作账户后，在维护模式的「本地 Claude Desktop 接入」点「设置」。启用前需安装 Claude Desktop，并停用当前正在使用的 API Key 接入或其他 Claude Desktop 配置。启用后完全退出并重开 Claude Desktop。请求经本机回环地址和 SSH 转发给 VPS 上的 Claude Code，接入状态绑定服务器、端口、账号和主机指纹。退出 Safe Code 会停止通道，重新连接同一 VPS 后可恢复。主动停用会移除本工具创建的接入配置。
-
-## 第三方模型适配器
-
-用户迁移包仅含 Windows EXE，没有可验证的 macOS 程序。此模块鸣谢“亚撒西の空白”并显示“暂不可用”，不能启动，不尝试用模拟器执行，也不发起真实模型请求。后续需取得经过审查、具有相应分发许可的 macOS 适配器，再独立验收。
-
-## 更新与反馈
-
-从应用菜单、使用声明或工作区打开“更新与反馈”时，会弹出独立的 macOS 窗口。基础使用统计和匿名功能诊断默认关闭。主动勾选并确认声明后才开始自动上报，之后可随时修改。旧版曾默认勾选，升级后须重新选择。
-
-Mac 更新只匹配当前架构的 macOS DMG，不会下载 Windows EXE 或另一架构的安装包。下载后核验 GitHub SHA256；用户完成卸载后打开镜像，自行替换应用。没有 Mac 安装资产时只提供版本发布页。
-
-沿用明确同意后的诊断与反馈流程，基础统计系统字段为 macOS。Beta-0.4.4.2 发布时已部署接收端平台兼容更新，Windows/macOS 启动事件均通过验收，用户授权和采集字段不变。
-
-## 构建
-
-```sh
-python3 tools/build_macos.py --arch arm64
-```
-
-部署 Claude Code 时，VPS 按自身架构从官方发布渠道下载，并用官方清单校验 SHA-256。构建脚本只写本地 dist，不发布或替换已安装应用。可用 --sign-identity 指定开发者签名；公证是单独的发行步骤。
-
-## 验证记录（2026-11-15）
-
-Apple Silicon 实机系统为 macOS 26.6.2。原生启动已实际使用本机钥匙串生成加密密钥，并检查 AppKit 菜单、无服务器预览与安全退出。AppKit / WKWebView 的桥接、标准尺寸维护界面、未连接操作拒绝、只读启动及 Windows 适配器不可用检查通过。Intel x64 包另经 Rosetta 启动验收，不等同于 Intel 硬件实机验收。
-
-Mac 原生后台通过已有 214 通道连接指定 Ubuntu 测试虚拟机，指纹与 214 已信任记录比对后，完成真实登录、巡检、目录读取；两组 Mac 本机临时目录的真实挂载、读取、改序、CloudCLI 原生项目列表登记、卸载归档、重挂身份复用和网页自动刷新资源检查均通过。测试映射已卸载，生成的项目及临时目录已清理，测试入口隧道关闭；未改动原有 Windows 用户挂载。
-
-AES-GCM 往返及篡改拒绝、Shell 参数引用、平台和架构更新筛选通过。Mac 与 Windows 共用界面、主机身份、目录边界及 CloudCLI 回归共 13 个脚本通过；诊断接收端 17 项测试通过，Windows 客户端仍以零警告、零错误编译。
-
-本次没有开启 macOS 系统远程登录或本机控制，没有运行用户附件适配器，没有发送模型请求，没有切换 Codex / CC Switch 配置。Terminal 自动化授权、RDP 客户端实际登录，以及 Mac 本机控制真实登录需在用户主动使用或另行授权的验收中完成，不用构建或夹具成功代替。
-
-应用使用临时本机签名，已核验签名封装与包内文件哈希；未提交 Apple 公证。构建在 ~/Library/Caches/SafeCode/Builds 下完成，避免同步目录给 .app 自动附加 Finder 元数据而破坏签名；最终 DMG 输出到 dist/macos。上述为首个开发版验收记录；随后 Beta-0.4.4.2 已公开预发布，并完成统计接收端平台兼容更新。
-
-服务器验证仅使用已指定的 Ubuntu 测试虚拟机。后续界面验收使用 --preview-sandbox <独立目录>：仅内存测试密钥、不访问真实钥匙串或用户配置，后台拒绝 SSH 连接、部署、挂载及网络请求。--smoke-test 同样使用该离线隔离模式。
+可在应用菜单打开「更新与反馈」，手动检查版本、提交反馈，或选择是否开启使用统计和匿名功能诊断。更新仅匹配 Apple 芯片安装包。下载并校验后退出旧版，再打开镜像替换应用。[在线更新](https://github.com/Muchuaner/safe-code/blob/main/docs/UPDATES.md) · [匿名功能诊断](https://github.com/Muchuaner/safe-code/blob/main/docs/DIAGNOSTICS.md)

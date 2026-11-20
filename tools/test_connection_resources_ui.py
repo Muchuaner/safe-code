@@ -29,7 +29,7 @@ with sync_playwright() as p:
         if(message.op==='environment.assess'){
           if(environmentMode==='hold'){window.heldEnvironment=message;return;}
           if(environmentMode==='fail')error='fixture environment unavailable';
-          else result={riskScore:22,level:'low',message:'低风险',username:'workspace',signals:[{label:'系统时区',value:'America/Los_Angeles',contribution:0}]};
+          else result={riskScore:22,level:'low',message:'低风险',username:'workspace',signals:[{label:'系统时区',value:'America/New_York',contribution:0}]};
         }
         if(message.op==='resources'){
           if(resourceMode==='hold'){window.heldResource=message;return;}
@@ -68,7 +68,7 @@ with sync_playwright() as p:
     assert page.locator('#resource-cpu').inner_text() == '—'
     page.reload()
     page.wait_for_function('window.safeCodeNativeReady')
-    page.locator('#ip').fill('192.168.50.66')
+    page.locator('#ip').fill('192.0.2.42')
     page.locator('#username').fill('root')
     page.locator('#password').fill('fixture')
     page.locator('#connect').click()

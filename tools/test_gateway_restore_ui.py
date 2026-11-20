@@ -14,12 +14,13 @@ with sync_playwright() as p:
         page.route('**/*',route)
         page.add_init_script('window.fixture='+json.dumps(dict(remembered=remembered,notice=notice,failure=failure,warning=warning))+';'+'''
         window.__safeCodeDesktop=true;window.calls=[];
-        const saved={host:'192.168.50.66',username:'root',password:'fixture',port:22};
+        const saved={host:'192.0.2.42',username:'root',password:'fixture',port:22};
         window.chrome={webview:{postMessage(m){
           calls.push(m.op);let result=null,error=null;
           if(m.op==='services.preferences')result={enabled:false,diagnosticsEnabled:false,confirmed:true};
           if(m.op==='notice.state')result={accepted:fixture.notice};
           if(m.op==='login.load')result=saved;
+          if(m.op==='desktopKey.status')result={configured:false,running:false};
           if(m.op==='gateways.resume-settings')result=fixture.remembered?saved:null;
           if(m.op==='connect'){
             if(fixture.failure)error='fixture SSH unavailable';
