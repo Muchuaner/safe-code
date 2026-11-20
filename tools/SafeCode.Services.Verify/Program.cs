@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
@@ -42,12 +43,140 @@ try{
  using(var beta=JsonDocument.Parse("""{"tag_name":"Beta-0.4.3.2","draft":false,"prerelease":true,"assets":[{"name":"SafeCode-Beta-0.4.3.2-Setup-x64.exe","browser_download_url":"https://github.com/Muchuaner/safe-code/releases/download/Beta-0.4.3.2/SafeCode-Beta-0.4.3.2-Setup-x64.exe","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","size":123}]}""")){Assert(ClientServices.ParseRelease(beta.RootElement,"Beta-0.4.3.1").CanInstall,"beta update rejected");bool rejected=false;try{ClientServices.ParseRelease(beta.RootElement,"0.4.2");}catch(IOException){rejected=true;}Assert(rejected,"stable channel accepted beta");}
  var bytes=Encoding.UTF8.GetBytes("test installer fixture, never executed");string sha=Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
  string Feed(string digest,string url="https://github.com/Muchuaner/safe-code/releases/download/v9.0.0/SafeCode-9.0.0-Setup-x64.exe")=>JsonSerializer.Serialize(new{tag_name="v9.0.0",draft=false,prerelease=false,assets=new[]{new{name="SafeCode-9.0.0-Setup-x64.exe",browser_download_url=url,digest="sha256:"+digest,size=bytes.Length}}});
+ string ReleaseFeed(string tag,bool prerelease,string digest){string name="SafeCode-"+tag+"-Setup-x64.exe";return JsonSerializer.Serialize(new{tag_name=tag,draft=false,prerelease,assets=new[]{new{name,browser_download_url="https://github.com/Muchuaner/safe-code/releases/download/"+tag+"/"+name,digest="sha256:"+digest,size=bytes.Length}}});}
+ string MissingAssetFeed(string tag)=>JsonSerializer.Serialize(new[]{new{tag_name=tag,draft=false,prerelease=true,assets=Array.Empty<object>()}});
+ string AtomFeed(params string[] tags)=>"<?xml version=\"1.0\" encoding=\"utf-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><id>tag:github.com,2008:https://github.com/Muchuaner/safe-code/releases</id><title>Release notes from safe-code</title><updated>2026-11-19T21:05:45Z</updated>"+string.Join("",tags.Select(tag=>$"<entry><id>tag:github.com,2008:Repository/1450215833/{tag}</id><updated>2026-11-19T21:05:45Z</updated><link rel=\"alternate\" type=\"text/html\" href=\"https://github.com/Muchuaner/safe-code/releases/tag/{Uri.EscapeDataString(tag)}\"/><title>{tag}</title></entry>"))+"</feed>";
+ void ExpireUpdateCache(ClientServices client)=>typeof(ClientServices).GetField("lastCheck",BindingFlags.Instance|BindingFlags.NonPublic)!.SetValue(client,DateTimeOffset.UtcNow-TimeSpan.FromDays(2));
  using(var doc=JsonDocument.Parse(Feed(sha))){Assert(ClientServices.ParseRelease(doc.RootElement,"0.4.0").CanInstall,"valid release rejected");Assert(ClientServices.ParseRelease(doc.RootElement,"10.0.0").Version==null,"downgrade offered");}
  using(var doc=JsonDocument.Parse(Feed(sha,"https://evil.invalid/payload.exe")))Assert(!ClientServices.ParseRelease(doc.RootElement,"0.4.0").CanInstall,"external installer accepted");
  using(var doc=JsonDocument.Parse(Feed("")))Assert(!ClientServices.ParseRelease(doc.RootElement,"0.4.0").CanInstall,"unverified installer offered");
  using(var client=new ClientServices(Path.Combine(directory,"download"),new FakeHandler(Feed(sha)),new FakeHandler(bytes:bytes),updateAssetSuffix:"Setup-x64.exe")){await client.CheckUpdateAsync(true,default);var file=await client.DownloadUpdateAsync((_,_)=>{},default);await ClientServices.VerifyInstallerAsync(file,default);File.AppendAllText(file.Path,"tampered");bool refused=false;try{await ClientServices.VerifyInstallerAsync(file,default);}catch(IOException){refused=true;}Assert(refused,"modified installer accepted");}
  using(var client=new ClientServices(Path.Combine(directory,"bad-hash"),new FakeHandler(Feed(new string('0',64))),new FakeHandler(bytes:bytes),updateAssetSuffix:"Setup-x64.exe")){await client.CheckUpdateAsync(true,default);bool refused=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(IOException){refused=true;}Assert(refused,"bad digest accepted");Assert(!Directory.EnumerateFiles(Path.Combine(directory,"bad-hash"),"*.exe",SearchOption.AllDirectories).Any(),"invalid executable retained");}
  using(var client=new ClientServices(Path.Combine(directory,"redirect"),new FakeHandler(Feed(sha)),new FakeHandler(redirect:true),updateAssetSuffix:"Setup-x64.exe")){await client.CheckUpdateAsync(true,default);bool refused=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(IOException){refused=true;}Assert(refused,"unsafe redirect accepted");}
+ using(var client=new ClientServices(Path.Combine(directory,"missing-asset"),new FakeHandler(MissingAssetFeed("Beta-9.9.9.9")),updateAssetSuffix:"Setup-x64.exe",currentVersion:"Beta-0.4.4.17"))
+ {
+  var update=await client.CheckUpdateAsync(true,default);
+  Assert(update.Version=="Beta-9.9.9.9"&&!update.CanInstall,"newer release without a verified asset was not reported safely");
+  Assert(update.Page=="https://github.com/Muchuaner/safe-code/releases/tag/Beta-9.9.9.9","missing-asset release did not use its official page");
+  bool refused=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(InvalidOperationException){refused=true;}Assert(refused,"newer release without an asset enabled auto install");
+ }
+ var stableLimited=new UpdateHandler{ApiStatus=HttpStatusCode.TooManyRequests,LatestLocation="/Muchuaner/safe-code/releases/tag/v0.4.5"};
+ using(var client=new ClientServices(Path.Combine(directory,"rate-stable"),stableLimited,currentVersion:"0.4.4"))
+ {
+  var update=await client.CheckUpdateAsync(true,default);
+  Assert(update.Version=="0.4.5"&&!update.CanInstall&&update.Page=="https://github.com/Muchuaner/safe-code/releases/tag/v0.4.5","stable channel failed to identify the latest official release");
+  Assert(stableLimited.ApiRequests==1&&stableLimited.AtomRequests==0&&stableLimited.LatestRequests==1,"stable channel requested the wrong fallback");
+  Assert(await client.CheckUpdateAsync(true,default)==update&&stableLimited.ApiRequests==1&&stableLimited.LatestRequests==1,"stable rate-limit window retried a cached result");
+ }
+ foreach(var location in new[]{"/Muchuaner/safe-code/releases/tag/Beta-9.9.9.9","https://evil.invalid/Muchuaner/safe-code/releases/tag/9.9.9","/Muchuaner/safe-code/releases"})
+ {
+  var stableUnknown=new UpdateHandler{ApiStatus=HttpStatusCode.TooManyRequests,LatestLocation=location};
+  using var client=new ClientServices(Path.Combine(directory,"rate-stable-unknown"),stableUnknown,currentVersion:"0.4.4");
+  var update=await client.CheckUpdateAsync(true,default);
+  Assert(update.Version==null&&!update.CanInstall&&update.Status.Contains("无法"),"stable fallback accepted an unconfirmed release");
+ }
+ var longLimited=new UpdateHandler{ApiStatus=HttpStatusCode.TooManyRequests,RetryAfter="7200"};
+ using(var client=new ClientServices(Path.Combine(directory,"rate-long"),longLimited,currentVersion:"0.4.4"))
+ {
+  await client.CheckUpdateAsync(true,default);
+  var blockedUntil=(DateTimeOffset)typeof(ClientServices).GetField("apiBlockedUntil",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(client)!;
+  Assert(blockedUntil-DateTimeOffset.UtcNow>TimeSpan.FromMinutes(90),"valid Retry-After was capped to one hour");
+ }
+ var concurrentHandler=new GatedUpdateHandler("["+ReleaseFeed("Beta-9.9.9.9",true,sha)+"]");
+ using(var client=new ClientServices(Path.Combine(directory,"update-concurrent"),concurrentHandler,updateAssetSuffix:"Setup-x64.exe",currentVersion:"Beta-0.4.4.17"))
+ {
+  var first=client.CheckUpdateAsync(true,default);await concurrentHandler.Started.Task;
+  var second=client.CheckUpdateAsync(true,default);concurrentHandler.Release.TrySetResult();
+  var updates=await Task.WhenAll(first,second);
+  Assert(concurrentHandler.ApiRequests==1,"concurrent update checks called the API twice");
+  Assert(updates.All(x=>x.Version=="Beta-9.9.9.9"&&x.CanInstall),"concurrent update check lost the cached result");
+ }
+ var slowFallback=new SlowFallbackHandler();
+ using(var client=new ClientServices(Path.Combine(directory,"update-timeout"),slowFallback,currentVersion:"Beta-0.4.4.17"))
+ {
+  var http=(HttpClient)typeof(ClientServices).GetField("http",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(client)!;http.Timeout=TimeSpan.FromMilliseconds(250);
+  var timedOut=await client.CheckUpdateAsync(true,default).WaitAsync(TimeSpan.FromSeconds(3));
+  Assert(timedOut.Version==null&&timedOut.Page=="https://github.com/Muchuaner/safe-code/releases","fallback body escaped the HttpClient timeout");
+ }
+ var rateBeta=new UpdateHandler{ApiStatus=HttpStatusCode.Forbidden,AtomFeed=AtomFeed("Beta-9.9.9.9").Replace("https://github.com/Muchuaner/safe-code/releases/tag/","https://evil.invalid/releases/tag/")};
+ using(var client=new ClientServices(Path.Combine(directory,"rate-beta"),rateBeta,updateAssetSuffix:"Setup-x64.exe",currentVersion:"Beta-0.4.4.17"))
+ {
+  var unknown=await client.CheckUpdateAsync(true,default);
+  Assert(unknown.Version==null&&!unknown.CanInstall&&unknown.Status!="已是最新版本","invalid fallback reported a version");
+  Assert(unknown.Page=="https://github.com/Muchuaner/safe-code/releases","invalid fallback did not use the official page");
+  bool refused=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(InvalidOperationException){refused=true;}Assert(refused,"invalid fallback enabled auto install");
+  Assert(rateBeta.ApiRequests==1&&rateBeta.AtomRequests==1,"unexpected fallback requests");
+  rateBeta.AtomFeed=AtomFeed("Beta-0.4.4.18").Replace("tag:github.com,2008:https://github.com/Muchuaner/safe-code/releases","tag:github.com,2008:https://evil.invalid/releases");
+  var forgedFeed=await client.CheckUpdateAsync(true,default);
+  Assert(forgedFeed.Version==null&&forgedFeed.Status!="已是最新版本","untrusted fallback feed was accepted");
+  Assert(rateBeta.ApiRequests==1&&rateBeta.AtomRequests==2,"forged fallback feed retried the API");
+  rateBeta.AtomFeed=AtomFeed("Beta-0.4.4.18","Beta-0.4.4.17","0.4.3");
+  var update=await client.CheckUpdateAsync(true,default);
+  Assert(update.Version=="Beta-0.4.4.18"&&!update.CanInstall,"rate-limited beta fallback missed newer release");
+  Assert(update.Page=="https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.4.18","fallback page is not the official release tag");
+  Assert(update.Status.Contains("发布页"),"fallback did not direct to the release page");
+  Assert(rateBeta.ApiRequests==1,"rate-limited beta check retried the API");
+  Assert(rateBeta.AtomRequests==3,"fallback was not retried after an unknown result");
+  bool noDownload=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(InvalidOperationException){noDownload=true;}Assert(noDownload,"unverified fallback enabled auto install");
+ }
+ var wrongNamespace=new UpdateHandler{ApiStatus=HttpStatusCode.Forbidden,AtomFeed=AtomFeed("Beta-9.9.9.9").Replace("http://www.w3.org/2005/Atom","http://evil.invalid/atom")};
+ using(var client=new ClientServices(Path.Combine(directory,"atom-namespace"),wrongNamespace,currentVersion:"Beta-0.4.4.17"))
+ {
+  var unknown=await client.CheckUpdateAsync(true,default);
+  Assert(unknown.Version==null&&unknown.Page=="https://github.com/Muchuaner/safe-code/releases","fallback accepted a nonstandard Atom namespace");
+ }
+ var olderBeta=new UpdateHandler{ApiStatus=HttpStatusCode.Forbidden,AtomFeed=AtomFeed("Beta-0.4.4.16","0.4.3")};
+ using(var client=new ClientServices(Path.Combine(directory,"rate-older"),olderBeta,currentVersion:"Beta-0.4.4.17"))
+ {
+  var older=await client.CheckUpdateAsync(true,default);
+  Assert(older.Version==null&&older.Status.Contains("无法")&&older.Page=="https://github.com/Muchuaner/safe-code/releases","older fallback releases were reported as current");
+ }
+ var latestBeta=new UpdateHandler{ApiStatus=HttpStatusCode.Forbidden,AtomFeed=AtomFeed("Beta-0.4.4.17","Beta-0.4.4.16","0.4.3","٩.٩.٩","9.9.9\n")};
+ using(var client=new ClientServices(Path.Combine(directory,"rate-latest"),latestBeta,currentVersion:"Beta-0.4.4.17"))
+ {
+  var latest=await client.CheckUpdateAsync(true,default);
+  Assert(latest.Version==null&&latest.Status=="官方发布订阅未发现更新"&&latest.Page=="https://github.com/Muchuaner/safe-code/releases"&&!latest.CanInstall,"fallback latest result is wrong");
+  Assert(latestBeta.AtomRequests==1,"latest fallback was not requested");
+ }
+ var formalRelease=new UpdateHandler{ApiStatus=HttpStatusCode.Forbidden,AtomFeed=AtomFeed("v0.4.4","Beta-0.4.4.18","Beta-0.4.4.17")};
+ using(var client=new ClientServices(Path.Combine(directory,"rate-beta-to-formal"),formalRelease,currentVersion:"Beta-0.4.4.17"))
+ {
+  var update=await client.CheckUpdateAsync(true,default);
+  Assert(update.Version=="0.4.4"&&!update.CanInstall&&update.Page=="https://github.com/Muchuaner/safe-code/releases/tag/v0.4.4","beta fallback missed a newer formal release");
+  Assert(await client.CheckUpdateAsync(true,default)==update&&formalRelease.AtomRequests==1,"beta fallback success was not cached");
+  typeof(ClientServices).GetField("apiBlockedUntil",BindingFlags.Instance|BindingFlags.NonPublic)!.SetValue(client,DateTimeOffset.UtcNow-TimeSpan.FromSeconds(1));
+  formalRelease.ApiStatus=HttpStatusCode.OK;
+  formalRelease.ApiFeed=MissingAssetFeed("Beta-0.4.5.1");
+  var recovered=await client.CheckUpdateAsync(false,default);
+  Assert(recovered.Version=="Beta-0.4.5.1"&&formalRelease.ApiRequests==2,"fallback cache prevented the API from recovering");
+ }
+ var staleHandler=new UpdateHandler{ApiFeed="["+ReleaseFeed("Beta-9.9.9.9",true,sha)+"]"};
+ using(var client=new ClientServices(Path.Combine(directory,"stale-cache"),staleHandler,updateAssetSuffix:"Setup-x64.exe",currentVersion:"Beta-0.4.4.17"))
+ {
+  var fresh=await client.CheckUpdateAsync(true,default);Assert(fresh.Version=="Beta-9.9.9.9"&&fresh.CanInstall,"valid beta API result was rejected");
+  staleHandler.ApiStatus=HttpStatusCode.Forbidden;staleHandler.AtomFeed="<feed><entry>";
+  ExpireUpdateCache(client);
+  var failedRefresh=await client.CheckUpdateAsync(true,default);Assert(failedRefresh.Version==null&&!failedRefresh.CanInstall,"failed refresh returned a stale success");
+  var retried=await client.CheckUpdateAsync(true,default);Assert(retried.Version==null&&!retried.CanInstall,"failed refresh left a stale success cached");
+  Assert(staleHandler.ApiRequests==2&&staleHandler.AtomRequests==2,"failed refresh did not respect the rate-limit window");
+  bool staleDownload=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(InvalidOperationException){staleDownload=true;}Assert(staleDownload,"failed refresh left a downloadable installer");
+ }
+ var cancelUpdate=new BlockingHandler();
+ using(var client=new ClientServices(Path.Combine(directory,"update-cancel"),cancelUpdate,currentVersion:"Beta-0.4.4.17"))
+ {
+  using var cts=new CancellationTokenSource();var checking=client.CheckUpdateAsync(true,cts.Token);await cancelUpdate.Started.Task;cts.Cancel();
+  bool canceled=false;try{await checking;}catch(OperationCanceledException){canceled=true;}
+  Assert(canceled&&cancelUpdate.Cancelled,"update check cancellation was not honored");
+ }
+ var slowDownload=new SlowDownloadHandler();
+ using(var client=new ClientServices(Path.Combine(directory,"download-cancel"),new FakeHandler("["+ReleaseFeed("Beta-9.9.9.9",true,sha)+"]"),slowDownload,updateAssetSuffix:"Setup-x64.exe",currentVersion:"Beta-0.4.4.17"))
+ {
+  await client.CheckUpdateAsync(true,default);
+  using var cts=new CancellationTokenSource();var downloading=client.DownloadUpdateAsync((_,_)=>{},cts.Token);await slowDownload.Started.Task;cts.Cancel();
+  bool canceled=false;try{await downloading;}catch(OperationCanceledException){canceled=true;}
+  Assert(canceled,"download cancellation was not honored");
+  Assert(!Directory.EnumerateFiles(Path.Combine(directory,"download-cancel"),"*.exe",SearchOption.AllDirectories).Any(),"canceled download retained a partial file");
+ }
  var diagnosticDirectory=Path.Combine(directory,"diagnostics");var diagnosticHandler=new FakeHandler();
  using(var diagnosticClient=new ClientServices(diagnosticDirectory,diagnosticHandler))
  {
@@ -210,4 +339,53 @@ sealed class BlockingHandler:HttpMessageHandler
 {
  public TaskCompletionSource Started{get;}=new(TaskCreationOptions.RunContinuationsAsynchronously);public bool Cancelled;
  protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct){Started.SetResult();try{await Task.Delay(Timeout.Infinite,ct);}catch(OperationCanceledException){Cancelled=true;throw;}return new HttpResponseMessage(HttpStatusCode.OK);}
+}
+sealed class UpdateHandler:HttpMessageHandler
+{
+ public int ApiRequests,AtomRequests,LatestRequests;public HttpStatusCode ApiStatus{get;set;}=HttpStatusCode.OK;public string ApiFeed{get;set;}="{}";public string AtomFeed{get;set;}="";public string? RetryAfter{get;set;}
+ public string? LatestLocation{get;set;}
+ protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
+ {
+  if(request.RequestUri!.Host=="api.github.com"){ApiRequests++;if(ApiStatus==HttpStatusCode.OK)return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(ApiFeed)});var response=new HttpResponseMessage(ApiStatus);if(RetryAfter!=null)response.Headers.TryAddWithoutValidation("Retry-After",RetryAfter);return Task.FromResult(response);}
+  if(request.RequestUri.AbsoluteUri=="https://github.com/Muchuaner/safe-code/releases.atom"){AtomRequests++;return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(AtomFeed,Encoding.UTF8,"application/atom+xml")});}
+  if(request.RequestUri.AbsoluteUri=="https://github.com/Muchuaner/safe-code/releases/latest"&&LatestLocation!=null){LatestRequests++;var response=new HttpResponseMessage(HttpStatusCode.Found);response.Headers.Location=new Uri(LatestLocation,UriKind.RelativeOrAbsolute);return Task.FromResult(response);}
+  return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+ }
+}
+sealed class GatedUpdateHandler(string feed):HttpMessageHandler
+{
+ int apiRequests;
+ public int ApiRequests=>Volatile.Read(ref apiRequests);
+ public TaskCompletionSource Started{get;}=new(TaskCreationOptions.RunContinuationsAsynchronously);
+ public TaskCompletionSource Release{get;}=new(TaskCreationOptions.RunContinuationsAsynchronously);
+ protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
+ {
+  if(request.RequestUri!.Host!="api.github.com")return new HttpResponseMessage(HttpStatusCode.NotFound);
+  Interlocked.Increment(ref apiRequests);Started.TrySetResult();await Release.Task.WaitAsync(ct);
+  return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(feed)};
+ }
+}
+sealed class SlowFallbackHandler:HttpMessageHandler
+{
+ public TaskCompletionSource Started{get;}=new(TaskCreationOptions.RunContinuationsAsynchronously);
+ protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
+ {
+  if(request.RequestUri!.Host=="api.github.com")return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden));
+  return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StreamContent(new SlowReadStream(Started))});
+ }
+}
+sealed class SlowDownloadHandler:HttpMessageHandler
+{
+ public TaskCompletionSource Started{get;}=new(TaskCreationOptions.RunContinuationsAsynchronously);
+ protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StreamContent(new SlowReadStream(Started))});
+}
+sealed class SlowReadStream(TaskCompletionSource started):Stream
+{
+ int reads;
+ public override bool CanRead=>true;public override bool CanSeek=>false;public override bool CanWrite=>false;public override long Length=>throw new NotSupportedException();
+ public override long Position{get=>throw new NotSupportedException();set=>throw new NotSupportedException();}
+ public override void Flush(){}
+ public override int Read(byte[] buffer,int offset,int count)=>ReadAsync(buffer.AsMemory(offset,count),default).AsTask().GetAwaiter().GetResult();
+ public override async ValueTask<int> ReadAsync(Memory<byte> buffer,CancellationToken ct){if(reads++==0){started.TrySetResult();buffer.Span[0]=0x4d;return 1;}await Task.Delay(Timeout.Infinite,ct);return 0;}
+ public override long Seek(long offset,SeekOrigin origin)=>throw new NotSupportedException();public override void SetLength(long value)=>throw new NotSupportedException();public override void Write(byte[] buffer,int offset,int count)=>throw new NotSupportedException();
 }

@@ -6,6 +6,8 @@ using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Xml;
+using System.Xml.Linq;
 using SafeCode.Core;
 
 namespace SafeCode.Desktop;
@@ -28,11 +30,18 @@ internal sealed record UpdateInfo(string CurrentVersion,string? Version,string S
 internal sealed class ClientServices : IDisposable
 {
     private const string Repository="Muchuaner/safe-code";
+    private const string ReleasesPage="https://github.com/"+Repository+"/releases";
+    private const string ReleasesAtom=ReleasesPage+".atom";
+    private const string ReleaseTagPrefix=ReleasesPage+"/tag/";
+    private const string ReleasesFeedId="tag:github.com,2008:"+ReleasesPage;
+    private const string AtomNamespace="http://www.w3.org/2005/Atom";
+    private const string UnknownUpdateStatus="GitHub 暂时限制了更新查询，且无法从官方发布页确认版本，请稍后重试。";
     private const int ExplicitOptInVersion=1;
     private const int CurrentDiagnosticScope=1;
     private readonly string preferencesPath;
     private readonly string directory;
     private readonly string updateAssetSuffix;
+    private readonly string currentVersion;
     private readonly Uri? endpoint;
     private readonly HttpClient http;
     private readonly HttpMessageHandler? downloadTransport;
@@ -53,13 +62,17 @@ internal sealed class ClientServices : IDisposable
     private FeedbackContext? RecentFailure=>DiagnosticsAllowed&&DateTimeOffset.UtcNow-latestFailureAt<TimeSpan.FromHours(24)?latestFailure:null;
     private readonly SemaphoreSlim diagnosticSlots=new(2,2);
     private readonly string eventId=Guid.NewGuid().ToString();
-    private (string Version,string Url,string Digest,long Size)? release;
+    private sealed record ReleaseAsset(string Version,string Url,string Digest,long Size);
+    private ReleaseAsset? release;
     private DateTimeOffset lastCheck;
+    private DateTimeOffset apiBlockedUntil;
     private UpdateInfo? lastUpdate;
+    private bool lastUpdateFromFallback;
+    private readonly SemaphoreSlim updateCheckGate=new(1,1);
     public static string Version=>Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]??Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)??"0.4.3";
-    public ClientServices(string directory,HttpMessageHandler? transport=null,HttpMessageHandler? downloadTransport=null,string? updateAssetSuffix=null,bool endpointEnabled=true)
+    public ClientServices(string directory,HttpMessageHandler? transport=null,HttpMessageHandler? downloadTransport=null,string? updateAssetSuffix=null,bool endpointEnabled=true,string? currentVersion=null)
     {
-        http=transport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(transport);http.MaxResponseContentBufferSize=1048576;http.Timeout=TimeSpan.FromSeconds(15);this.downloadTransport=downloadTransport;this.updateAssetSuffix=updateAssetSuffix??AssetSuffix;
+        http=transport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(transport);http.MaxResponseContentBufferSize=1048576;http.Timeout=TimeSpan.FromSeconds(15);this.downloadTransport=downloadTransport;this.updateAssetSuffix=updateAssetSuffix??AssetSuffix;this.currentVersion=string.IsNullOrWhiteSpace(currentVersion)?Version:currentVersion;
         this.directory=directory;Directory.CreateDirectory(directory);preferencesPath=Path.Combine(directory,"usage-preferences.json");
         try{preferences=JsonSerializer.Deserialize<UsagePreferences>(File.ReadAllText(preferencesPath),JsonDefaults.Options)??new();}catch(IOException){preferences=new();}catch(JsonException){preferences=new();}
         if(preferences.OptInVersion<ExplicitOptInVersion)
@@ -78,7 +91,7 @@ internal sealed class ClientServices : IDisposable
             preferences.DiagnosticInstallationId="";
             preferences.DiagnosticScopeVersion=CurrentDiagnosticScope;
         }
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+Version);
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+this.currentVersion);
         string config=Path.Combine(AppContext.BaseDirectory,"service-endpoints.json");
         try{if(endpointEnabled&&File.Exists(config)){using var doc=JsonDocument.Parse(File.ReadAllText(config));if(doc.RootElement.TryGetProperty("feedbackBaseUrl",out var value)&&Uri.TryCreate(value.GetString(),UriKind.Absolute,out var uri)&&uri.Scheme=="https"&&!uri.IsLoopback&&string.IsNullOrEmpty(uri.UserInfo)&&uri.AbsolutePath=="/"&&string.IsNullOrEmpty(uri.Query)&&string.IsNullOrEmpty(uri.Fragment))endpoint=uri;}}catch(IOException){}catch(JsonException){}catch(InvalidOperationException){}
     }
@@ -232,18 +245,114 @@ internal sealed class ClientServices : IDisposable
     }
     public async Task<UpdateInfo> CheckUpdateAsync(bool force,CancellationToken ct)
     {
-        if(lastUpdate!=null&&DateTimeOffset.UtcNow-lastCheck<TimeSpan.FromSeconds(force?30:43200))return lastUpdate;
+        await updateCheckGate.WaitAsync(ct);
+        try
+        {
+            var now=DateTimeOffset.UtcNow;
+            if(lastUpdate!=null&&now-lastCheck<TimeSpan.FromSeconds(force?30:43200)
+                &&(!lastUpdateFromFallback||now<apiBlockedUntil))return lastUpdate;
+            // A refresh must not let a previous success survive a failed request.
+            lastUpdate=null;release=null;
+            bool betaChannel=ReleaseNumber.Parse(currentVersion)?.Beta==true;
+            if(now>=apiBlockedUntil)
+            {
+                using var request=new HttpRequestMessage(HttpMethod.Get,"https://api.github.com/repos/"+Repository+(betaChannel?"/releases?per_page=100":"/releases/latest"));request.Headers.Accept.ParseAdd("application/vnd.github+json");
+                using var response=await http.SendAsync(request,ct);
+                if(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+                {
+                    apiBlockedUntil=RateLimitUntil(response);
+                }
+                else
+                {
+                    apiBlockedUntil=DateTimeOffset.MinValue;
+                    if(response.StatusCode==HttpStatusCode.NotFound)return CacheUpdate(new(currentVersion,null,betaChannel?"尚未发布测试版本":"尚未发布正式版本",null));
+                    response.EnsureSuccessStatusCode();using var doc=JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));var root=doc.RootElement;
+                    if(betaChannel){JsonElement? best=null;ReleaseNumber? bestNumber=null;foreach(var candidate in root.EnumerateArray()){if(candidate.GetProperty("draft").GetBoolean())continue;var number=ReleaseNumber.Parse(candidate.GetProperty("tag_name").GetString()??"");if(number==null||(candidate.GetProperty("prerelease").GetBoolean()&&!number.Beta))continue;if(bestNumber==null||number.CompareTo(bestNumber)>0){best=candidate;bestNumber=number;}}if(best==null)return CacheUpdate(new(currentVersion,null,"尚未发布测试版本",null));root=best.Value;}
+                    var update=ParseRelease(root,currentVersion,updateAssetSuffix);
+                    if(update.CanInstall){string name="SafeCode-"+update.Version+"-"+updateAssetSuffix;var asset=root.GetProperty("assets").EnumerateArray().First(x=>x.GetProperty("name").GetString()==name);release=new(update.Version!,asset.GetProperty("browser_download_url").GetString()!,asset.GetProperty("digest").GetString()![7..],asset.GetProperty("size").GetInt64());}
+                    return CacheUpdate(update);
+                }
+            }
+            var fallback=await CheckReleaseFallbackAsync(betaChannel,ct);
+            if(fallback.Status==UnknownUpdateStatus)return fallback;
+            return CacheUpdate(fallback,fromFallback:true);
+        }
+        finally{updateCheckGate.Release();}
+    }
+    private UpdateInfo CacheUpdate(UpdateInfo update,bool fromFallback=false)
+    {
         lastCheck=DateTimeOffset.UtcNow;
-        bool betaChannel=ReleaseNumber.Parse(Version)?.Beta==true;
-        using var request=new HttpRequestMessage(HttpMethod.Get,"https://api.github.com/repos/"+Repository+(betaChannel?"/releases?per_page=100":"/releases/latest"));request.Headers.Accept.ParseAdd("application/vnd.github+json");
-        using var response=await http.SendAsync(request,ct);
-        if(response.StatusCode==HttpStatusCode.NotFound)return lastUpdate=new(Version,null,"尚未发布正式版本",null);
-        if(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)throw new IOException("GitHub 暂时限制了查询频率，请稍后重试。");
-        response.EnsureSuccessStatusCode();using var doc=JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));var root=doc.RootElement;
-        if(betaChannel){JsonElement? best=null;ReleaseNumber? bestNumber=null;foreach(var candidate in root.EnumerateArray()){if(candidate.GetProperty("draft").GetBoolean())continue;var number=ReleaseNumber.Parse(candidate.GetProperty("tag_name").GetString()??"");if(number==null||(candidate.GetProperty("prerelease").GetBoolean()&&!number.Beta))continue;if(bestNumber==null||number.CompareTo(bestNumber)>0){best=candidate;bestNumber=number;}}if(best==null)return lastUpdate=new(Version,null,"尚未发布测试版本",null);root=best.Value;}
-        var update=ParseRelease(root,Version,updateAssetSuffix);release=null;
-        if(update.CanInstall){string name="SafeCode-"+update.Version+"-"+updateAssetSuffix;var asset=root.GetProperty("assets").EnumerateArray().First(x=>x.GetProperty("name").GetString()==name);release=(update.Version!,asset.GetProperty("browser_download_url").GetString()!,asset.GetProperty("digest").GetString()![7..],asset.GetProperty("size").GetInt64());}
+        lastUpdateFromFallback=fromFallback;
         return lastUpdate=update;
+    }
+    private static DateTimeOffset RateLimitUntil(HttpResponseMessage response)
+    {
+        var now=DateTimeOffset.UtcNow;var until=now+TimeSpan.FromMinutes(5);bool parsed=false;
+        if(response.Headers.RetryAfter is {} retry)
+        {
+            if(retry.Delta is {} delta){until=delta>DateTimeOffset.MaxValue-now?DateTimeOffset.MaxValue:now+delta;parsed=true;}
+            else if(retry.Date is {} date){until=date;parsed=true;}
+        }
+        if(!parsed&&response.Headers.TryGetValues("X-RateLimit-Reset",out var values)&&long.TryParse(values.FirstOrDefault(),out var seconds)&&seconds>0)
+        {
+            try{until=DateTimeOffset.FromUnixTimeSeconds(seconds);parsed=true;}catch(ArgumentOutOfRangeException){}
+        }
+        if(!parsed||until<=now)until=now+TimeSpan.FromMinutes(5);
+        return until;
+    }
+    private async Task<UpdateInfo> CheckReleaseFallbackAsync(bool betaChannel,CancellationToken ct)
+    {
+        try
+        {
+            var installed=ReleaseNumber.Parse(currentVersion);
+            if(installed==null)return UnknownFallback();
+            using var request=new HttpRequestMessage(HttpMethod.Get,betaChannel?ReleasesAtom:ReleasesPage+"/latest");
+            if(betaChannel)request.Headers.Accept.ParseAdd("application/atom+xml, application/xml;q=0.9");
+            using var response=await http.SendAsync(request,ct);
+            if(!betaChannel)
+            {
+                // GitHub's latest release URL identifies the formal release independently of its tag name.
+                if(response.StatusCode!=HttpStatusCode.Found||response.Headers.Location is not {} location)return UnknownFallback();
+                var tag=TagFromReleaseLink(new Uri(request.RequestUri!,location).AbsoluteUri);
+                var number=ReleaseNumber.Parse(tag??"");
+                return number is {Beta:false} ? FallbackResult(installed,number,tag!,"官方发布页未发现更新") : UnknownFallback();
+            }
+            response.EnsureSuccessStatusCode();
+            return ParseAtomRelease(await response.Content.ReadAsStringAsync(ct),installed);
+        }
+        catch(OperationCanceledException) when(ct.IsCancellationRequested){throw;}
+        catch(Exception e) when(e is HttpRequestException or IOException or XmlException or UriFormatException or OperationCanceledException){return UnknownFallback();}
+    }
+    private UpdateInfo UnknownFallback()=>new(currentVersion,null,UnknownUpdateStatus,ReleasesPage);
+    private UpdateInfo ParseAtomRelease(string xml,ReleaseNumber installed)
+    {
+        XNamespace atom=AtomNamespace;
+        using var reader=XmlReader.Create(new StringReader(xml),new XmlReaderSettings{DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null,MaxCharactersInDocument=2097152});
+        var feed=XDocument.Load(reader).Root;
+        if(feed?.Name!=atom+"feed"||(string?)feed.Element(atom+"id")!=ReleasesFeedId)return UnknownFallback();
+
+        ReleaseNumber? best=null;
+        string? bestTag=null;
+        foreach(var link in feed.Elements(atom+"entry").Elements(atom+"link"))
+        {
+            if(((string?)link.Attribute("rel")??"alternate")!="alternate")continue;
+            var tag=TagFromReleaseLink((string?)link.Attribute("href"));
+            var number=ReleaseNumber.Parse(tag??"");
+            if(number!=null&&number.CompareTo(best)>0){best=number;bestTag=tag;}
+        }
+        // Atom has no prerelease flag. A newer tag is an advisory link to the official release page.
+        return best==null ? UnknownFallback() : FallbackResult(installed,best,bestTag!,"官方发布订阅未发现更新");
+    }
+    private static string? TagFromReleaseLink(string? href) =>
+        href?.StartsWith(ReleaseTagPrefix,StringComparison.Ordinal)==true
+            ? Uri.UnescapeDataString(href[ReleaseTagPrefix.Length..]) : null;
+    private UpdateInfo FallbackResult(ReleaseNumber installed,ReleaseNumber latest,string tag,string sameVersionStatus)
+    {
+        int comparison=latest.CompareTo(installed);
+        if(comparison<0)return UnknownFallback();
+        if(comparison==0)return new(currentVersion,null,sameVersionStatus,ReleasesPage);
+        string version=tag.StartsWith('v')?tag[1..]:tag;
+        return new(currentVersion,version,"发现新版本 "+version+"（请前往官方发布页确认并下载）",ReleaseTagPrefix+Uri.EscapeDataString(tag),false);
     }
     private static string AssetSuffix=>OperatingSystem.IsMacOS()?(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture==System.Runtime.InteropServices.Architecture.Arm64?"macOS-arm64.dmg":"macOS-x64.dmg"):"Setup-x64.exe";
     internal static UpdateInfo ParseRelease(JsonElement root,string current,string assetSuffix="Setup-x64.exe")
@@ -267,7 +376,7 @@ internal sealed class ClientServices : IDisposable
         var item=release??throw new InvalidOperationException("请先检查新版本；没有可验证的安装包时可打开 GitHub 下载页。");
         string folder=Path.Combine(directory,"Updates",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
         string file=Path.Combine(folder,"SafeCode-"+item.Version+"-"+updateAssetSuffix);
-        using var download=downloadTransport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(downloadTransport,false);download.Timeout=TimeSpan.FromMinutes(20);download.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+Version);
+        using var download=downloadTransport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(downloadTransport,false);download.Timeout=TimeSpan.FromMinutes(20);download.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+currentVersion);
         Uri uri=new(item.Url);
         try{
             HttpResponseMessage? response=null;

@@ -1,6 +1,6 @@
 # Safe Code for macOS
 
-Beta-0.4.4.17 的 macOS 安装包支持 Apple 芯片（arm64）和 macOS 15 或以后版本。最低系统版本按 [.NET 10 支持列表](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md) 设定。
+Beta-0.4.4.18 的 macOS 安装包支持 Apple 芯片（arm64）和 macOS 15 或以后版本。最低系统版本按 [.NET 10 支持列表](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md) 设定。
 
 打开对应 DMG，将 Safe Code.app 拖入 Applications。应用自带 .NET 核心，不需要安装 Python、Node.js、.NET SDK、WebView2 或 Windows 模拟器。系统 WKWebView 承载界面，AppKit 提供窗口、文件夹选择器、剪贴板和菜单栏面板。设置、目录、进度与确认等对话框在各自的 AppKit 窗口中打开。嵌套对话框关闭后回到原表单。
 
