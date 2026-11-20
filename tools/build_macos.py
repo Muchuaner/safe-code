@@ -7,7 +7,7 @@ p=argparse.ArgumentParser();p.add_argument('--arch',choices=['arm64'],default='a
 sdk=subprocess.check_output([a.dotnet,'--list-sdks'],text=True)
 if not any(line.startswith('10.') for line in sdk.splitlines()):raise SystemExit('需要 .NET 10 SDK；可用 --dotnet 指定 SDK 所在的 dotnet。')
 if not shutil.which('swiftc'):raise SystemExit('需要 Apple Command Line Tools / Swift。')
-version='Beta-0.4.4.22';base=a.output_dir.resolve()/a.arch;base.mkdir(parents=True,exist_ok=True);work=a.work_dir.resolve()/version/a.arch;work.mkdir(parents=True,exist_ok=True);app=work/'Safe Code.app'
+version='Beta-0.4.4.23';base=a.output_dir.resolve()/a.arch;base.mkdir(parents=True,exist_ok=True);work=a.work_dir.resolve()/version/a.arch;work.mkdir(parents=True,exist_ok=True);app=work/'Safe Code.app'
 if app.exists():shutil.rmtree(app)
 contents=app/'Contents';resources=contents/'Resources';core=resources/'Core';web=resources/'Web';macos=contents/'MacOS'
 web_pages=web/'web'
@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='safecode-icon-') as temp:
  for size in [16,32,128,256,512]:
   for scale in [1,2]:run(['sips','-z',str(size*scale),str(size*scale),root/'assets/icons/safe-code-shortcut.png','--out',iconset/('icon_'+str(size)+'x'+str(size)+('@2x' if scale==2 else '')+'.png')],stdout=subprocess.DEVNULL)
  run(['iconutil','-c','icns',iconset,'-o',resources/'AppIcon.icns'])
-info={'CFBundleIdentifier':'org.safecode.desktop','CFBundleName':'Safe Code','CFBundleDisplayName':'Safe Code','CFBundleExecutable':'SafeCode','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.4.4','CFBundleVersion':'0.4.4.22','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'15.0','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'用系统 Terminal 打开已核验服务器的 SSH 终端；不向终端传递密码。','NSHumanReadableCopyright':'Safe Code contributors. MIT License.'}
+info={'CFBundleIdentifier':'org.safecode.desktop','CFBundleName':'Safe Code','CFBundleDisplayName':'Safe Code','CFBundleExecutable':'SafeCode','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.4.4','CFBundleVersion':'0.4.4.23','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'15.0','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'用系统 Terminal 打开已核验服务器的 SSH 终端；不向终端传递密码。','NSHumanReadableCopyright':'Safe Code contributors. MIT License.'}
 (contents/'Info.plist').write_bytes(plistlib.dumps(info))
 shutil.copy2(root/'LICENSE',resources/'LICENSE')
 shutil.copy2(root/'third_party'/'THIRD_PARTY_NOTICES.md',resources/'THIRD_PARTY_NOTICES.md')

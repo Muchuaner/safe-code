@@ -12,6 +12,8 @@ import re
 import stat
 import tempfile
 
+from desktop_gateway import (GatewayError, cloudcli_extended_context, cloudcli_web_login,
+                             cloudcli_web_origin, cloudcli_websocket)
 from host_control_mcp import ToolError, bridge_arguments, call_tool, mac_workspace_path
 
 
@@ -106,6 +108,7 @@ def setup_lock(directory):
 
 def configure(args, home, config_path):
     original_config, old_config = read_object(config_path, allow_missing=True)
+    origin = cloudcli_web_origin(args.web_origin if args.web_origin is not None else old_config.get('webOrigin'))
     default_project = home/'.local/share/safe-code/cloudcli-workspace'
     project = args.project or default_project
     if not project.is_absolute():
@@ -143,6 +146,16 @@ def configure(args, home, config_path):
     if not isinstance(key, str) or not re.fullmatch(r'[\x21-\x7e]{16,512}', key):
         raise ValueError('Enter the CloudCLI API Key generated in CloudCLI settings.')
     config = {'apiKey': key, 'port': args.port, 'projectPath': str(project), 'models': models, 'hostControl': target}
+    if origin:
+        config['webOrigin'] = origin
+    extended = args.long_context_models
+    if extended is None:
+        extended = [model for model in old_config.get('extendedContextModels', []) if model in models]
+    if cloudcli_extended_context(extended, models):
+        config['extendedContextModels'] = extended
+    if credentials := desktop_questions(args.desktop_questions, args.port, old_config):
+        config['desktopQuestions'] = credentials
+    set_desktop_tool_approvals(config, args.desktop_tool_approvals, old_config.get('desktopToolApprovals', False))
     claude_path = home/'.claude.json'
     original_claude, claude = read_object(claude_path)
     servers = project_servers(claude, str(project), create=True)
@@ -189,6 +202,47 @@ def disable(home, config_path):
     config_path.unlink()
 
 
+def desktop_questions(enabled, port, config):
+    if enabled is None:
+        return config.get('desktopQuestions')
+    if not enabled:
+        return None
+    cloudcli_websocket()
+    username = input('CloudCLI web username: ').strip()
+    password = getpass.getpass('CloudCLI web password: ')
+    if not 0 < len(username) <= 512 or not 0 < len(password) <= 512:
+        raise ValueError('Enter the existing CloudCLI web account credentials.')
+    credentials = {'username': username, 'password': password}
+    cloudcli_web_login(port, credentials)
+    return credentials
+
+
+def set_desktop_tool_approvals(config, enabled, previous=False):
+    if enabled is True and not config.get('desktopQuestions'):
+        raise ValueError('Enable the authenticated CloudCLI connection with --desktop-questions first.')
+    if (previous if enabled is None else enabled) and config.get('desktopQuestions'):
+        config['desktopToolApprovals'] = True
+    else:
+        config.pop('desktopToolApprovals', None)
+
+
+def update_gateway_capabilities(path, args):
+    original, config = read_object(path, allow_missing=True)
+    port = config.get('port', 3001)
+    if original is None or type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('Configure the CloudCLI gateway before enabling optional capabilities.')
+    if args.long_context_models is not None:
+        config['extendedContextModels'] = cloudcli_extended_context(args.long_context_models, config['models'])
+    if args.desktop_questions is not None:
+        credentials = desktop_questions(args.desktop_questions, port, config)
+        if credentials is None:
+            config.pop('desktopQuestions', None)
+        else:
+            config['desktopQuestions'] = credentials
+    set_desktop_tool_approvals(config, args.desktop_tool_approvals, config.get('desktopToolApprovals', False))
+    atomic_settings(path, config, original)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--disable', action='store_true', help='remove the CloudCLI binding')
@@ -200,11 +254,23 @@ def main():
     parser.add_argument('--device-name', help='display label for the selected Mac')
     parser.add_argument('--client-id', help='the existing SafeCode host control ID, if several exist')
     parser.add_argument('--port', type=int, default=3001, help='CloudCLI loopback listener port')
+    parser.add_argument('--web-origin', help='external HTTPS origin of CloudCLI for conversation links')
+    parser.add_argument('--desktop-questions', action=argparse.BooleanOptionalAction, default=None,
+                        help='answer CloudCLI questions natively in Claude Desktop')
+    parser.add_argument('--desktop-tool-approvals', action=argparse.BooleanOptionalAction, default=None,
+                        help='use CloudCLI standard permissions and ask for one-time approvals in Claude Desktop')
+    long_context = parser.add_mutually_exclusive_group()
+    long_context.add_argument('--long-context-model', dest='long_context_models', action='append',
+                              help='an allowed Claude model with verified 1M context access, repeat as needed')
+    long_context.add_argument('--clear-long-context-models', dest='long_context_models', action='store_const', const=[],
+                              help='remove 1M context capabilities from the gateway catalog')
     parser.add_argument('--model', dest='models', action='append', help='allowed Claude model ID; repeat for several')
     args = parser.parse_args()
     if not os.getuid():
         parser.error('run this command as the CloudCLI working account')
-    if not args.disable and not (args.workspace and args.models):
+    capabilities_only = (args.desktop_questions is not None or args.desktop_tool_approvals is not None
+                         or args.long_context_models is not None) and not (args.workspace or args.models)
+    if not args.disable and not capabilities_only and not (args.workspace and args.models):
         parser.error('--workspace and at least one --model are required')
     home = Path.home()
     config_path = home/'.config/safe-code/cloudcli-gateway.json'
@@ -212,11 +278,14 @@ def main():
         with setup_lock(config_path.parent):
             if args.disable:
                 disable(home, config_path)
+            elif capabilities_only:
+                update_gateway_capabilities(config_path, args)
             else:
                 configure(args, home, config_path)
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, ToolError) as error:
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, ToolError, GatewayError) as error:
         # Do not emit JSON decoder input, secrets, paths, or subprocess output.
-        parser.exit(1, (str(error) if type(error) in (ValueError, ToolError) else 'Unable to update the CloudCLI gateway configuration.')+'\n')
+        expected = type(error) in (ValueError, ToolError) or isinstance(error, GatewayError)
+        parser.exit(1, (str(error) if expected else 'Unable to update the CloudCLI gateway configuration.')+'\n')
     print('CloudCLI backend disabled. Reopen or restart the SafeCode gateway to apply.' if args.disable
           else 'CloudCLI backend configured. Reopen or restart the SafeCode gateway to apply.')
 
