@@ -142,7 +142,8 @@ internal sealed class MacBackend : IDisposable
             case "desktopKey.enable":
                 if(claudeDesktop.Configured)throw new InvalidOperationException("请先停用 Claude Desktop 的 SSH 接入。");
                 _=LocalSecrets.RequireKey();
-                return await (keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:services)).EnableAsync(Read("key"),ct);
+                return await (keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:services))
+                    .EnableAsync(Read("key"),ct,replace:Flag("replace"),useSaved:Flag("useSaved"));
             case "desktopKey.disable": return await (keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:services)).DisableAsync(ct);
             case "safeCodeApi.publicStatus":
                 return await ReadGatewayStatusAsync(RequireGatewaySession(),ct);

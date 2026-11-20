@@ -320,9 +320,10 @@ public sealed class MainWindow : Window
             case "desktopKey.enable":
                 claudeDesktop??=new ClaudeDesktopBridge(dataDirectory);
                 if((await claudeDesktop.RefreshAsync(lifetime.Token)).Managed)throw new InvalidOperationException("请先停止本机的 SSH Desktop 桥接再使用 Key。");
-                using(var policy=Microsoft.Win32.Registry.CurrentUser.OpenSubKey(ClaudeDesktopPolicy.RegistryPath))
-                    if(policy?.GetValue("inferenceProvider") is string)throw new InvalidOperationException("Claude 有现存的网关管理策略，请先停用原接入。");
-                return await (keyAccess??=new DesktopKeyAccess(dataDirectory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null)).EnableAsync(Read("key"),lifetime.Token);
+                return await (keyAccess??=new DesktopKeyAccess(dataDirectory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null))
+                    .EnableAsync(Read("key"),lifetime.Token,
+                        replace:args.TryGetProperty("replace",out var replaceKey)&&replaceKey.ValueKind==JsonValueKind.True,
+                        useSaved:args.TryGetProperty("useSaved",out var useSavedKey)&&useSavedKey.ValueKind==JsonValueKind.True);
             case "desktopKey.disable": return await (keyAccess??=new DesktopKeyAccess(dataDirectory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null)).DisableAsync(lifetime.Token);
             case "safeCodeApi.publicStatus":
                 return await ReadGatewayStatusAsync(RequireGatewaySession());

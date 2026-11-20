@@ -19,7 +19,7 @@ with sync_playwright() as p:
     page=browser.new_page(viewport={'width':1000,'height':900});errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
     page.add_init_script('''
       window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;window.claudeStartCalls=[];window.claudeStopCalls=0;window.clientOpenCalls=[];window.clientOpenError=null;
-      window.claudeWarningAccepts=0;
+      window.claudeWarningAccepts=0;window.keyEnableCalls=[];window.keyDisableCalls=0;
       window.chrome={webview:{postMessage(m){
         if(m.op==='notice.claudeDesktop.accept'){
           window.claudeWarningAccepts++;
@@ -33,9 +33,15 @@ with sync_playwright() as p:
           if(m.op==='desktopKey.status'&&window.keyStatusFailure){
             queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,...window.keyStatusFailure}));return;
           }
-          if(m.op==='desktopKey.enable')window.keyEnabled=m.args.key==='sc1.fixture';
-          if(m.op==='desktopKey.disable')window.keyEnabled=false;
-          queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{configured:!!window.keyEnabled,running:!!window.keyEnabled}}));return;
+          if(m.op==='desktopKey.enable'){
+            window.keyEnableCalls.push(m.args);
+            if(m.args.useSaved? !window.keyConfigured : !['sc1.fixture','sc1.replacement'].includes(m.args.key)){
+              queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,error:'Key 无效或已撤销。'}));return;
+            }
+            window.keyConfigured=true;window.keyRunning=true;
+          }
+          if(m.op==='desktopKey.disable'){window.keyDisableCalls++;window.keyConfigured=false;window.keyRunning=false;}
+          queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{configured:!!window.keyConfigured,running:!!window.keyRunning}}));return;
         }
         if(m.op==='claudeDesktop.start'){window.claudeStartCalls.push(m);queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.__claudeActive}));return;}
         if(m.op==='claudeDesktop.stop'){window.claudeStopCalls++;queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.__claudeStopped}));return;}
@@ -67,14 +73,40 @@ with sync_playwright() as p:
     assert page.locator('#desktop-key-open').inner_text()=='打开\nClaude Desktop'
     page.locator('#desktop-key-close').click()
     page.evaluate("showScreen('workspace');switchMode('maintenance')")
-    page.evaluate("window.keyStatusFailure={result:{configured:true,running:false,error:'本机策略无法访问'}}")
+    page.evaluate("window.keyRunning=false;window.keyStatusFailure={result:{configured:true,running:false,error:'本机策略无法访问'}}")
     page.locator('#desktop-key-settings').click()
     page.get_by_text('已保存 Key，暂未恢复接入。',exact=False).wait_for()
     assert not page.locator('#desktop-key-input').is_visible()
     assert page.locator('#desktop-key-disable').is_enabled()
+    assert page.locator('#desktop-key-replace').is_enabled() and page.locator('#desktop-key-resume').is_enabled()
+    assert not page.locator('#desktop-key-open').is_visible()
+    page.locator('#desktop-key-resume').click()
+    page.locator('#desktop-key-open').wait_for()
+    assert page.evaluate('window.keyEnableCalls.at(-1)')=={'useSaved':True}
     page.locator('#desktop-key-close').click()
     page.evaluate("window.keyStatusFailure=null")
     page.locator('#desktop-key-settings').click()
+    page.locator('#desktop-key-replace').click()
+    assert page.locator('#desktop-key-input').evaluate('e=>document.activeElement===e')
+    assert page.locator('#desktop-key-enable').inner_text()=='验证并更换'
+    page.locator('#desktop-key-input').fill('sc1.invalid')
+    page.locator('#desktop-key-enable').click()
+    page.get_by_text('Key 无效或已撤销。',exact=True).wait_for()
+    assert page.locator('#desktop-key-input').is_visible() and page.locator('#desktop-key-input').input_value()==''
+    assert page.evaluate('window.keyRunning && window.keyDisableCalls===0')
+    page.locator('#desktop-key-replace').click()
+    assert not page.locator('#desktop-key-input').is_visible() and page.locator('#desktop-key-open').is_visible()
+    page.locator('#desktop-key-replace').click()
+    page.locator('#desktop-key-input').fill('sc1.unsent')
+    page.locator('#desktop-key-close').click()
+    page.locator('#desktop-key-settings').click()
+    assert not page.locator('#desktop-key-input').is_visible() and page.locator('#desktop-key-input').input_value()==''
+    page.locator('#desktop-key-replace').click()
+    page.locator('#desktop-key-input').fill('sc1.replacement')
+    page.locator('#desktop-key-enable').click()
+    page.locator('#desktop-key-open').wait_for()
+    assert page.evaluate('window.keyEnableCalls.at(-1)')=={'key':'sc1.replacement','replace':True}
+    assert page.evaluate('window.keyDisableCalls===0')
     page.locator('#desktop-key-disable').click()
     assert page.locator('#desktop-key-enable').is_visible()
     page.locator('#desktop-key-close').click()
