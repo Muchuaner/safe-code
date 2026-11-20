@@ -7,21 +7,26 @@
 import argparse
 import base64
 import copy
-from contextlib import closing
+from contextlib import contextmanager, closing
+from contextvars import ContextVar
+import fcntl
 import hashlib
 import hmac
+from http.client import HTTPConnection, HTTPException
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import queue
 import re
 import select
 import sqlite3
 import signal
 import shlex
+import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -121,10 +126,142 @@ def model_catalog(rows, home):
             'first_id': next(iter(models)), 'last_id': next(reversed(models))}
 
 
+REQUEST_DIAGNOSTIC = ContextVar('request_diagnostic', default=None)
+DIAGNOSTIC_HEADER = 'X-SafeCode-Gateway-Diagnostic'
+REJECTION_TYPES = frozenset((
+    'invalid_request_error', 'authentication_error', 'billing_error', 'permission_error',
+    'not_found_error', 'request_too_large', 'rate_limit_error', 'api_error', 'overloaded_error',
+))
+PROVIDER_ID = re.compile(r'req_[a-zA-Z0-9]{8,80}')
+
+
+def diagnostic(**values):
+    trace = REQUEST_DIAGNOSTIC.get()
+    if trace is not None:
+        trace.update(values)
+
+
+def anthropic_error(event, detail=None):
+    """Extract only Anthropic's fixed error fields from a CLI API-error event."""
+    event_error = event.get('error')
+    nodes = [item for item in (event, event_error, detail) if isinstance(item, dict)]
+    status = next((item['api_error_status'] for item in nodes
+                   if type(item.get('api_error_status')) is int and 400 <= item['api_error_status'] <= 599), None)
+    evidence = 'cli_event'
+    prefix = re.match(r'^(?:API Error:|API error)\s*([45]\d\d)\b', detail) if isinstance(detail, str) else None
+    if prefix:
+        if status is None:
+            evidence = 'cli_error_text'
+        status = int(prefix[1])
+        remainder = detail[prefix.end():].lstrip(' -:')
+        if remainder.startswith('{') and len(remainder) <= 16384:
+            try:
+                parsed = json.loads(remainder)
+                if isinstance(parsed, dict):
+                    nodes.append(parsed)
+            except ValueError:
+                pass
+    for item in tuple(nodes):
+        if isinstance(item.get('error'), dict):
+            nodes.append(item['error'])
+    kind = next((item['type'] for item in nodes if isinstance(item.get('type'), str) and item['type'] in REJECTION_TYPES), None)
+    request = next((item['request_id'] for item in nodes if isinstance(item.get('request_id'), str)
+                    and PROVIDER_ID.fullmatch(item['request_id'])), None)
+    if status is not None or request is not None:
+        diagnostic(stage='anthropic_response', anthropicEvidence=evidence, anthropicStatus=status,
+                   anthropicError=kind, anthropicRequestId=request)
+    return status
+
+
 class GatewayError(Exception):
     def __init__(self, message, status=502):
         super().__init__(message)
         self.status = status
+
+
+CLOUDCLI_CONFIG = Path('.config/safe-code/cloudcli-gateway.json')
+CLOUDCLI_MCP_SCRIPT = '/opt/safe-code/desktop-api/host_control_mcp.py'
+CLOUDCLI_SESSION_ID = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}')
+CLOUDCLI_ERROR_STATUS = {400, 401, 402, 403, 404, 409, 413, 422, 429, 500, 502, 503, 504, 529}
+CLOUDCLI_USAGE_FIELDS = {
+    'input_tokens': 'inputTokens',
+    'output_tokens': 'outputTokens',
+    'cache_creation_input_tokens': 'cacheCreationTokens',
+    'cache_read_input_tokens': 'cacheReadTokens',
+}
+
+
+def load_cloudcli_config(home=None):
+    """Read the work account's opt-in configuration, without probing either provider."""
+    path = (Path.home() if home is None else Path(home))/CLOUDCLI_CONFIG
+    try:
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                raise ValueError()
+            raw = stream.read(16385)
+        if len(raw) > 16384:
+            raise ValueError()
+        return cloudcli_config(json.loads(raw))
+    except (OSError, ValueError, TypeError, OverflowError):
+        raise GatewayError('CloudCLI configuration is invalid or is not private to the work account', 503) from None
+
+
+def cloudcli_config(value):
+    if not isinstance(value, dict):
+        raise ValueError()
+    port = value.get('port', 3001)
+    api_key = value.get('apiKey')
+    project = value.get('projectPath')
+    models = value.get('models')
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError()
+    if not isinstance(api_key, str) or not re.fullmatch(r'[!-~]{16,512}', api_key):
+        raise ValueError()
+    if not isinstance(project, str) or not Path(project).is_absolute() or not Path(project).is_dir():
+        raise ValueError()
+    if not isinstance(models, list) or not 1 <= len(models) <= 32 or any(
+        not isinstance(model, str) or len(model) > 80 or not model.startswith('claude-')
+        or not MODEL.fullmatch(model) or model.endswith('[1m]') for model in models
+    ) or len(set(models)) != len(models):
+        raise ValueError()
+    host = value.get('hostControl')
+    if host is not None:
+        if not isinstance(host, dict):
+            raise ValueError()
+        client = host.get('clientId')
+        workspace = host.get('workspace')
+        name = host.get('deviceName', '')
+        if not isinstance(client, str) or not re.fullmatch(r'[0-9a-f]{20}', client):
+            raise ValueError()
+        if not valid_mac_workspace(workspace):
+            raise ValueError()
+        if not isinstance(name, str) or len(name) > 100 or any(ord(c) < 32 for c in name + workspace):
+            raise ValueError()
+        roots = host.get('projectWorkspaces')
+        allow_ssh_shell = host.get('allowSshShell', False)
+        if type(allow_ssh_shell) is not bool:
+            raise ValueError()
+        host = {'clientId': client, 'workspace': workspace, 'deviceName': name}
+        if roots is not None:
+            if (not isinstance(roots, list) or not 1 <= len(roots) <= 16
+                or not all(valid_mac_workspace(root) for root in roots) or len(set(roots)) != len(roots)):
+                raise ValueError()
+            host['projectWorkspaces'] = roots
+        if allow_ssh_shell:
+            host['allowSshShell'] = True
+    return {'port': port, 'apiKey': api_key, 'projectPath': str(Path(project).resolve()), 'models': models,
+            'hostControl': host}
+
+
+def valid_mac_workspace(value):
+    return (isinstance(value, str) and value.startswith('/') and len(value.encode()) <= 4096
+            and all(part not in ('', '.', '..') for part in value[1:].split('/'))
+            and not re.search(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]', value))
 
 
 class StreamMessage:
@@ -326,6 +463,41 @@ exec "$cli" "$@"
 """
 
 
+def desktop_working_directory(data):
+    """Extract the native Environment hint for matching an authorized project."""
+    system = data.get('system') if isinstance(data, dict) else None
+    if isinstance(system, str):
+        prompt = system
+    elif isinstance(system, list) and all(isinstance(block, dict) and block.get('type') == 'text'
+                                          and isinstance(block.get('text'), str) for block in system):
+        prompt = '\n'.join(block['text'] for block in system)
+    else:
+        return None
+
+    sections = list(re.finditer(r'^# Environment[ \t]*\r?\n'
+                                r'You have been invoked in the following environment:[ \t]*\r?\n'
+                                r'((?:[ \t]*- [^\r\n]*(?:\r?\n|$))*)', prompt, re.M))
+    if len(sections) != 1:
+        return None
+
+    fields = re.findall(r'^[ \t]*- Primary working directory\b([^\r\n]*)', sections[0][1], re.M)
+    if len(fields) != 1 or not fields[0].startswith(': '):
+        return None
+    value = fields[0][2:]
+    if len(value) > 4096 or re.search(r'[\x00-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]', value):
+        return None
+    if re.match(r'^[A-Za-z]:[/\\]', value):
+        path = PureWindowsPath(value)
+        if any(part.endswith(('.', ' ')) or re.search(r'[<>:"|?*]', part)
+               or PureWindowsPath(part).is_reserved() for part in path.parts[1:]):
+            return None
+    elif value.startswith('/') and not value.startswith('//') and '\\' not in value:
+        path = PurePosixPath(value)
+    else:
+        return None
+    return path if path.is_absolute() and path.name and '..' not in path.parts else None
+
+
 def conversation_scope(data, header=None):
     # Only an explicit per-session UUID can narrow a history match.
     # A device/account-level metadata.user_id is shared across independent chats.
@@ -456,6 +628,590 @@ class DesktopHistory:
             db.execute('INSERT OR REPLACE INTO turns VALUES (?,?,?,?,?,?,?)',
                        (conversation.client_id, conversation.scope, conversation.expected, tail,
                         conversation.session_id, request_id, reply))
+
+
+class CloudCliError(GatewayError):
+    """A safe error at the CloudCLI boundary; never exposes agent text or paths."""
+    def __init__(self, message, status=502):
+        super().__init__(message, status)
+        self.error_type = {
+            401: 'authentication_error', 403: 'permission_error', 404: 'not_found_error',
+            413: 'request_too_large', 429: 'rate_limit_error', 529: 'overloaded_error',
+        }.get(status, 'invalid_request_error' if 400 <= status < 500 else 'api_error')
+
+
+def cloudcli_failure(event):
+    detail = event.get('content') or event.get('error') or event.get('message')
+    error = detail if isinstance(detail, dict) else {}
+    statuses = (event.get('api_error_status'), event.get('statusCode'), event.get('status'), error.get('status'))
+    status = next((n for n in statuses if type(n) is int and n in CLOUDCLI_ERROR_STATUS), None)
+    detail = error.get('message', detail)
+    provider_status = anthropic_error(event, detail)
+    if provider_status in CLOUDCLI_ERROR_STATUS:
+        status = provider_status
+    if status is None:
+        match = re.match(r'^API Error:\s*([45]\d\d)\b', detail) if isinstance(detail, str) else None
+        if match and int(match[1]) in CLOUDCLI_ERROR_STATUS:
+            status = int(match[1])
+        elif isinstance(detail, str) and detail.startswith('Not logged in') and '/login' in detail:
+            status = 401
+        else:
+            status = 502
+    return CloudCliError(f'CloudCLI agent reported an error (HTTP {status})' if status != 502
+                         else 'CloudCLI agent did not report a successful result', status)
+
+
+class CloudCliProgress:
+    """Translate CloudCLI notices into visible text without creating client tool calls."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.pending = ''
+        self.sent = 0
+        self.notices = 0
+        self.tools = {}
+        self.thinking = False
+
+    def notice(self, title, output=None):
+        if self.notices >= 48:
+            return
+        self.notices += 1
+        body = '\n\n> **SafeCode** · '+title
+        if isinstance(output, str) and output.strip():
+            preview = ''.join(c if c.isprintable() or c == '\n' else ' ' for c in output[:600])
+            # Indented quoted code disables Markdown links and HTML in shell output.
+            body += '\n>\n'+'\n'.join('>     '+line for line in preview.split('\n')[:10])
+            if len(output) > 600 or preview.count('\n') >= 10:
+                body += '\n>     …'
+        self.stream.text(body+'\n\n')
+
+    def feed(self, event):
+        kind = event.get('kind')
+        if kind == 'stream_delta':
+            delta = event.get('content')
+            if not isinstance(delta, str) or not delta:
+                return
+            self.pending += delta
+            # Some providers surface an error as text. Leave its raw detail in CloudCLI.
+            prefixes = ('API Error:', 'Not logged in')
+            if not self.sent and any(p.startswith(self.pending) or self.pending.startswith(p) for p in prefixes):
+                return
+            self.stream.text(self.pending[self.sent:])
+            self.sent = len(self.pending)
+        elif kind == 'text':
+            value = event['content']
+            if self.pending.startswith(value):
+                self.stream.text(value[self.sent:])
+                self.pending = self.pending[len(value):]
+                self.sent = max(0, self.sent-len(value))
+            else:
+                self.stream.text(value[self.sent:] if value.startswith(self.pending) else value)
+                self.pending = ''
+                self.sent = 0
+            self.thinking = False
+        elif kind == 'thinking' and not self.thinking:
+            self.notice('Claude 正在思考')
+            self.thinking = True
+        elif kind == 'tool_use':
+            tool, identifier = event.get('toolName'), event.get('toolId')
+            if (isinstance(tool, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,80}', tool)
+                and isinstance(identifier, str) and identifier not in self.tools and self.notices < 48):
+                self.tools[identifier] = tool
+                self.notice(f'正在运行 `{tool}`')
+                self.thinking = False
+        elif kind == 'tool_result':
+            identifier = event.get('toolId')
+            tool = self.tools.pop(identifier, None) if isinstance(identifier, str) else None
+            if tool:
+                status = '失败' if event.get('isError') is True else '已返回'
+                output = event.get('content') if tool == 'Bash' else None
+                self.notice(f'`{tool}` {status}', output)
+        elif kind == 'task_status':
+            change = event.get('event')
+            phase = None
+            if change == 'started':
+                phase = '后台任务已启动'
+            elif change == 'progress':
+                phase = '后台任务进行中'
+            elif change in ('notification', 'updated'):
+                status = event.get('status')
+                if status == 'completed':
+                    phase = '后台任务已完成'
+                elif status == 'failed':
+                    phase = '后台任务失败'
+                elif status == 'stopped':
+                    phase = '后台任务已停止'
+            if phase and (phase != '后台任务进行中' or self.notices < 12):
+                self.notice(phase)
+
+
+def cloudcli_events(response, stream=None):
+    """Consume CloudCLI's one-line data events and require successful termination."""
+    lines = total = 0
+    text = []
+    usage = dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0)
+    session = None
+    complete = False
+    progress = CloudCliProgress(stream) if stream is not None else None
+    deadline = time.monotonic() + 570
+    while time.monotonic() < deadline:
+        line = response.readline(MAX_REQUEST + 1)
+        lines += 1
+        total += len(line)
+        diagnostic(streamLines=lines, receivedBytes=total)
+        if not line:
+            break
+        if total > MAX_REQUEST or lines > 50000:
+            raise CloudCliError('CloudCLI response exceeds the gateway limit')
+        if not line.startswith(b'data:'):
+            continue
+        try:
+            event = json.loads(line[5:])
+        except (ValueError, UnicodeError):
+            raise CloudCliError('CloudCLI returned an invalid event') from None
+        if not isinstance(event, dict):
+            raise CloudCliError('CloudCLI returned an invalid event')
+        kind, event_type = event.get('kind'), event.get('type')
+        if kind == 'error' or event_type == 'error' or event.get('is_error') is True:
+            raise cloudcli_failure(event)
+        if event_type == 'session-id':
+            candidate = event.get('sessionId')
+            if not isinstance(candidate, str) or not CLOUDCLI_SESSION_ID.fullmatch(candidate):
+                raise CloudCliError('CloudCLI returned an invalid session identifier')
+            if session is not None and session != candidate:
+                raise CloudCliError('CloudCLI changed the run session identifier')
+            if session is None and progress:
+                progress.notice('已接收任务')
+            session = candidate
+        if kind == 'text' and event.get('role') == 'assistant' and not event.get('parentToolUseId'):
+            content = event.get('content')
+            if isinstance(content, str) and content.strip():
+                if (event.get('isApiErrorMessage') or event.get('is_api_error_message')
+                    or re.match(r'^API Error:\s*[45]\d\d\b', content)
+                    or content.startswith('Not logged in') and '/login' in content):
+                    raise cloudcli_failure(event)
+                text.append({'type': 'text', 'text': content})
+                if progress:
+                    progress.feed(event)
+        elif progress and kind != 'text' and not event.get('parentToolUseId'):
+            progress.feed(event)
+        if kind == 'status' and event.get('text') == 'token_budget':
+            budget = event.get('tokenBudget')
+            if isinstance(budget, dict):
+                usage.update({dst: budget[src] for dst, src in CLOUDCLI_USAGE_FIELDS.items()
+                              if type(budget.get(src)) is int and budget[src] >= 0})
+        if kind == 'complete':
+            if event.get('aborted') is True:
+                raise CloudCliError('CloudCLI run was canceled', 409)
+            if type(event.get('exitCode')) is not int or event['exitCode'] != 0 or event.get('success') is False:
+                raise cloudcli_failure(event)
+            complete = True
+        if event_type == 'done':
+            if session and complete and text:
+                return session, stream.content if stream is not None else text, usage
+            break
+    raise CloudCliError('CloudCLI ended without a confirmed assistant reply')
+
+
+class CloudCliBackend:
+    project_lock = threading.Lock()
+
+    def __init__(self, directory, config, device=None):
+        self.config = config
+        self.device = device
+        self.parallel = False
+        self.active_conversations = set()
+        self.active_lock = threading.Lock()
+        self.path = directory/'cloudcli-history.sqlite3'
+        identity = {**config, 'apiKey': hashlib.sha256(config['apiKey'].encode()).hexdigest()}
+        if config['hostControl'] is not None:
+            # Workspace and shell settings do not change the identity of a saved conversation.
+            identity['hostControl'] = {k: v for k, v in config['hostControl'].items()
+                                       if k not in ('projectWorkspaces', 'allowSshShell')}
+        self.identity = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute('CREATE TABLE IF NOT EXISTS sessions (scope TEXT NOT NULL, history TEXT NOT NULL, '
+                       'session TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (scope, history))')
+            db.execute('CREATE TABLE IF NOT EXISTS session_projects (session TEXT PRIMARY KEY NOT NULL, '
+                       'project TEXT NOT NULL, workspace TEXT, updated REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS requests (identity TEXT PRIMARY KEY, scope TEXT NOT NULL, '
+                       'reply TEXT, created REAL NOT NULL)')
+
+    def catalog(self):
+        # This catalog is local configuration, not an inference or account probe.
+        data = []
+        families = set()
+        for model in self.config['models']:
+            family = model.split('-')[1]
+            recognized = family in ('opus', 'sonnet', 'haiku', 'fable', 'mythos')
+            default = recognized and family not in families
+            families.add(family)
+            data.append({'id': model, 'type': 'model', 'display_name': model,
+                         'anthropic_family_tier': family if recognized else None,
+                         'is_family_default': default, 'supported_effort_levels': [], 'supports_1m': False})
+        return {'data': data, 'has_more': False, 'first_id': data[0]['id'], 'last_id': data[-1]['id']}
+
+    def model(self, requested):
+        if requested in self.config['models']:
+            return requested
+        if requested in ('opus', 'sonnet', 'haiku', 'fable'):
+            for model in self.config['models']:
+                if model.startswith('claude-'+requested+'-'):
+                    return model
+        raise CloudCliError('The requested model is not configured for the CloudCLI gateway', 404)
+
+    def default_project(self):
+        host = self.config['hostControl']
+        workspace = host.get('projectWorkspaces', [host['workspace']])[0] if host else None
+        return self.config['projectPath'], workspace
+
+    def allowed_workspace(self, cwd):
+        if self.device:
+            path_type = PureWindowsPath if self.device['platform'] == 'windows' else PurePosixPath
+            return str(cwd) if isinstance(cwd, path_type) else None
+        host = self.config['hostControl']
+        if host is None or not isinstance(cwd, PurePosixPath):
+            return None
+        roots = host.get('projectWorkspaces', [host['workspace']])
+        return str(cwd) if any(cwd.is_relative_to(PurePosixPath(root)) for root in roots) else None
+
+    def desktop_directory(self, data, scope):
+        cwd = desktop_working_directory(data)
+        if self.device:
+            return cwd if self.allowed_workspace(cwd) else None
+        host = self.config['hostControl']
+        if not scope or not host or 'projectWorkspaces' not in host or self.allowed_workspace(cwd):
+            return cwd
+        # Desktop's bundled CLI can report a VM-side cwd. Resolve the corresponding
+        # local session through the existing, pinned SafeCode control tunnel.
+        try:
+            result = subprocess.run(
+                ['/usr/bin/python3', '-I', '-B', CLOUDCLI_MCP_SCRIPT, '--client-id', host['clientId'],
+                 '--resolve-desktop-session', scope], capture_output=True, check=True, timeout=9)
+            folder = json.loads(result.stdout).get('workspace')
+            if valid_mac_workspace(folder):
+                return PurePosixPath(folder)
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            pass
+        return cwd
+
+    def project_for_directory(self, cwd):
+        project, workspace = self.default_project()
+        host = self.config['hostControl']
+        adaptive = host is not None and 'projectWorkspaces' in host
+        if not self.device and ((cwd is None and not adaptive) or (workspace is not None and cwd == PurePosixPath(workspace))):
+            return project, workspace
+
+        device = self.device['id'] if self.device else (host['clientId'] if host else str(self.path.parent))
+        folder = cwd.as_posix() if cwd is not None else None
+        if cwd is not None and cwd.drive:
+            folder = folder.casefold()
+        identity = hashlib.sha256(json.dumps([device, folder]).encode()).hexdigest()
+        # CloudCLI uses the basename as the initial display name. Keep the
+        # identity in a separate component so equally named folders stay distinct.
+        label = cwd.name.encode()[:160].decode('utf-8', errors='ignore').strip() if cwd is not None else 'Desktop Chat'
+        if not label or label in ('.', '..'):
+            label = 'Desktop project'
+        if self.device:
+            label += ' · '+self.device['alias']
+        root = Path.home()/CLOUDCLI_CONFIG.parent/'cloudcli-projects'
+        bucket = root/identity
+        try:
+            for directory in (root.parent, root, bucket):
+                self.private_project_directory(directory)
+            # Save the name chosen on first use, including on case-insensitive clients.
+            with self.project_lock:
+                projects = list(bucket.iterdir())
+                if len(projects) > 1:
+                    raise ValueError()
+                path = projects[0] if projects else bucket/label
+                self.private_project_directory(path)
+        except (OSError, ValueError):
+            raise CloudCliError('SafeCode could not resolve the CloudCLI project directory', 409) from None
+        return str(path), self.allowed_workspace(cwd)
+
+    @staticmethod
+    def private_project_directory(path):
+        path.mkdir(mode=0o700, exist_ok=True)
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise ValueError()
+
+    @staticmethod
+    def project_settings(path, value, *, remove=False):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            if remove:
+                return
+            with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as stream:
+                staged = Path(stream.name)
+                try:
+                    json.dump(value, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                    os.link(staged, path)
+                finally:
+                    staged.unlink(missing_ok=True)
+            return
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077 or json.loads(stream.read(16384)) != value):
+                raise ValueError()
+        if remove:
+            path.unlink()
+
+    def prepare_project(self, project, workspace):
+        if project == self.config['projectPath']:
+            return
+        path = Path(project)
+        root = Path.home()/CLOUDCLI_CONFIG.parent/'cloudcli-projects'
+        try:
+            if path.parent.parent != root:
+                raise ValueError()
+            for directory in (root.parent, root, path.parent, path):
+                self.private_project_directory(directory)
+            if workspace is not None and not self.device:
+                entry = self.host_tool_entry(workspace)
+                entry['args'].append('--managed-project')
+                with self.project_lock:
+                    self.project_settings(path/'.mcp.json', {'mcpServers': {'safecode_host': entry}},
+                                          remove=self.config['hostControl'].get('allowSshShell', False))
+        except (OSError, ValueError):
+            raise CloudCliError('SafeCode could not prepare the CloudCLI project directory', 409) from None
+
+    def host_tool_entry(self, workspace):
+        return {'type': 'stdio', 'command': '/usr/bin/python3',
+                'args': ['-I', '-B', CLOUDCLI_MCP_SCRIPT, '--client-id', self.config['hostControl']['clientId'],
+                         '--workspace', workspace]}
+
+    def host_instruction(self, project, workspace):
+        if self.device:
+            system = 'Windows' if self.device['platform'] == 'windows' else 'macOS'
+            directory = f'Working directory: {workspace}. ' if workspace else ''
+            return (f"Target computer: {self.device['hostname']} ({system}). {directory}"
+                    f"Connect using `{self.device['command']}` and execute commands on the target device.\n\nTask: ")
+        host = self.config['hostControl']
+        if host is None:
+            return ''
+        if workspace is None:
+            return ('The selected desktop folder is outside the configured SafeCode file workspace. '
+                    'The VPS filesystem is a different machine.\n\nTask: ')
+        home = Path.home()
+        client = host['clientId']
+        allow_ssh_shell = host.get('allowSshShell', False)
+        ssh_config = home/'.ssh/safe-code-host'/client/'config'
+        tool_instruction = 'Use the SafeCode host tools for files on the selected computer. '
+        try:
+            if not ssh_config.is_file() or ssh_config.is_symlink() or not Path(CLOUDCLI_MCP_SCRIPT).is_file():
+                raise ValueError()
+            fd = os.open(ssh_config, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'r') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError()
+                if stream.readline(128) != '# Safe Code host bridge '+client+'\n':
+                    raise ValueError()
+                if allow_ssh_shell:
+                    alias = re.fullmatch(r'Host ([a-z][a-z0-9_-]{0,31})\n', stream.readline(128))
+                    if not alias or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                        raise ValueError()
+                    command = shlex.join(['ssh', '-F', str(ssh_config), alias[1]])
+                    tool_instruction = (f'To perform the task on the target computer, connect with `{command}`. '
+                                        'Execute the commands over SSH in the stated working directory on the Mac. ')
+            if project == self.config['projectPath']:
+                with (home/'.claude.json').open('r') as stream:
+                    config = json.load(stream)
+                tools = config.get('claudeProjects', {}).get(project, {}).get('mcpServers', {})
+                expected = None if allow_ssh_shell else self.host_tool_entry(workspace)
+                if expected is not None and 'projectWorkspaces' in host:
+                    expected['args'].append('--managed-project')
+                if tools.get('safecode_host') != expected:
+                    raise ValueError()
+        except (OSError, ValueError, AttributeError, KeyError, TypeError):
+            raise CloudCliError('SafeCode local host control is unavailable for the CloudCLI project', 409) from None
+        target = host['deviceName'] or 'the selected computer'
+        return (f'Target computer: {target}. Working directory: {workspace}. '
+                f'{tool_instruction}The VPS filesystem is a different machine.\n\nTask: ')
+
+    def call(self, payload, stream=None):
+        try:
+            started = time.monotonic()
+            with closing(HTTPConnection('127.0.0.1', self.config['port'], timeout=90)) as conn:
+                diagnostic(stage='cloudcli_connect')
+                conn.request('POST', '/api/agent', json.dumps(payload, ensure_ascii=False).encode(),
+                             {'Content-Type': 'application/json', 'Accept': 'text/event-stream',
+                              'x-api-key': self.config['apiKey']})
+                with conn.getresponse() as response:
+                    diagnostic(stage='cloudcli_response', cloudcliStatus=response.status,
+                               cloudcliHeadersMs=min(900000, round((time.monotonic()-started)*1000)))
+                    if response.status != 200:
+                        status = response.status if response.status in CLOUDCLI_ERROR_STATUS else 502
+                        if status in (401, 403):
+                            raise CloudCliError('CloudCLI rejected the configured gateway credential', 403)
+                        raise CloudCliError(f'CloudCLI Agent API returned HTTP {response.status}', status)
+                    if response.getheader('Content-Type', '').split(';', 1)[0].strip().lower() != 'text/event-stream':
+                        raise CloudCliError('CloudCLI Agent API returned an unexpected response')
+                    return cloudcli_events(response, stream)
+        except ConnectionAbortedError:
+            raise
+        except TimeoutError:
+            raise CloudCliError('CloudCLI did not finish before the gateway timed out', 504) from None
+        except (OSError, HTTPException):
+            raise CloudCliError('CloudCLI connection ended before a result was confirmed') from None
+
+    @contextmanager
+    def conversation_slot(self, conversation):
+        with self.active_lock:
+            if conversation in self.active_conversations:
+                raise CloudCliError('Another turn is already running in this CloudCLI conversation', 409)
+            self.active_conversations.add(conversation)
+        try:
+            yield
+        finally:
+            with self.active_lock:
+                self.active_conversations.remove(conversation)
+
+    @contextmanager
+    def configuration_lock(self):
+        lockfile = Path.home()/CLOUDCLI_CONFIG.parent/'cloudcli-gateway.lock'
+        lockfile.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(lockfile, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        with os.fdopen(fd, 'rb') as serial:
+            lock_info = os.fstat(serial.fileno())
+            if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.geteuid()
+                or lock_info.st_mode & 0o077):
+                raise CloudCliError('CloudCLI task lock is not private to the work account', 503)
+            try:
+                mode = fcntl.LOCK_SH if self.parallel else fcntl.LOCK_EX
+                fcntl.flock(serial, mode | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise CloudCliError('CloudCLI is busy; wait for the current operation to finish', 409) from None
+            yield
+
+    def run(self, manager, data, context_1m, session_header, stream=None):
+        if not isinstance(data, dict) or not isinstance(data.get('model'), str):
+            raise CloudCliError('A configured CloudCLI model is required', 400)
+        model = self.model(data['model'])
+        if context_1m:
+            raise CloudCliError('Explicit extended context is unavailable through CloudCLI', 400)
+        original = data.get('messages')
+        if not isinstance(original, list) or any(not isinstance(m, dict) or m.get('role') not in ('system', 'user', 'assistant')
+                                                  for m in original):
+            raise CloudCliError('Invalid CloudCLI messages', 400)
+        messages = [m for m in original if m['role'] != 'system']
+        if not messages or messages[-1]['role'] != 'user':
+            raise CloudCliError('CloudCLI messages must end with a user task', 400)
+        latest = blocks(messages[-1].get('content'))
+        if any(not isinstance(b, dict) or b.get('type') != 'text' or not isinstance(b.get('text'), str) for b in latest):
+            raise CloudCliError('CloudCLI only accepts user text; Desktop tool results and attachments are unsupported', 400)
+        task = '\n'.join(re.sub(r'<system-reminder>.*?</system-reminder>', '', b['text'], flags=re.S)
+                         for b in latest).strip()
+        if not task:
+            raise CloudCliError('CloudCLI requires text for the user task', 400)
+        scope = conversation_scope(data, session_header)
+        probe = (not scope and len(messages) == 1 and not data.get('tools') and not data.get('system')
+                 and task in ('Hi', 'Hello') and data.get('max_tokens') == 1)
+        desktop_title_task = (task.startswith('You are coming up with a succinct title and git branch name for a coding session ')
+                              and 'Here is the session description:\n<description>' in task and '</description>' in task)
+        if desktop_title_task or desktop_suggestion(messages):
+            raise CloudCliError('Desktop background text generation is unavailable through CloudCLI', 400)
+        effort = data.get('output_config', {})
+        effort = effort.get('effort') if isinstance(effort, dict) else None
+        if effort is not None and (not isinstance(effort, str) or effort not in EFFORTS):
+            raise CloudCliError('Unsupported Claude effort', 400)
+        payload = {'provider': 'claude', 'message': task, 'model': model, 'stream': True}
+        diagnostic(stage='session_route', modelFamily=model.split('-')[1])
+        if effort is not None:
+            payload['effort'] = effort
+        # Scope is only used as a local lookup key. Never use a Desktop ID as a
+        # CloudCLI session ID. Per-key gateway directories isolate these tables.
+        namespace = self.identity+':'+scope
+        before = history_signature(messages[:-1], 'cloudcli')
+        now = time.time()
+        if scope or len(messages)>1:
+            identity = hashlib.sha256(json.dumps([namespace, before, task], ensure_ascii=False).encode()).hexdigest()
+        elif probe:
+            identity = hashlib.sha256(json.dumps([namespace, 'probe', model, int(now//300)]).encode()).hexdigest()
+        else:
+            identity = uuid.uuid4().hex
+        conversation = namespace if scope else before if len(messages) > 1 else identity
+        with self.conversation_slot(conversation), self.configuration_lock():
+            with closing(sqlite3.connect(self.path)) as db, db:
+                with db:
+                    db.execute('DELETE FROM requests WHERE created<?', (now-30*86400,))
+                    db.execute('DELETE FROM sessions WHERE created<?', (now-30*86400,))
+                    db.execute('DELETE FROM session_projects WHERE updated<?', (now-30*86400,))
+                prior = db.execute('SELECT reply FROM requests WHERE identity=?', (identity,)).fetchone()
+                if prior is not None:
+                    if prior[0] is None:
+                        raise CloudCliError('This CloudCLI request was previously dispatched without a confirmed reply', 409)
+                    return json.loads(prior[0])
+                if len(messages) > 1:
+                    saved = db.execute('SELECT sessions.session, project, workspace FROM sessions '
+                                       'LEFT JOIN session_projects USING (session) WHERE scope=? AND history=?',
+                                       (namespace, before)).fetchone()
+                    if saved is None:
+                        raise CloudCliError('No matching CloudCLI session; start a new Desktop conversation', 409)
+                    payload['sessionId'], project, workspace = saved
+                    default, default_workspace = self.default_project()
+                    host = self.config['hostControl']
+                    if self.device:
+                        if not project:
+                            raise CloudCliError('The paired session lacks a device project', 409)
+                    elif not host or 'projectWorkspaces' not in host:
+                        if project is None:
+                            project, workspace = default, default_workspace
+                    elif project is None or project == default:
+                        cwd = self.desktop_directory(data, scope) if workspace != default_workspace else desktop_working_directory(data)
+                        if cwd != PurePosixPath(default_workspace) and not (cwd is None and workspace == default_workspace):
+                            raise CloudCliError('The original CloudCLI session uses another file workspace; start a new Desktop conversation', 409)
+                        project, workspace = self.default_project()
+                    else:
+                        workspace = self.allowed_workspace(PurePosixPath(workspace)) if workspace else None
+                        cwd = None if workspace else self.desktop_directory(data, scope)
+                        if workspace is None and self.allowed_workspace(cwd):
+                            routed_project, routed_workspace = self.project_for_directory(cwd)
+                            if routed_project == project:
+                                workspace = routed_workspace
+                elif probe:
+                    project, workspace = self.project_for_directory(None) if self.device else self.default_project()
+                else:
+                    project, workspace = self.project_for_directory(self.desktop_directory(data, scope))
+                payload['projectPath'] = project
+                if self.device or not probe:
+                    if not probe:
+                        payload['message'] = self.host_instruction(project, workspace)+task
+                    self.prepare_project(project, workspace)
+                # Commit before POST. A lost connection or process exit cannot
+                # cause an automatic second dispatch of this scoped task.
+                db.execute('INSERT INTO requests VALUES (?, ?, NULL, ?)', (identity, namespace, now))
+            with manager.lock:
+                manager.started += 1
+            session, content, usage = self.call(payload, stream)
+            if 'sessionId' in payload and session != payload['sessionId']:
+                raise CloudCliError('CloudCLI unexpectedly changed the resumed session')
+            result = {'id': stream.message_id if stream is not None else 'msg_'+uuid.uuid4().hex,
+                      'type': 'message', 'role': 'assistant',
+                      'model': data['model'], 'content': content, 'stop_reason': 'end_turn',
+                      'stop_sequence': None, 'usage': usage}
+            confirmed = history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli')
+            with closing(sqlite3.connect(self.path)) as db, db:
+                if not probe:
+                    if len(messages) > 1:
+                        db.execute('DELETE FROM sessions WHERE scope=? AND history=?', (namespace, before))
+                    db.execute('INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?)', (namespace, confirmed, session, now))
+                    if project != self.config['projectPath'] or (workspace is not None and 'projectWorkspaces' in self.config['hostControl']):
+                        db.execute('INSERT OR REPLACE INTO session_projects VALUES (?, ?, ?, ?)',
+                                   (session, project, workspace, now))
+                    if scope:
+                        db.execute('UPDATE requests SET reply=NULL WHERE scope=? AND identity<>?',
+                                   (namespace, identity))
+                db.execute('UPDATE requests SET reply=? WHERE identity=?',
+                           (json.dumps(result, ensure_ascii=False), identity))
+            manager.count_usage({'id': result['id'], 'model': model, 'usage': usage}, result['id'])
+            return result
 
 
 class Channel:
@@ -663,7 +1419,11 @@ class Conversation:
                         if message_id:self.manager.count_usage({'id':message_id,'usage':usage,'model':usage_model},self.turn_id)
                     elif line.get('type') == 'assistant':
                         if line.get('isApiErrorMessage') or line.get('error'):
-                            native_error=line.get('error');continue
+                            native_error=line.get('error')
+                            for block in blocks(line.get('message', {}).get('content', [])):
+                                if isinstance(block, dict) and block.get('type') == 'text':
+                                    anthropic_error(line, block.get('text'))
+                            continue
                         message = line.get('message', {})
                         content = message.get('content', [])
                         if message_id!=message.get('id'):usage={};message_id=message.get('id')
@@ -676,7 +1436,9 @@ class Conversation:
                         if line.get('is_error'):
                             if native_error=='max_output_tokens' or (native_error is None and line.get('api_error_status') is None and (stream_message.stop=='max_tokens' or line.get('stop_reason')=='max_tokens')):
                                 truncated=True;content=stream_message.partial()
-                            else:raise GatewayError('VPS Claude Code could not complete the model request ('+str(line.get('subtype','unknown'))+')')
+                            else:
+                                status = anthropic_error(line)
+                                raise GatewayError('VPS Claude Code could not complete the model request', status or 502)
                 elif op == 'turn.toolcall':
                     calls[event['callId']] = event
                 elif op == 'turn.exit':
@@ -748,6 +1510,10 @@ class Conversation:
 class Manager:
     def __init__(self, directory, config):
         self.directory, self.config = Path(directory), config
+        settings = config['cloudcli'] if 'cloudcli' in config else load_cloudcli_config()
+        if settings is not None:
+            settings = cloudcli_config(settings)
+        self.cloudcli = CloudCliBackend(self.directory, settings, config.get('pairedDevice')) if settings is not None else None
         self.conversations = []
         self.history = DesktopHistory(self.directory/'desktop-history.sqlite3')
         self.lock = threading.Lock()
@@ -763,6 +1529,8 @@ class Manager:
         self.models = None
 
     def catalog(self):
+        if self.cloudcli is not None:
+            return self.cloudcli.catalog()
         with self.models_lock:
             if self.models is None:
                 self.models = native_model_catalog()
@@ -808,9 +1576,12 @@ class Manager:
     def count_input_tokens(self, data, headers=None):
         raise GatewayError('Token counting is unavailable on this CLI bridge', 501)
 
-    def run(self, data, context_1m=False, session_header=None):
+    def run(self, data, context_1m=False, session_header=None, stream=None):
+        if self.cloudcli is not None:
+            return self.cloudcli.run(self, data, context_1m, session_header, stream)
         requested_model = data.get('model') if isinstance(data, dict) else None
         data=validate_request(data)
+        diagnostic(stage='cli_turn')
         if context_1m and not data['model'].endswith('[1m]'):
             data = {**data, 'model': data['model']+'[1m]'}
         scope = conversation_scope(data, session_header)
@@ -883,6 +1654,46 @@ class Server(ThreadingHTTPServer):
         super().__init__(('127.0.0.1', manager.config.get('listenPort', 0)), Handler)
 
 
+class CloudCliMessagesStream:
+    def __init__(self, handler, model):
+        self.handler = handler
+        self.model = model
+        self.message_id = 'msg_'+uuid.uuid4().hex
+        self.started = False
+        self.parts = []
+
+    @property
+    def content(self):
+        return [{'type': 'text', 'text': ''.join(self.parts)}]
+
+    def text(self, part):
+        if not part:
+            return
+        try:
+            if not self.started:
+                self.started = True
+                self.handler.start_sse()
+                self.handler.send_sse('message_start', {'type': 'message_start', 'message': {
+                    'id': self.message_id, 'type': 'message', 'role': 'assistant', 'model': self.model,
+                    'content': [], 'stop_reason': None, 'stop_sequence': None,
+                    'usage': dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0),
+                }})
+                self.handler.send_sse('content_block_start', {
+                    'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''},
+                })
+            self.handler.send_sse('content_block_delta', {
+                'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': part},
+            })
+            self.parts.append(part)
+        except OSError:
+            raise ConnectionAbortedError('Desktop disconnected during a CloudCLI stream') from None
+
+    def finish(self, response):
+        self.handler.send_sse('content_block_stop', {'type': 'content_block_stop', 'index': 0})
+        for event, payload in sse_tail(response):
+            self.handler.send_sse(event, payload)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):pass
 
@@ -895,10 +1706,58 @@ class Handler(BaseHTTPRequestHandler):
         token = token[7:] if token.startswith('Bearer ') else self.headers.get('x-api-key', '')
         return hmac.compare_digest(token.encode(), self.manager.config['token'].encode())
 
+    def diagnostic_result(self, code, error_type):
+        trace = REQUEST_DIAGNOSTIC.get()
+        if trace is None:
+            return None
+        elapsed = min(900000, round((time.monotonic() - self.diagnostic_started) * 1000))
+        return {**trace, 'gatewayStatus': code,
+                'errorType': error_type if error_type in REJECTION_TYPES else 'api_error',
+                'gatewayMs': elapsed}
+
+    @contextmanager
+    def request_diagnostic(self, backend, **state):
+        requested = self.headers.get('X-SafeCode-Diagnostics') == '1'
+        self.diagnostic_started = time.monotonic()
+        initial = dict(id=str(uuid.uuid4()), protocol=1, backend=backend, stage='gateway_auth', **state) if requested else None
+        context = REQUEST_DIAGNOSTIC.set(initial)
+        try:
+            yield
+        finally:
+            REQUEST_DIAGNOSTIC.reset(context)
+
     def reply(self, code, data):
         body = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(code);self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(body)));self.end_headers();self.wfile.write(body)
+        self.send_header('Content-Length', str(len(body)))
+        if code >= 400 and (report := self.diagnostic_result(code, data.get('error', {}).get('type', 'api_error'))):
+            self.send_header(DIAGNOSTIC_HEADER, json.dumps(report, separators=(',', ':')))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def start_sse(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('X-Accel-Buffering', 'no')
+        self.end_headers()
+
+    def send_sse(self, event, payload):
+        self.wfile.write(('event: '+event+'\ndata: '+json.dumps(payload, ensure_ascii=False)+'\n\n').encode())
+        self.wfile.flush()
+
+    def message_error(self, stream, code, error_type, message):
+        payload = {'type': 'error', 'error': {'type': error_type, 'message': message}}
+        try:
+            if stream is not None and stream.started:
+                report = self.diagnostic_result(code, error_type)
+                if report is not None:
+                    payload['safeCodeDiagnostic'] = report
+                self.send_sse('error', payload)
+            else:
+                self.reply(code, payload)
+        except OSError:
+            pass
 
     def do_GET(self):
         if not self.authorized():return self.reply(401, {'error': {'type': 'authentication_error', 'message': 'Local bridge token required'}})
@@ -920,6 +1779,11 @@ class Handler(BaseHTTPRequestHandler):
             self.manager.capacity.release()
 
     def do_POST(self):
+        backend = 'cloudcli' if self.manager.cloudcli is not None else 'claude_code'
+        with self.request_diagnostic(backend):
+            self.handle_messages()
+
+    def handle_messages(self):
         self.close_connection = True
         if not self.authorized():return self.reply(401, {'error': {'type': 'authentication_error', 'message': 'Local bridge token required'}})
         if self.path == '/shutdown':
@@ -929,31 +1793,41 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.partition('?')[0]
         if path not in (MESSAGES_PATH, COUNT_TOKENS_PATH):
             return self.reply(501, {'error': {'type': 'api_error', 'message': 'This endpoint is not supported by the VPS CLI bridge'}})
+        stream = None
         try:
+            diagnostic(stage='request_decode')
             if self.headers.get('Transfer-Encoding'):raise GatewayError('Content-Length required', 400)
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_REQUEST:raise GatewayError('Request too large or empty', 413)
             self.connection.settimeout(30)
+            diagnostic(requestBytes=length)
             data = json.loads(self.rfile.read(length))
+            diagnostic(stage='gateway_validation')
+            if isinstance(data, dict):
+                for field, name in (('messages', 'messageCount'), ('tools', 'toolCount')):
+                    if isinstance(data.get(field), list):
+                        diagnostic(**{name: min(1000000, len(data[field]))})
             if path == COUNT_TOKENS_PATH:
                 headers = {name: self.headers[name] for name in ('anthropic-version', 'anthropic-beta')
                            if name in self.headers}
                 return self.reply(200, self.execute_message(data, count_headers=headers))
-            response = self.execute_message(data, session_header=self.headers.get('x-claude-code-session-id'),
+            if isinstance(data, dict) and data.get('stream') and self.manager.cloudcli is not None:
+                stream = CloudCliMessagesStream(self, data.get('model'))
+            response = self.execute_message(data, stream=stream, session_header=self.headers.get('x-claude-code-session-id'),
                 context_1m='context-1m-2025-08-07' in {v.strip() for v in self.headers.get('anthropic-beta', '').split(',')})
-            if data.get('stream'):
-                self.send_response(200);self.send_header('Content-Type', 'text/event-stream')
-                self.send_header('Cache-Control', 'no-cache');self.end_headers()
+            if stream is not None and stream.started:
+                stream.finish(response)
+            elif data.get('stream'):
+                self.start_sse()
                 for event, payload in sse_response(response):
-                    self.wfile.write(('event: '+event+'\ndata: '+json.dumps(payload, ensure_ascii=False)+'\n\n').encode())
-                    self.wfile.flush()
+                    self.send_sse(event, payload)
             else:self.reply(200, response)
         except GatewayError as error:
-            self.reply(error.status, {'type': 'error', 'error': {'type': 'api_error', 'message': str(error)}})
+            self.message_error(stream, error.status, getattr(error, 'error_type', 'api_error'), str(error))
         except (ValueError, TypeError, KeyError, AttributeError):
-            self.reply(400, {'error': {'type': 'invalid_request_error', 'message': 'Invalid Messages request'}})
+            self.message_error(stream, 400, 'invalid_request_error', 'Invalid Messages request')
         except sqlite3.Error:
-            self.reply(503, {'error': {'type':'api_error', 'message':'Desktop conversation history unavailable'}})
+            self.message_error(stream, 503, 'api_error', 'Desktop conversation history unavailable')
         except (OSError, BrokenPipeError):pass
 
 
@@ -977,6 +1851,10 @@ def sse_response(response):
         elif kind in ('tool_use','server_tool_use'):
             yield 'content_block_delta', {'type':'content_block_delta','index':index,'delta':{'type':'input_json_delta','partial_json':json.dumps(block.get('input',{}),ensure_ascii=False)}}
         yield 'content_block_stop', {'type': 'content_block_stop', 'index': index}
+    yield from sse_tail(response)
+
+
+def sse_tail(response):
     yield 'message_delta', {'type': 'message_delta', 'delta': {'stop_reason': response['stop_reason'], 'stop_sequence': response.get('stop_sequence')}, 'usage': response['usage']}
     yield 'message_stop', {'type': 'message_stop'}
 

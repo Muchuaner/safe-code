@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 """Safe Code API management, queue and usage checks using disposable state."""
 import base64
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +24,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'tools/desktop-api'), str(ROOT/'src/SafeCode.Core/Remote')]
 from desktop_gateway import GatewayError
-from management import ClaudeSubscription, KeyRegistry, RequestQueue, send_admin
+from management import KeyRegistry, RequestQueue, send_admin
 from pricing import estimate
 
 spec = importlib.util.spec_from_file_location('safe_code_api_server',ROOT/'tools/desktop-api/server.py')
@@ -50,9 +51,6 @@ def decode_new_ticket(ticket):
 
 class SafeCodeApiTest(unittest.TestCase):
     def setUp(self):
-        probe = patch.object(ClaudeSubscription, 'read', return_value=('unavailable', {}, 300))
-        probe.start()
-        self.addCleanup(probe.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -369,9 +367,24 @@ class SafeCodeApiTest(unittest.TestCase):
                 self.assertEqual(manage('enable_public', accepted=True), {'enabled': True})
                 runtime = manage('public_status', runtime=True)
                 self.assertEqual((runtime['enabled'], runtime['active'], runtime['waiting']), (True, 0, 0))
-                self.assertIn('subscription', runtime)
-                self.assertEqual(runtime['concurrency'], 1)
-                for invalid in (True, 0, -5, 2.5, '1e3', '0'):
+                self.assertEqual(runtime['subscription'], {'state': 'unavailable', 'windows': {}})
+                with patch.object(server, 'read_subscription', return_value={'five_hour': {'used': 23.5}}) as lookup:
+                    self.assertEqual(manage('list', details=True)['subscription'], runtime['subscription'])
+                    lookup.assert_not_called()
+                    value = manage('refresh_subscription')
+                    self.assertEqual(value['windows'], {'five_hour': {'used': 23.5}})
+                    self.assertEqual(manage('public_status', runtime=True)['subscription'], value)
+                    lookup.assert_called_once()
+                self.assertEqual(runtime['concurrency'], 0)
+                with ExitStack() as slots:
+                    for _ in range(35):
+                        slots.enter_context(public.queue.slot(legacy_id))
+                    self.assertEqual(manage('list')['active_count'], 35)
+                self.assertEqual(manage('set_concurrency', concurrency=0),
+                                 {'concurrency': 0, 'concurrency_text': '0'})
+                self.assertEqual(manage('set_concurrency', concurrency='0'),
+                                 {'concurrency': 0, 'concurrency_text': '0'})
+                for invalid in (True, -5, 2.5, '1e3', '00'):
                     self.assertIn('error', admin_request('set_concurrency', concurrency=invalid))
                 self.assertEqual(manage('set_concurrency', concurrency='30'),
                                  {'concurrency': 30, 'concurrency_text': '30'})
@@ -480,41 +493,6 @@ class SafeCodeApiTest(unittest.TestCase):
                     self.assertEqual(reopened.manage({'action':'settings'})['origin'], origin)
                 admin.shutdown()
             public.shutdown()
-
-
-class ClaudeSubscriptionTest(unittest.TestCase):
-    def test_subscription_returns_only_sanitized_windows(self):
-        with tempfile.TemporaryDirectory() as d:
-            subscription = ClaudeSubscription()
-            subscription.credentials = Path(d)/'.credentials.json'
-            self.assertEqual(subscription.read(), ('unavailable', {}, 300))
-            subscription.credentials.write_text(json.dumps({'claudeAiOauth': {'accessToken': 'fixture-token'}}))
-            response_body = {
-                'five_hour': {'utilization': 32.25, 'resets_at': '2026-11-19T08:00:00Z', 'secret': 'ignore'},
-                'seven_day': {'utilization': 92, 'resets_at': 'bad date'},
-                'extra': {'token': 'ignore'},
-            }
-            with patch('management.http.client.HTTPSConnection') as connect:
-                connection = connect.return_value
-                response = connection.getresponse.return_value
-                response.status = 200
-                response.read.return_value = json.dumps(response_body).encode()
-                subscription.refresh()
-                connect.assert_called_once_with('api.anthropic.com', timeout=5)
-                self.assertEqual(connection.request.call_args.args, ('GET', '/api/oauth/usage'))
-                self.assertEqual(connection.request.call_args.kwargs['headers']['Authorization'], 'Bearer fixture-token')
-                value = subscription.snapshot()
-                self.assertEqual(value['state'], 'available')
-                self.assertEqual(value['windows']['five_hour']['used'], 32.2)
-                self.assertIsInstance(value['windows']['five_hour']['resets_at'], int)
-                self.assertEqual(value['windows']['seven_day'], {'used': 92, 'resets_at': None})
-                self.assertNotIn('fixture-token', json.dumps(value))
-                self.assertNotIn('ignore', json.dumps(value))
-                response.status = 429
-                response.getheader.return_value = '900'
-                subscription.refresh()
-                self.assertEqual(subscription.snapshot()['state'], 'stale')
-                self.assertEqual(subscription.snapshot()['windows'], value['windows'])
 
 
 if __name__=='__main__':

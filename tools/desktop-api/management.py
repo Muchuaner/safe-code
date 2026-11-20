@@ -1,10 +1,7 @@
 """Local-only Safe Code API administration and request scheduling."""
 from collections import Counter, defaultdict, deque
 from contextlib import contextmanager
-from datetime import datetime
-import http.client
 import json
-import os
 from pathlib import Path
 import re
 import select
@@ -22,91 +19,6 @@ KEY_ID = re.compile(r'[a-f0-9]{64}')
 LOG_RETENTION_SECONDS = 30 * 86400
 ANALYTICS_RANGES = {'1h': (300, 12), '24h': (3600, 24), '7d': (86400, 7)}
 LATENCY_LIMITS = (250, 500, 1000, 2500, 5000, 10000)
-
-
-def subscription_windows(payload):
-    windows = {}
-    for name in ('five_hour', 'seven_day'):
-        window = payload.get(name)
-        if not isinstance(window, dict):
-            continue
-        used = window.get('utilization')
-        if type(used) not in (int, float) or not 0 <= used <= 10000:
-            continue
-        reset = window.get('resets_at')
-        try:
-            parsed = datetime.fromisoformat(reset.replace('Z', '+00:00')) if isinstance(reset, str) else None
-            reset = int(parsed.timestamp()) if parsed and parsed.tzinfo else None
-        except (ValueError, OverflowError, OSError):
-            reset = None
-        windows[name] = {'used': round(used, 1), 'resets_at': reset}
-    return windows
-
-
-class ClaudeSubscription:
-    """Cache account quota separately from per-Key gateway limits."""
-    def __init__(self):
-        config = Path(os.environ['CLAUDE_CONFIG_DIR']) if os.environ.get('CLAUDE_CONFIG_DIR') else Path.home()/'.claude'
-        self.credentials = config/'.credentials.json'
-        self.lock = threading.Lock()
-        self.next_fetch = 0
-        self.pending = False
-        self.value = {'state': 'loading', 'windows': {}}
-
-    def snapshot(self):
-        with self.lock:
-            if not self.pending and time.monotonic() >= self.next_fetch:
-                self.pending = True
-                threading.Thread(target=self.refresh, name='claude-subscription', daemon=True).start()
-            return self.value
-
-    def read(self):
-        if any(os.environ.get(name) for name in (
-            'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
-            'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
-        )):
-            return 'unavailable', {}, 300
-        try:
-            with self.credentials.open() as handle:
-                raw = json.loads(handle.read(65537))
-        except FileNotFoundError:
-            return 'unavailable', {}, 300
-        oauth = raw.get('claudeAiOauth') if isinstance(raw, dict) else None
-        token = oauth.get('accessToken') if isinstance(oauth, dict) else None
-        if not isinstance(token, str) or not re.fullmatch(r'[\x21-\x7e]{1,4096}', token):
-            return 'unavailable', {}, 300
-        conn = http.client.HTTPSConnection('api.anthropic.com', timeout=5)
-        try:
-            conn.request('GET', '/api/oauth/usage', headers={
-                'Authorization': 'Bearer ' + token, 'Accept': 'application/json',
-                'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': 'SafeCode',
-            })
-            reply = conn.getresponse()
-            if reply.status == 429:
-                wait = reply.getheader('Retry-After', '')
-                return 'rate_limited', {}, max(300, min(int(wait), 3600)) if wait.isascii() and wait.isdigit() and len(wait) < 8 else 300
-            if reply.status in (401, 403):
-                return 'unavailable', {}, 300
-            if reply.status != 200:
-                return 'unreachable', {}, 300
-            payload = json.loads(reply.read(65537))
-            windows = subscription_windows(payload) if isinstance(payload, dict) else {}
-            return ('available' if windows else 'unavailable'), windows, 300
-        finally:
-            conn.close()
-
-    def refresh(self):
-        try:
-            state, windows, retry = self.read()
-        except (OSError, ValueError, http.client.HTTPException):
-            state, windows, retry = 'unreachable', {}, 300
-        with self.lock:
-            if not windows and state in ('unreachable', 'rate_limited') and self.value.get('windows'):
-                self.value = {**self.value, 'state': 'stale'}
-            else:
-                self.value = {'state': state, 'windows': windows, 'sampled_at': int(time.time())}
-            self.next_fetch = time.monotonic() + retry
-            self.pending = False
 
 
 class KeyRegistry:
@@ -367,7 +279,8 @@ class Capacity:
         if blocking:
             raise ValueError('Gateway capacity does not support blocking acquisition')
         with self.lock:
-            if self.in_use >= self.limit():
+            limit = self.limit()
+            if limit and self.in_use >= limit:
                 return False
             self.in_use += 1
             return True
@@ -409,7 +322,8 @@ class RequestQueue:
         with self.changed:
             threshold = time.monotonic()-60
             self.recent = defaultdict(deque, ((k,t) for k,t in self.recent.items() if t and t[-1]>threshold))
-            if len(self.waiters)>=self.max_queue or sum(k==key for _,k in self.waiters)>=self.per_key:
+            if self.concurrency and (len(self.waiters) >= self.max_queue or
+                                     sum(k == key for _, k in self.waiters) >= self.per_key):
                 raise GatewayError('Safe Code API queue is full; retry later', 429)
             self.waiters.append(ticket)
             deadline = time.monotonic() + self.max_wait
@@ -422,7 +336,7 @@ class RequestQueue:
                         raise ConnectionAbortedError()
                     if now>=deadline:
                         raise GatewayError('Safe Code API queue wait timed out; retry later', 429)
-                    if len(self.active) < self.concurrency and self.waiters[0]==ticket:
+                    if (not self.concurrency or len(self.active) < self.concurrency) and self.waiters[0] == ticket:
                         if self.registry.balance_exhausted(key):
                             raise GatewayError('Safe Code API Key balance exhausted', 402)
                         recent = self.recent[key]

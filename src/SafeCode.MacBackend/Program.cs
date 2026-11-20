@@ -115,7 +115,7 @@ internal sealed class MacBackend : IDisposable
             case "app.state":return new{busy=activeMutations>0,guarding=session?.HasMounts==true||hostControl?.Enabled==true||claudeDesktop.Running};
             case "app.shutdown":
                 if(connectionPending!=0)throw new InvalidOperationException("正在连接，请先取消连接后退出。");
-                if(hostControl?.Enabled==true)await hostControl.DisableAsync(ct);
+                if(hostControl?.Enabled==true)await hostControl.SuspendAsync(ct);
                 if(session?.HasMounts==true)await session.UnmountAsync(ct);
                 if(claudeDesktop.Running)await claudeDesktop.StopAsync(ct,suspend:true);
                 if(keyAccess!=null)await keyAccess.StopAsync();
@@ -137,14 +137,14 @@ internal sealed class MacBackend : IDisposable
             case "desktopKey.status" when !LocalSecrets.IsUnlocked:
                 return new{configured=File.Exists(Path.Combine(directory,"desktop-key.state")),running=false};
             case "desktopKey.status":
-                return await (keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:services))
-                    .RestoreAsync(ct,interactive:Flag("interactive"));
+                return await KeyAccess().RestoreAsync(ct,interactive:Flag("interactive"));
             case "desktopKey.enable":
                 if(claudeDesktop.Configured)throw new InvalidOperationException("请先停用 Claude Desktop 的 SSH 接入。");
                 _=LocalSecrets.RequireKey();
-                return await (keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:services))
-                    .EnableAsync(Read("key"),ct,replace:Flag("replace"),useSaved:Flag("useSaved"));
-            case "desktopKey.disable": return await (keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:services)).DisableAsync(ct);
+                return await KeyAccess().EnableAsync(Read("key"),ct,replace:Flag("replace"),useSaved:Flag("useSaved"));
+            case "desktopKey.disable": return await KeyAccess().DisableAsync(ct);
+            case "safeCodeApi.refreshSubscription":
+                return await RequireGatewaySession().RequestGatewayAsync(new { action = "refresh_subscription" },ct);
             case "safeCodeApi.publicStatus":
                 return await ReadGatewayStatusAsync(RequireGatewaySession(),ct);
             case "safeCodeApi.enablePublic":
@@ -184,7 +184,9 @@ internal sealed class MacBackend : IDisposable
             case "host.enable":
                 if(!Flag("riskAccepted"))throw new InvalidOperationException("请先阅读并确认本机远程控制权限说明。");
                 hostControl??=new(directory);return await hostControl.EnableAsync(RequireSession(),Read("alias","mac"),ct);
-            case "host.disable":return hostControl==null?new HostControlStatus(false,"disabled","","","未启用"):await hostControl.DisableAsync(ct);
+            case "host.disable":
+                if(connectionPending!=0)throw new InvalidOperationException("请等待当前服务器连接完成。");
+                return hostControl==null?new HostControlStatus(false,"disabled","","","未启用"):await hostControl.DisableAsync(ct);
             case "preview.begin":
                 if(activeMutations>0||connectionPending!=0||session?.HasMounts==true||hostControl?.Enabled==true||claudeDesktop.Running)throw new InvalidOperationException("请先结束当前操作并安全卸载目录。");
                 session?.Dispose();session=null;challenge=null;return true;
@@ -212,10 +214,12 @@ internal sealed class MacBackend : IDisposable
             case "updates.install":
                 if(activeMutations>0||session?.HasMounts==true||hostControl?.Enabled==true||claudeDesktop.Running)throw new InvalidOperationException("请先完成任务、停用 SSH 接入与本机控制，并安全卸载目录，再打开新版安装镜像。");
                 if(update==null)throw new InvalidOperationException("请先下载并校验 macOS 安装镜像。");
-                await ClientServices.VerifyInstallerAsync(update,ct);await EmitAsync(new{type="openFile",path=update.Path});return true;
+                await ClientServices.VerifyInstallerAsync(update,ct);if(LocalSecrets.IsUnlocked)LocalSecrets.CheckpointLogin();await EmitAsync(new{type="openFile",path=update.Path});return true;
             case "gateways.resume-settings":
                 var remembered = LocalSecrets.IsUnlocked ? LocalSecrets.Load() : null;
-                return remembered != null && SshSession.CanResumePublicGateway(directory, remembered) ? remembered : null;
+                bool resumeHost=remembered!=null&&(claudeDesktop.Configured||File.Exists(Path.Combine(directory,"desktop-key.state")))
+                    &&hostControl?.CanResume(remembered)==true;
+                return remembered!=null&&(resumeHost||SshSession.CanResumePublicGateway(directory,remembered))?remembered:null;
             case "login.load":case "login.restoreSaved":return LocalSecrets.IsUnlocked?LocalSecrets.Load():null;
             case "connection.info":return session==null?null:new{host=session.Host,port=session.Port,username=session.LoginUsername};
             case "connection.reauthenticate":
@@ -245,9 +249,30 @@ internal sealed class MacBackend : IDisposable
                     session?.Dispose();session=new(directory);session.Log+=line=>Log(step,line);session.DirectoryLog+=line=>Log("folder",line);
                     var settings=new ConnectionSettings(Read("host"),Read("username"),Read("password"),args.TryGetProperty("port",out var port)?port.GetInt32():22);
                     var server=await session.ConnectAsync(settings,_=>false,connecting.Token);challenge=null;
-                    try{if(LocalSecrets.IsUnlocked)LocalSecrets.Save(settings);}catch{Log("connection","连接成功，但钥匙串保护的登录记忆未能保存。下次请重新填写。");}
-                    string? warning=null;
-                    if(!File.Exists(Path.Combine(directory,"desktop-key.state"))&&claudeDesktop.Configured&&LocalSecrets.IsUnlocked)
+                    var warnings=new List<string>();
+                    if (!LocalSecrets.IsUnlocked)
+                        warnings.Add("本机钥匙串尚未授权，无法保存本次登录信息。");
+                    else
+                    {
+                        try{LocalSecrets.Save(settings);}
+                        catch(Exception error) when(error is IOException or UnauthorizedAccessException or CryptographicException)
+                        {
+                            warnings.Add("连接已成功，但无法保存本机登录信息。");
+                        }
+                    }
+                    bool keyConfigured=File.Exists(Path.Combine(directory,"desktop-key.state"));
+                    if((keyConfigured||claudeDesktop.Configured)&&hostControl?.CanResume(settings)==true)
+                    {
+                        using var hostRestore=CancellationTokenSource.CreateLinkedTokenSource(connecting.Token);
+                        hostRestore.CancelAfter(TimeSpan.FromSeconds(40));
+                        try
+                        {
+                            if(await hostControl.ResumeAsync(session,hostRestore.Token) is {} hostWarning)warnings.Add(hostWarning);
+                        }
+                        catch(OperationCanceledException)when(!connecting.IsCancellationRequested)
+                        {warnings.Add("本机远程控制恢复超时，可在设置中重试。");}
+                    }
+                    if(!keyConfigured&&claudeDesktop.Configured&&LocalSecrets.IsUnlocked)
                     {
                         using var restoreTimeout=CancellationTokenSource.CreateLinkedTokenSource(connecting.Token);
                         restoreTimeout.CancelAfter(TimeSpan.FromSeconds(40));
@@ -255,13 +280,16 @@ internal sealed class MacBackend : IDisposable
                         Exception? restoreFailure=null;
                         try
                         {
-                            warning=await claudeDesktop.ResumeAsync(session,restoreTimeout.Token);
-                            if(warning!=null)restoreFailure=new InvalidOperationException();
+                            if(await claudeDesktop.ResumeAsync(session,restoreTimeout.Token) is {} warning)
+                            {
+                                warnings.Add(warning);
+                                restoreFailure=new InvalidOperationException();
+                            }
                         }
                         catch(OperationCanceledException)when(!connecting.IsCancellationRequested)
                         {
                             restoreFailure=new TimeoutException();
-                            warning="Claude SSH 网关恢复超时，可在设置中重试。";
+                            warnings.Add("Claude SSH 网关恢复超时，可在设置中重试。");
                         }
                         catch(Exception error){restoreFailure=error;throw;}
                         finally
@@ -270,7 +298,7 @@ internal sealed class MacBackend : IDisposable
                         }
                     }
                     connecting.Token.ThrowIfCancellationRequested();
-                    return new{ready=true,server,gatewayWarnings=warning==null?Array.Empty<string>():new[]{warning}};
+                    return new{ready=true,server,gatewayWarnings=warnings};
                 }
                 catch(HostTrustRequiredException error){challenge=(Guid.NewGuid().ToString("N"),error.Key);return new{requiresTrust=true,token=challenge.Value.Token,key=error.Key};}
                 catch(Exception error){
@@ -347,6 +375,8 @@ internal sealed class MacBackend : IDisposable
     private SshSession RequireGatewaySession() => connectionPending == 0 && session?.Server != null
         ? session : throw new InvalidOperationException("请先连接服务器。");
     private SshSession RequireSession()=>connectionPending==0&&session?.IsConnected==true&&session.Server!=null?session:throw new InvalidOperationException("SSH 已断开，请重新连接。");
+    private DesktopKeyAccess KeyAccess()=>keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,
+        diagnostics:services,beforeMessages:ct=>hostControl?.MaintainForChatAsync(ct)??Task.CompletedTask);
     private void Log(string operation,string line)
     {
         string diagnostic=operation=="folder"?"directory_list":string.IsNullOrEmpty(operation)?"connection":operation;

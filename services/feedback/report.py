@@ -26,8 +26,10 @@ elif a.feedback or a.diagnostics:
     fields='event_id,created_at,version,'+('message' if a.feedback else 'report')
     if a.issue and has_context:
         query='SELECT '+','.join('r.'+f for f in fields.split(','))+' FROM '+table+''' r LEFT JOIN report_context c ON c.event_id=r.event_id
-        WHERE r.event_id=? OR json_extract(c.context,'$.operationId')=? OR json_extract(c.context,'$.correlation.operationId')=? ORDER BY r.created_at DESC LIMIT 100'''
-        params=(a.issue,)*3
+        WHERE r.event_id=? OR json_extract(c.context,'$.operationId')=? OR json_extract(c.context,'$.correlation.operationId')=?
+        OR '''+("json_extract(r.report,'$.gateway.id')" if a.diagnostics else "json_extract(c.context,'$.report.gateway.id')")+'''=?
+        ORDER BY r.created_at DESC LIMIT 100'''
+        params=(a.issue,)*4
     else:
         query='SELECT '+fields+' FROM '+table+(' WHERE event_id=?' if a.issue else '')+' ORDER BY created_at DESC LIMIT 100'
         if a.issue:params=(a.issue,)

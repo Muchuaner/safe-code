@@ -72,7 +72,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
             active, managed, configured = managed, installed = !offline && Installed,
             state = active ? "active" : managed ? "attention" : "unconfigured",
             message = message ?? (active ? "SSH 网关已连接，重启 Claude Desktop 后可使用。" : managed
-                ? "已保存 SSH 接入。连接原服务器后可恢复。" : "尚未启用 SSH 接入。"),
+                ? "已保存 SSH 接入。请在原服务器上验证本机远程控制后恢复。" : "尚未启用 SSH 接入。"),
             endpoint = gateway?.Endpoint ?? "",
             startedAt = started,
             usage = gateway?.Usage ?? IntegrationUsage.Unavailable("尚未连接 VPS 网关"),
@@ -85,6 +85,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
         await gate.WaitAsync(ct);
         try
         {
+            target.RequireVerifiedHostControl();
             _ = LocalSecrets.RequireKey();
             if (gateway?.Connected == true) return Status();
             if (gateway != null) await SuspendCoreAsync(ct);
@@ -109,6 +110,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
                 {
                     await pending.StartAsync(ct);
                     var models = await pending.ModelsAsync(ct);
+                    target.RequireVerifiedHostControl();
                     int port = new Uri(pending.Endpoint).Port;
                     var state = new ProfileState(GatewayPreference.For(target), id.ToString("D"), pending.LocalToken, port);
                     var profile = MakeProfile(pending.Endpoint, state.Token, models);

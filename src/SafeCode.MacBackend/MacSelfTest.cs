@@ -5,7 +5,7 @@ using SafeCode.Core;
 namespace SafeCode.Desktop;
 internal static class MacSelfTest
 {
-    public static Task RunAsync()
+    public static async Task RunAsync()
     {
         LocalSecrets.Initialize(RandomNumberGenerator.GetBytes(32));byte[] plain=Encoding.UTF8.GetBytes("fixture-password-not-a-real-secret");byte[] cipher=LocalSecrets.Protect(plain);
         if(!LocalSecrets.Unprotect(cipher).SequenceEqual(plain))throw new Exception("加密保存往返失败。");
@@ -33,6 +33,26 @@ internal static class MacSelfTest
         if(!scaled.Contains("/smart-sizing")||scaled.Contains("/dynamic-resolution")||scaled.Contains("/f"))
             throw new Exception("Mac RDP 固定分辨率缩放参数错误。");
         Console.WriteLine("MAC_RDP_PINNED_CERTIFICATE_AND_DISPLAY_MODES_OK");
-        Console.WriteLine("MAC_AES_GCM_TAMPER_SHELL_QUOTING_AND_PLATFORM_UPDATE_SELECTION_OK");return Task.CompletedTask;
+        Console.WriteLine("MAC_AES_GCM_TAMPER_SHELL_QUOTING_AND_PLATFORM_UPDATE_SELECTION_OK");
+        string folder=Directory.CreateTempSubdirectory("safecode-host-resume-").FullName;
+        try
+        {
+            var saved=new GatewayPreference(true,"vps.example",2222,"operator","SHA256:fixture");
+            var settings=new ConnectionSettings("vps.example","operator","fixture",2222);
+            string preference=Path.Combine(folder,"host-control-resume.aes");
+            var bytes=JsonSerializer.SerializeToUtf8Bytes(new{Server=saved,WorkspaceUser="work",Alias="fixture",Client=new string('a',20)});
+            DesktopKeyAccess.WriteProfileFile(preference,LocalSecrets.Protect(bytes));
+            using var host=new MacHostControl(folder);
+            if(!host.CanResume(settings)||host.CanResume(settings with{Port=22})||
+                host.CanResume(settings with{Username="another"})||host.CanResume(settings with{Host="different.example"})||
+                saved.Matches(settings,"SHA256:different"))
+                throw new Exception("本机控制的恢复范围有误。");
+            await host.SuspendAsync(CancellationToken.None);
+            if(!host.CanResume(settings))throw new Exception("安全退出丢失本机控制恢复设置。");
+            await host.DisableAsync(CancellationToken.None);
+            if(host.CanResume(settings)||File.Exists(preference))throw new Exception("停用后保留了本机控制授权。");
+            Console.WriteLine("MAC_HOST_CONTROL_RESUME_SCOPE_AND_OPT_OUT_OK");
+        }
+        finally{Directory.Delete(folder,true);}
     }
 }

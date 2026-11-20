@@ -6,16 +6,19 @@ with sync_playwright() as p:
  browser=p.chromium.launch(executable_path='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless=True);page=browser.new_page(viewport={'width':740,'height':634});errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
  main_fixture='''window.__safeCodeDesktop=true;window.__safeCodePlatform='macos';window.__safeCodeAcceptance=true;window.calls=[];
  window.desktopFixture={active:false,managed:false,configured:false,installed:true};
- window.gatewayOnline=true;
+ window.gatewayOnline=true;window.hostEnabled=false;
  window.quotaFixture={state:'available',windows:{five_hour:{used:21,resets_at:1929168000},seven_day:{used:92}}};
  window.chrome={webview:{postMessage(m){
    calls.push(m);
+   if(m.op==='host.enable')window.hostEnabled=m.args.riskAccepted===true;
    if(m.op==='claudeDesktop.start')window.desktopFixture={active:true,managed:true,configured:true,installed:true,endpoint:'http://127.0.0.1:18899'};
    if(m.op==='claudeDesktop.stop')window.desktopFixture={active:false,managed:false,configured:false,installed:true};
    const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:
      m.op==='desktopKey.status'?{configured:false,running:false}:
      m.op==='notice.state'?{accepted:false}:
-     m.op==='host.status'?{enabled:false,state:'disabled',alias:'',command:'',message:'未启用'}:
+     m.op==='login.restoreAvailable'?true:
+     m.op==='login.restoreSaved'?{host:'192.0.2.42',username:'fixture',password:'fixture-only',port:22}:
+     ['host.status','host.enable'].includes(m.op)?{enabled:window.hostEnabled,state:window.hostEnabled?'connected':'disabled',alias:'mac',command:'',message:'未启用'}:
      m.op==='bridge.status'?{running:false}:
      m.op==='safeCodeApi.publicStatus'?{enabled:true,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
      m.op==='window.gateway.open'?true:
@@ -39,15 +42,15 @@ with sync_playwright() as p:
  assert 'macOS 暂不可用' in page.locator('#app-message-body').inner_text()
  page.locator('#app-message-confirm').click()
  assert page.locator('#bridge-dialog').is_hidden()
- # Host-control settings still show the macOS Remote Login instructions.
- page.evaluate("safeCodeNativeResponse({id:'unregistered',result:null});document.querySelector('#host-manage').disabled=false;document.querySelector('#host-manage').click()")
- page.wait_for_selector('#host-dialog[open]');assert page.locator('#host-alias').input_value()=='mac';assert not page.locator('#host-risk').is_checked();assert '远程登录' in page.locator('#host-progress').inner_text()
- page.locator('#host-close').click()
- # With a ready work account, the Mac settings surface offers SSH enable and stop.
+ # The original password remains available after an explicit Keychain unlock.
  page.evaluate("showScreen('login')")
- page.locator('#ip').fill('192.0.2.42')
- page.locator('#username').fill('fixture')
- page.locator('#password').fill('fixture-only')
+ restore=page.locator('#restore-saved-login')
+ expect(restore).to_have_text('解锁已保存的登录信息')
+ restore.click()
+ expect(page.locator('#ip')).to_have_value('192.0.2.42')
+ expect(page.locator('#username')).to_have_value('fixture')
+ expect(page.locator('#password')).to_have_value('fixture-only')
+ expect(restore).to_be_hidden()
  page.locator('#connect').click()
  page.wait_for_function("!document.querySelector('#claude-desktop-manage').disabled")
  expect(page.locator('#public-gateway-runtime')).to_have_text('公网网关 · 并发 1/1 · 排队 2')
@@ -58,11 +61,21 @@ with sync_playwright() as p:
  page.evaluate("window.gatewayOnline=true;window.dispatchEvent(new Event('online'))")
  expect(page.locator('#public-gateway-runtime')).to_have_text('公网网关 · 并发 1/1 · 排队 2')
  page.evaluate("switchMode('maintenance')")
+ # A connected work account can open the host-control settings.
+ page.locator('#host-manage').click()
+ page.wait_for_selector('#host-dialog[open]')
+ assert page.locator('#host-alias').input_value()=='mac'
+ assert not page.locator('#host-risk').is_checked()
+ assert '远程登录' in page.locator('#host-progress').inner_text()
+ page.locator('#host-close').click()
  page.locator('#claude-desktop-manage').click()
  page.wait_for_selector('#app-message-dialog[open]')
  assert page.locator('#app-message-cancel').inner_text()=='我手滑了'
  assert page.locator('#app-message-confirm').inner_text()=='我知道我在做什么'
  page.locator('#app-message-confirm').click()
+ page.wait_for_selector('#host-dialog[open]')
+ page.locator('#host-risk').check()
+ page.locator('#host-enable').click()
  page.wait_for_selector('#claude-desktop-dialog[open]')
  assert page.evaluate("calls.filter(m=>m.op==='notice.claudeDesktop.accept').length===1")
  assert page.evaluate("calls.some(m=>m.op==='claudeDesktop.status')")

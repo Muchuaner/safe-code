@@ -83,6 +83,7 @@ internal sealed class ClaudeDesktopBridge : IDisposable
         await gate.WaitAsync(ct);
         try
         {
+            target.RequireVerifiedHostControl();
             EnsureLoaded();if(gateway!=null||state?.Active==true)throw new InvalidOperationException("请先停止现有 Desktop 桥接。");
             try
             {
@@ -108,6 +109,7 @@ internal sealed class ClaudeDesktopBridge : IDisposable
             {
                 await proposed.StartAsync(ct);
                 var models=await proposed.ModelsAsync(ct);
+                target.RequireVerifiedHostControl();
                 string[] effortOrder=["low","medium","high","xhigh","max"];
                 string? previousModel=state?.Model?.Replace("[1m]","",StringComparison.Ordinal);
                 var chatModels=models.Where(m=>!m.AutoModeClassifier).ToArray();

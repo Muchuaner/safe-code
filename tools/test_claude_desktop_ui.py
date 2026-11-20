@@ -20,7 +20,23 @@ with sync_playwright() as p:
     page.add_init_script('''
       window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;window.claudeStartCalls=[];window.claudeStopCalls=0;window.clientOpenCalls=[];window.clientOpenError=null;
       window.claudeWarningAccepts=0;window.keyEnableCalls=[];window.keyDisableCalls=0;
+      const hostDisabled={enabled:false,state:'disabled',alias:'mac',command:'',message:'未启用'};
+      window.hostState=hostDisabled;window.hostEnableCalls=[];window.hostEnableError=null;
       window.chrome={webview:{postMessage(m){
+        if(m.op==='connect'){
+          const server={statuses:{account:true},osVersion:'24.04',assignedIps:[],observedEgressIp:''};
+          queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{server}}));return;
+        }
+        if(m.op==='host.enable'){
+          window.hostEnableCalls.push(m.args);
+          if(window.hostEnableError){
+            queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,error:window.hostEnableError}));return;
+          }
+          window.hostState={enabled:true,state:'connected',alias:m.args.alias,command:'ssh fixture',message:'已通过登录验证'};
+        }
+        if(m.op==='host.status'||m.op==='host.enable'){
+          queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.hostState}));return;
+        }
         if(m.op==='notice.claudeDesktop.accept'){
           window.claudeWarningAccepts++;
           localStorage.setItem('claude-desktop-warning-fixture','accepted');
@@ -145,6 +161,9 @@ with sync_playwright() as p:
     page.evaluate("window.safeCodeClaudeDesktopStatus(window.__claudeStatus)")
     assert page.locator("#claude-gateway-status").inner_text()=="Claude网关未启用"
     assert "inactive" in page.locator("#claude-gateway-status").get_attribute("class")
+    page.evaluate("showScreen('login');document.querySelector('#ip').value='192.0.2.42';document.querySelector('#username').value='fixture';document.querySelector('#login-form').onsubmit({preventDefault(){}})")
+    page.wait_for_function("!document.querySelector('#claude-desktop-manage').disabled")
+    page.evaluate("switchMode('maintenance')")
     def open_desktop_settings():
         page.evaluate("() => { window.settingsAction=document.querySelector('#claude-desktop-manage').onclick(); }")
     for dismiss in ('#app-message-cancel','#app-message-dialog [data-dialog-dismiss]','escape'):
@@ -162,8 +181,31 @@ with sync_playwright() as p:
     open_desktop_settings()
     page.wait_for_selector('#app-message-dialog[open]')
     page.locator('#app-message-confirm').click()
+    page.locator('#host-dialog').wait_for()
+    assert not page.locator('#host-risk').is_checked()
+    assert page.locator('#host-enable').is_disabled()
+    assert not page.locator('#claude-desktop-dialog').is_visible()
+    assert page.evaluate('window.claudeStartCalls.length')==0
+    page.locator('#host-close').click()
+    page.evaluate('window.settingsAction')
+    assert not page.locator('#claude-desktop-dialog').is_visible()
+    open_desktop_settings()
+    page.locator('#host-dialog').wait_for()
+    page.evaluate("window.hostEnableError='本机登录未验证'")
+    page.locator('#host-risk').check()
+    page.locator('#host-enable').click()
+    page.get_by_text('本机登录未验证',exact=True).wait_for()
+    assert not page.locator('#host-risk').is_checked()
+    assert page.evaluate('window.claudeStartCalls.length')==0
+    page.evaluate("window.hostEnableError=null")
+    page.locator('#host-risk').check()
+    page.locator('#host-enable').click()
+    page.locator('#claude-desktop-dialog').wait_for()
     page.evaluate('window.settingsAction')
     assert page.evaluate('window.claudeWarningAccepts')==1
+    assert page.evaluate('window.hostEnableCalls.every(call=>call.riskAccepted===true)')
+    assert not page.locator('#host-dialog').is_visible()
+    assert page.evaluate('window.claudeStartCalls.length')==0
     page.wait_for_function("document.querySelector('#claude-desktop-dialog').open")
     assert page.locator('#claude-desktop-gateway').count()==0
     assert page.locator('#claude-desktop-key').count()==0

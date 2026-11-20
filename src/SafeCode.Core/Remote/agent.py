@@ -167,7 +167,7 @@ if operation=='host_bridge':
     if action=='remove':
         for path in [config,known,target,public]:path.unlink(missing_ok=True)
         print(json.dumps({'removed':True}));sys.exit(0)
-    if action!='configure':raise ValueError('本机控制操作无效。')
+    if action not in ('configure','verify'):raise ValueError('本机控制操作无效。')
     alias=request['alias'];username=request['username'];port=request['port'];host_key=request['hostKey'];user_sid=request.get('userSid','')
     if not re.fullmatch('[a-z][a-z0-9_-]{0,31}',alias) or not re.fullmatch(r'[a-zA-Z0-9_.@\\-]{1,128}',username):raise ValueError('本机控制别名或用户名无效。')
     is_mac=bool(re.fullmatch(r'macos:[1-9][0-9]{0,9}',user_sid))
@@ -181,13 +181,17 @@ if operation=='host_bridge':
     def atomic(path,value):
         with tempfile.NamedTemporaryFile('w',dir=directory,delete=False) as f:f.write(value);temporary=pathlib.Path(f.name)
         temporary.chmod(0o600);os.replace(temporary,path)
-    atomic(known,host_alias+' '+' '.join(host_key.split()[:2])+'\n');atomic(config,body)
-    completed=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'whoami'],capture_output=True,text=True,timeout=20)
-    if completed.returncode:raise ValueError('本机 SSH 登录验证失败，请检查本机账户、OpenSSH 日志与授权。')
-    identity=completed.stdout.strip().lower().replace('/','\\');expected=username.lower()
-    if identity!=expected and not identity.endswith('\\'+expected):raise ValueError('本机登录账户不匹配，已拒绝生成可用状态。')
+    pin=host_alias+' '+' '.join(host_key.split()[:2])+'\n'
+    if action=='configure':
+        atomic(known,pin);atomic(config,body)
+        completed=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'whoami'],capture_output=True,text=True,timeout=20)
+        if completed.returncode:raise ValueError('本机 SSH 登录验证失败，请检查本机账户、OpenSSH 日志与授权。')
+        identity=completed.stdout.strip().lower().replace('/','\\');expected=username.lower()
+        if identity!=expected and not identity.endswith('\\'+expected):raise ValueError('本机登录账户不匹配，已拒绝生成可用状态。')
+    elif config.is_symlink() or known.is_symlink() or config.read_text()!=body or known.read_text()!=pin:
+        raise ValueError('本机控制配置或指纹已变化。')
     if is_mac:
-        proof=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'/usr/bin/uname -s && /usr/bin/id -u'],capture_output=True,text=True,timeout=20)
+        proof=subprocess.run(['/usr/bin/ssh','-F',str(config),alias,'/usr/bin/uname -s && /usr/bin/id -u'],capture_output=True,text=True,timeout=8 if action=='verify' else 20)
         if proof.returncode or proof.stdout.strip().splitlines()!=['Darwin',user_sid.split(':',1)[1]]:raise ValueError('本机 macOS 账户身份与授权不匹配，未生成可用状态。')
     else:
         import base64
@@ -959,7 +963,7 @@ def codex_bridge(options):
 
 def safe_code_api(options):
     action=options.get('action')
-    if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public'):
+    if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription'):
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
@@ -1044,7 +1048,7 @@ def desktop_gateway(options):
 def host_bridge(options):
     client=options.get('clientId','');action=options.get('action','')
     if not re.fullmatch('[a-f0-9]{20}',client):raise RuntimeError('本机控制标识无效。')
-    if action=='configure':
+    if action in ('configure','verify'):
         port=options.get('port')
         if not isinstance(port,int) or not 1024<=port<=65535:raise RuntimeError('本机控制端口无效。')
         listeners=run(['ss','-H','-lnt','sport = :'+str(port)]).stdout

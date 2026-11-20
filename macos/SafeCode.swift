@@ -3,7 +3,7 @@ import WebKit
 import Security
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "Beta-0.4.4.19"
+private let safeCodeVersion = "Beta-0.4.4.22"
 private enum AppError: LocalizedError {
     case message(String)
     case keychainCancelled
@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var didRunSmoke = false
     private var encryptionKey: Data?
     private var unlockingSecrets = false
-    private var hasSavedLogin: Bool { hasLocalFile("login.aes") }
+    private var hasSavedLogin: Bool { hasLocalFile("login.aes") || hasLocalFile("login.aes.previous") }
     private var hasDesktopKey: Bool { hasLocalFile("desktop-key.state") }
     private var hasEncryptedData: Bool {
         if hasSavedLogin || hasDesktopKey || hasLocalFile("desktop-ssh.aes") { return true }

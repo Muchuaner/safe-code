@@ -2,28 +2,48 @@
 
 function renderClaudeSubscription(container, subscription) {
   const state = subscription?.state;
-  const messages = {
-    loading: '正在读取 VPS 上 Claude 订阅的用量',
-    unavailable: 'VPS 上的 Claude 登录未提供订阅用量',
-    unreachable: '暂时无法读取 Claude 订阅用量',
-    rate_limited: 'Claude 用量查询暂时受限',
-    stale: 'Claude 用量暂未更新，显示上次读取的数据',
-  };
   container.dataset.state = state ?? 'unavailable';
-  container.title = messages[state] ?? 'VPS 上 Claude 订阅的剩余额度';
-  const details = [container.title];
+  const details = [];
   for (const [name, label] of [['five_hour', '5 小时'], ['seven_day', '7 天']]) {
     const usage = subscription?.windows?.[name];
     const reset = usage?.resets_at;
-    const expired = state === 'stale' && reset && reset * 1000 <= Date.now();
-    const percent = usage && !expired ? Math.max(0, Math.min(100, 100 - usage.used)) : null;
+    const percent = Number.isFinite(usage?.used) && (!reset || reset * 1000 > Date.now())
+      ? Math.max(0, Math.min(100, 100 - usage.used)) : null;
     const value = container.querySelector('[data-limit="' + name + '"]');
-    const display = percent == null ? '—' : percent.toLocaleString('zh-CN', {maximumFractionDigits: 1}) + '%';
+    value.parentElement.hidden = percent == null;
+    if (percent == null) continue;
+    const display = percent.toLocaleString('zh-CN', {maximumFractionDigits: 1}) + '%';
     value.textContent = display;
-    value.dataset.low = String(percent != null && percent <= 15);
+    value.dataset.low = String(percent <= 15);
     const at = reset ? new Date(reset * 1000).toLocaleString('zh-CN', {hour12: false}) : '';
     details.push(label + '剩余 ' + display + (at ? '，重置于 ' + at : ''));
   }
-  container.title = details.join(' · ');
-  container.setAttribute('aria-label', details.join('，'));
+  container.title = details.length
+    ? (state === 'stale' ? '上次读取 · ' : '') + details.join(' · ')
+    : '点击刷新查询网关所用 Claude 账户的订阅用量';
+}
+
+function bindClaudeUsageRefresh(container, lookup, accept) {
+  const button = container.querySelector('.quota-refresh');
+  const link = container.querySelector('.quota-link');
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.title = '正在查询…';
+    link.hidden = true;
+    try {
+      const value = await lookup();
+      accept(value);
+      if (value?.state !== 'available') {
+        button.title = 'Claude Code 未返回最新额度，可在官方用量页查看';
+        link.hidden = false;
+      } else {
+        button.title = '查询 Claude 用量';
+      }
+    } catch (error) {
+      button.title = error.message;
+      link.hidden = false;
+    } finally {
+      button.disabled = false;
+    }
+  });
 }

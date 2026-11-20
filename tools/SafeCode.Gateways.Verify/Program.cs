@@ -4,6 +4,13 @@ void Assert(bool value,string message){if(!value)throw new Exception(message);}
 string root=Path.Combine(Path.GetTempPath(),"safe-code-gateway-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
 try
 {
+    using(var session=new SshSession(root))
+    {
+        bool hostRequired=false;
+        try{session.RequireVerifiedHostControl();}
+        catch(InvalidOperationException error){hostRequired=error.Message.Contains("本机远程控制",StringComparison.Ordinal);}
+        Assert(hostRequired,"Desktop host control was accepted without a verified session");
+    }
     string path=Path.Combine(root,"enabled.json");
     var settings=new ConnectionSettings("test-vm","workspace","unused",22);
     var pref=new GatewayPreference(true,"test-vm",22,"workspace","SHA256:verified",18888,"opus",true);

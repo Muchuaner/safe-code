@@ -14,6 +14,7 @@ window.issues = [];
 window.updates = [];
 window.activeKeys = [];
 window.concurrency = 1;
+window.usageLookups = 0;
 window.addFixtureKey = () => {
   const key = {id: String(window.activeKeys.length + 1).padStart(64, '0'), note: '测试密钥',
     enabled: true, requests: 0, tokens: 0, rpm: 0, cost_nanos: 14616700000, unpriced_tokens: 10};
@@ -29,6 +30,9 @@ window.chrome = {webview: {postMessage({id, op, args}) {
       active: window.concurrency > 1, active_count: window.concurrency > 1 ? 2 : 0,
       concurrency: Number(window.concurrency), concurrency_text: String(window.concurrency),
       waiting: 0, billing: {cost_nanos: 0, unpriced_tokens: 10}};
+  } else if (args.action === 'refresh_subscription') {
+    window.usageLookups++;
+    result = {state: 'available', windows: {five_hour: {used: 23.5}, seven_day: {used: 92}}};
   } else if (args.action === 'set_concurrency') {
     window.concurrency = args.concurrency;
     result = {concurrency: window.concurrency};
@@ -84,6 +88,13 @@ def test_gateway_activation():
             code = page.get_by_label('激活码', exact=True)
             issue_dialog = page.locator('#issued-dialog')
 
+            quota = page.locator('#gateway-claude-limits')
+            assert page.evaluate('window.usageLookups') == 0
+            quota.get_by_role('button', name='查询 Claude 用量').click()
+            expect(quota.locator('[data-limit="five_hour"]')).to_have_text('76.5%')
+            expect(quota.locator('[data-limit="seven_day"]')).to_have_text('8%')
+            assert page.evaluate('window.usageLookups') == 1
+
             slots = page.locator('#gateway-concurrency')
             expect(slots).to_have_text('处理槽位 1')
             slots.click()
@@ -92,7 +103,9 @@ def test_gateway_activation():
             expect(slot_value).to_have_value('1')
             slot_value.fill('0')
             save_slots.click()
-            assert page.evaluate('window.concurrency') == 1
+            expect(slots).to_have_text('处理槽位 不限')
+            expect(page.locator('#queue-capacity')).to_be_hidden()
+            slots.click()
             slot_value.fill('30')
             save_slots.click()
             expect(slots).to_have_text('处理槽位 30')

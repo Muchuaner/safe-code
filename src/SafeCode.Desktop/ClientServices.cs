@@ -37,7 +37,7 @@ internal sealed class ClientServices : IDisposable
     private const string AtomNamespace="http://www.w3.org/2005/Atom";
     private const string UnknownUpdateStatus="GitHub 暂时限制了更新查询，且无法从官方发布页确认版本，请稍后重试。";
     private const int ExplicitOptInVersion=1;
-    private const int CurrentDiagnosticScope=1;
+    private const int CurrentDiagnosticScope=2;
     private readonly string preferencesPath;
     private readonly string directory;
     private readonly string updateAssetSuffix;
@@ -203,7 +203,7 @@ internal sealed class ClientServices : IDisposable
                 deadline=CancellationTokenSource.CreateLinkedTokenSource(ct,diagnosticReporting.Token);
                 deadline.CancelAfter(TimeSpan.FromSeconds(12));
             }
-            var body=new{schema=2,eventId=trace.Id,version=Version,context,report};
+            var body=new{schema=report.Gateway==null?2:3,eventId=trace.Id,version=Version,context,report};
             await diagnosticSlots.WaitAsync(deadline.Token);acquired=true;
             for(int attempt=0;attempt<2;attempt++)
             {
@@ -240,7 +240,7 @@ internal sealed class ClientServices : IDisposable
         message=message.Trim();if(message.Length<5||message.Length>4000)throw new ArgumentException("反馈内容须为 5–4000 字。");
         FeedbackContext? context;
         lock(diagnosticGate)context=RecentFailure;
-        using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/feedback"),new{schema=2,eventId=Guid.NewGuid().ToString(),version=Version,message,context},JsonDefaults.Options,ct);
+        using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/feedback"),new{schema=context?.Report.Gateway==null?2:3,eventId=Guid.NewGuid().ToString(),version=Version,message,context},JsonDefaults.Options,ct);
         if(!response.IsSuccessStatusCode)throw new IOException(response.StatusCode==HttpStatusCode.TooManyRequests?"提交较频繁，请稍后重试。":"反馈暂未送达，请稍后重试。");
     }
     public async Task<UpdateInfo> CheckUpdateAsync(bool force,CancellationToken ct)

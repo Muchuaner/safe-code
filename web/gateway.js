@@ -51,8 +51,14 @@ function rpc(op, args = {}) {
   });
 }
 const manage = (action, options = {}) => rpc('safeCodeApi.manage', {action, ...options});
+const quotaCard = byId('gateway-claude-limits');
+bindClaudeUsageRefresh(quotaCard, () => manage('refresh_subscription'), value => {
+  if (snapshot) snapshot.subscription = value;
+  renderClaudeSubscription(quotaCard, value);
+});
 const fmt = value => value == null ? '—' : number.format(value);
-const slotLabel = item => fmt(item?.concurrency_text ? BigInt(item.concurrency_text) : item?.concurrency ?? 1);
+const unlimitedSlots = item => (item?.concurrency_text ?? String(item?.concurrency)) === '0';
+const slotLabel = item => unlimitedSlots(item) ? '不限' : fmt(item?.concurrency_text ? BigInt(item.concurrency_text) : item?.concurrency ?? 1);
 const slotProgressMaximum = item => Math.min(item?.concurrency ?? 1, Number.MAX_VALUE);
 const usd = nanos => nanos == null ? '—' : nanos > 0 && nanos < 100000 ? '< $0.0001' : dollars.format(nanos / 1e9);
 const costLabel = item => usd(item.cost_nanos);
@@ -126,10 +132,13 @@ function renderOverview() {
   queue.dataset.active = String(running > 0);
   byId('queue-current').textContent = running === 1 && current ? '正在处理 · ' + keyName(current)
     : running ? '正在处理 ' + fmt(running) + ' 个请求' : '网关空闲';
-  byId('queue-capacity').max = slotProgressMaximum(snapshot);
-  byId('queue-capacity').value = running;
-  byId('queue-waiting').textContent = '并发 ' + running + '/' + slotLabel(snapshot) +
-    ' · 排队 ' + fmt(waiting) + (snapshot.queue_limit == null ? '' : '/' + fmt(snapshot.queue_limit));
+  const unlimited = unlimitedSlots(snapshot);
+  const progress = byId('queue-capacity');
+  progress.hidden = unlimited;
+  progress.max = unlimited ? 1 : slotProgressMaximum(snapshot);
+  progress.value = running;
+  byId('queue-waiting').textContent = '并发 ' + running + (unlimited ? '（不限）' : '/' + slotLabel(snapshot)) +
+    ' · 排队 ' + fmt(waiting) + (unlimited || snapshot.queue_limit == null ? '' : '/' + fmt(snapshot.queue_limit));
   byId('queue-waiting').title = snapshot.wait_limit == null ? '' : '最长排队等待 ' + snapshot.wait_limit + ' 秒';
 }
 function renderKeys() {

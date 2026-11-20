@@ -8,8 +8,8 @@
     <div class="notice-content">
     <div class="intro"><img class="notice-logo" src="../assets/safe-code-logo.png" alt="Safe Code" width="2172" height="724"></div>
     <div class="declaration"><h2>使用前，请先了解</h2><p>本程序纯开源、完全免费，不自动上传账户、密码或文件。</p><p>本程序仅面向海外中文用户，<strong>中国大陆禁止使用。</strong></p></div>
-    <label class="usage-consent"><input type="checkbox" id="usage-consent"><span>同意上传基础使用数据用于统计<small>仅随机安装编号、启动次数、版本及 <span data-os-label>Windows</span> 类型，可随时关闭。</small></span></label><label class="usage-consent"><input type="checkbox" id="diagnostics-consent"><span>同意自动上传匿名功能诊断<small>涵盖部署、连接、网关及客户端接入。仅上报结果、耗时和固定错误类型，可随时关闭。</small></span></label><div class="diagnostic-notice" role="note" aria-label="诊断须知">
-      <p>诊断须知：开启后自动上传操作结果、失败阶段及错误分类，使用随机安装编号、会话编号和问题编号关联重试，不采集真实身份。</p>
+    <label class="usage-consent"><input type="checkbox" id="usage-consent"><span>同意上传基础使用数据用于统计<small>仅随机安装编号、启动次数、版本及 <span data-os-label>Windows</span> 类型，可随时关闭。</small></span></label><label class="usage-consent"><input type="checkbox" id="diagnostics-consent"><span>同意自动上传匿名功能诊断<small>涵盖部署、连接、网关及客户端接入。仅上报结构化诊断，可随时关闭。</small></span></label><div class="diagnostic-notice" role="note" aria-label="诊断须知">
+      <p>诊断须知：开启后自动上传操作结果、失败阶段及错误分类，使用随机安装编号、会话编号和问题编号关联重试，不采集真实身份。网关请求失败时附带连接阶段、HTTP 状态、并发槽位和上游明确返回的错误类型及请求编号。</p>
       <p>提交反馈时，会附带本次使用中最近一次失败的诊断摘要（24 小时内），不上传原始日志。</p>
       <p>关闭匿名诊断会清除本机诊断关联编号，之后的反馈不附带诊断。已上传诊断保留 30 天，反馈及其摘要保留 180 天。</p>
     </div><div class="notice-services"><button class="text-button" data-open-services>更新与反馈</button></div></div><div class="bottom-actions"><button class="primary" id="accept">我已知晓，确认并继续</button><button class="plain" id="exit">退出软件</button></div>
@@ -50,8 +50,8 @@
     <div class="workspace-bottom"><span>SAFE CODE <span class="separator">/</span> 开源 · 免费 · 本地运行</span><div class="gateway-statuses"><button type="button" id="mount-guard-status" class="text-button inactive" title="查看挂载守护状态">挂载守护 · 未挂载</button><span id="claude-gateway-status" aria-live="polite" class="gateway-status inactive">Claude网关未启用</span><span id="codex-gateway-status" aria-live="polite" class="gateway-status inactive">Codex网关未启用</span></div><div class="workspace-bottom-actions"><button class="text-button" data-open-services id="services-entry">更新与反馈</button></div>
       <div class="public-gateway-footer" id="public-gateway-footer" hidden>
         <button type="button" id="public-gateway-runtime" class="gateway-status">公网网关 · 正在读取</button>
-        <div id="footer-claude-limits" class="gateway-quota" role="group" aria-label="Claude 订阅剩余" tabindex="0" hidden>
-          <span>Claude 剩余</span><span>5h <strong data-limit="five_hour">—</strong></span><span>7 天 <strong data-limit="seven_day">—</strong></span>
+        <div id="footer-claude-limits" class="gateway-quota" role="group" aria-label="Claude 订阅用量" hidden>
+          <span>Claude 用量</span><span hidden>5 小时剩余 <strong data-limit="five_hour"></strong></span><span hidden>7 天剩余 <strong data-limit="seven_day"></strong></span><a href="https://claude.ai/settings/usage" class="quota-link" hidden>官方用量页</a><button type="button" class="quota-refresh" aria-label="查询 Claude 用量" title="查询 Claude 用量"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8a8 8 0 1 0 0 8m0-12v4h-4"/></svg></button>
         </div>
       </div>
     </div>
@@ -86,7 +86,7 @@
     <div class="service-section service-consents">
       <label class="usage-consent"><input type="checkbox" id="settings-usage-consent"><span>同意上传基础使用数据用于统计</span></label>
       <label class="usage-consent"><input type="checkbox" id="settings-diagnostics-consent"><span>同意自动上传匿名功能诊断</span></label>
-      <p id="usage-detail">基础统计和匿名诊断默认关闭，须主动勾选并确认声明才会自动上报。基础统计仅含随机安装编号、启动次数、版本及 <span data-os-label>Windows</span> 类型。匿名诊断覆盖部署、维护、网关和客户端接入，报告只含操作结果、耗时和固定错误类型。升级后请重新选择是否开启。不发送原始日志、对话内容、账号、密码、密钥、VPS 地址、路径或文件。两个开关均可随时关闭。 <span id="usage-recipient"></span></p>
+      <p id="usage-detail">基础统计和匿名诊断默认关闭，须主动勾选并确认声明才会自动上报。基础统计仅含随机安装编号、启动次数、版本及 <span data-os-label>Windows</span> 类型。匿名诊断覆盖部署、维护、网关和客户端接入，网关请求失败时会附带阶段、HTTP 状态及上游返回的错误类型和请求编号。升级后请重新选择是否开启。不发送原始日志、对话内容、账号、密码、密钥、VPS 地址、路径或文件。两个开关均可随时关闭。 <span id="usage-recipient"></span></p>
       <p class="diagnostic-notice">诊断须知：开启后自动上传操作结果、失败阶段及错误分类，并使用随机安装编号、会话编号和问题编号关联重试；不采集真实身份。提交反馈时会附带本次使用中最近一次失败的诊断摘要（24 小时内），不上传原始日志。关闭匿名诊断会清除本机诊断关联编号，之后的反馈不附带诊断；已上传诊断保留 30 天，反馈及其摘要保留 180 天。</p>
     </div>
   </div>

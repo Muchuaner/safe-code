@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using SafeCode.Core;
 using Renci.SshNet.Common;
 using System.Net.Sockets;
@@ -9,7 +10,8 @@ namespace SafeCode.Desktop;
 
 // 诊断只输出固定词表，原始日志、异常文本、堆栈和请求参数从不进入报告。
 internal sealed record DiagnosticSignal(int Seconds,string Code);
-internal sealed record DiagnosticReport(string Operation,string Outcome,string ErrorKind,string FailureSite,int DurationSeconds,DiagnosticSignal[] Signals,int OmittedLines,string Stage);
+internal sealed record DiagnosticReport(string Operation,string Outcome,string ErrorKind,string FailureSite,int DurationSeconds,DiagnosticSignal[] Signals,int OmittedLines,string Stage,
+    [property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] IReadOnlyDictionary<string,object>? Gateway=null);
 internal sealed class DiagnosticTrace(string operation,int generation,bool background=false)
 {
     private static readonly string[] DeploymentOperations=["account","localization","desktop","chrome","input","claude","ssh","cloud","mount_install"];
@@ -36,6 +38,7 @@ internal sealed class DiagnosticTrace(string operation,int generation,bool backg
     public string Id {get;}=Guid.NewGuid().ToString();
     public int Generation=>generation;
     public bool Background=>background;
+    public IReadOnlyDictionary<string,object>? Gateway {get;set;}
     public static bool IsBackgroundOperation(string operation,JsonElement args=default)=>
         operation is "deployment_settings" or "resource_stats" or "environment_assessment" or "gateway_reconnect" ||
         operation is ("gateway_key_list" or "gateway_usage") && ReadFlag(args,"background");
@@ -155,6 +158,6 @@ internal sealed class DiagnosticTrace(string operation,int generation,bool backg
         if(signal!=null&&PhaseRanks.ContainsKey(signal))signal=null;
         if(signal!=null){Observe(error!.Message);kind=signal;}
         string site=FailureSite(operation,error);
-        lock(gate)return new(operation,error==null?"success":kind=="cancelled"?"cancelled":"failure",kind,site,Seconds,signals.ToArray(),omitted,stage);
+        lock(gate)return new(operation,error==null?"success":kind=="cancelled"?"cancelled":"failure",kind,site,Seconds,signals.ToArray(),omitted,stage,Gateway);
     }
 }

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install from a directory containing server.py, management.py, pricing.py, desktop_gateway.py and codex_bridge.zip.
+# Stage the desktop-api tools, desktop_gateway.py and codex_bridge.zip together.
 set -euo pipefail
 user=${1:?usage: install.sh linux-user bind-ip [port] [public-ip]}
 bind=${2:?specify the listener IP address}
@@ -13,8 +13,12 @@ node=/opt/safe-code/node/bin/node
 [[ -x "$node" ]] || node=$(command -v node)
 [[ $("$node" -p 'Number(process.versions.node.split(".")[0]) >= 20') == true ]]
 dir=$(cd "$(dirname "$0")" && pwd)
+for file in desktop_gateway.py server.py management.py claude_usage.py pricing.py configure_cloudcli.py host_control_mcp.py device_bridge.py codex_bridge.zip; do
+    [[ -f "$dir/$file" ]] || { printf 'Missing SafeCode gateway component: %s\n' "$file" >&2; exit 1; }
+done
 install -d -m 755 "$app"
-install -m 644 "$dir"/{desktop_gateway,server,management,pricing}.py "$app/"
+install -m 644 "$dir"/{desktop_gateway,server,management,claude_usage,pricing}.py "$app/"
+install -m 644 "$dir"/{configure_cloudcli,host_control_mcp,device_bridge}.py "$app/"
 python3 - "$dir/codex_bridge.zip" "$app" <<'PY'
 import hashlib,sys,zipfile
 from pathlib import Path

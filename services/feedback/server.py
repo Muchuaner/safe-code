@@ -32,11 +32,60 @@ ERRORS={'ssh_auth_failed','ssh_timeout','ssh_connection_failed','network_error',
 RELAY_ERRORS={'gateway_invalid_request','gateway_auth_failed','gateway_conflict','gateway_rate_limited',
               'gateway_not_supported','gateway_upstream_failed'}
 SITES={'unknown','account_draft_clear','account_draft_save','account_draft_read','remote_task','directory_mount','connection'}
-def validate_diagnostic(report,extended=False):
+GATEWAY_ERROR_TYPES = {
+    'invalid_request_error','authentication_error','billing_error','permission_error',
+    'not_found_error','request_too_large','rate_limit_error','api_error','overloaded_error',
+}
+GATEWAY_CHOICES = {
+    'endpoint': {'messages','models','count_tokens'}, 'platform': {'macos','windows'},
+    'backend': {'claude_code','cloudcli','unknown'},
+    'stage': {'gateway_auth','device_check','request_decode','gateway_validation','gateway_queue',
+              'session_route','cloudcli_connect','cloudcli_response','cli_turn','anthropic_response'},
+    'modelFamily': {'opus','sonnet','haiku','fable','mythos'},
+    'errorType': GATEWAY_ERROR_TYPES, 'anthropicError': GATEWAY_ERROR_TYPES,
+    'anthropicEvidence': {'cli_event','cli_error_text'},
+}
+GATEWAY_BOUNDS = {
+    'active': 1000000, 'waiting': 1000000, 'slots': 1000000, 'gatewayMs': 900000,
+    'waitMs': 900000, 'headersMs': 900000, 'cloudcliHeadersMs': 900000,
+    'messageCount': 1000000, 'toolCount': 1000000, 'requestBytes': 8388609,
+    'responseBytes': 16777216, 'receivedBytes': 16777216, 'streamLines': 50001,
+}
+GATEWAY_STATUSES = {'httpStatus','gatewayStatus','cloudcliStatus','anthropicStatus'}
+
+
+def validate_gateway(detail):
+    if not isinstance(detail, dict) or not {'endpoint','platform','responseBytes','sseError'} <= detail.keys():
+        raise ValueError('网关诊断字段无效')
+    for key, value in detail.items():
+        if key in GATEWAY_CHOICES:
+            valid = isinstance(value, str) and value in GATEWAY_CHOICES[key]
+        elif key in GATEWAY_BOUNDS:
+            valid = type(value) is int and 0 <= value <= GATEWAY_BOUNDS[key]
+        elif key in GATEWAY_STATUSES:
+            valid = type(value) is int and 100 <= value <= 599
+        elif key in ('sseError','streamComplete'):
+            valid = type(value) is bool
+        elif key == 'anthropicRequestId':
+            valid = isinstance(value, str) and re.fullmatch(r'req_[a-zA-Z0-9]{8,80}', value)
+        elif key == 'id':
+            valid = isinstance(value, str) and str(uuid.UUID(value)) == value
+        else:
+            valid = False
+        if not valid:
+            raise ValueError('网关诊断值无效')
+
+
+def validate_diagnostic(report,extended=False, gateway=False):
     fields={'operation','outcome','errorKind','failureSite','durationSeconds','signals','omittedLines'}
     if extended:fields.add('stage')
+    if gateway:fields.add('gateway')
     if extended and (not isinstance(report,dict) or report.get('stage') not in SIGNALS|{'started'}):raise ValueError('诊断阶段无效')
     if not isinstance(report,dict) or set(report)!=fields:raise ValueError('诊断字段不受支持')
+    if gateway:
+        if report['operation'] != 'desktop_key_request' or report['outcome'] != 'failure':
+            raise ValueError('网关详情只用于接入请求失败')
+        validate_gateway(report['gateway'])
     operations=OPERATIONS if extended else LEGACY_OPERATIONS
     errors=ERRORS|RELAY_ERRORS if extended else ERRORS
     for key,allowed in [('operation',operations),('outcome',{'success','failure','cancelled'}),('errorKind',errors),('failureSite',SITES)]:
@@ -59,10 +108,10 @@ def validate_context(context):
     for value in context.values():
         if not isinstance(value,str) or str(uuid.UUID(value))!=value:raise ValueError('关联编号无效')
 
-def validate_feedback_context(context):
+def validate_feedback_context(context,gateway=False):
     if context is None:return
     if not isinstance(context,dict) or set(context)!={'correlation','report'}:raise ValueError('反馈关联字段无效')
-    validate_context(context['correlation']);validate_diagnostic(context['report'],True)
+    validate_context(context['correlation']);validate_diagnostic(context['report'],True,gateway)
     if context['report']['outcome']!='failure':raise ValueError('反馈仅关联失败操作')
 
 class Store:
@@ -79,21 +128,21 @@ class Store:
     def insert(self,kind,data):
         required={'schema','eventId','version','installationId','os','eventType'} if kind=='usage' else {'schema','eventId','version','report'} if kind=='diagnostics' else {'schema','eventId','version','message'}
         if not isinstance(data,dict):raise ValueError('字段不受支持')
-        extended=type(data.get('schema')) is int and data['schema']==2 and kind in ['feedback','diagnostics']
+        extended=type(data.get('schema')) is int and data['schema'] in (2,3) and kind in ['feedback','diagnostics']
         if extended:required.add('context')
-        if set(data)!=required or type(data.get('schema')) is not int or data['schema'] not in ([1,2] if kind in ['feedback','diagnostics'] else [1]):raise ValueError('字段不受支持')
+        if set(data)!=required or type(data.get('schema')) is not int or data['schema'] not in ([1,2,3] if kind in ['feedback','diagnostics'] else [1]):raise ValueError('字段不受支持')
         if extended:
             if kind=='diagnostics':
                 validate_context(data['context'])
                 if data['context']['operationId']!=data['eventId']:raise ValueError('问题编号不一致')
-            else:validate_feedback_context(data['context'])
+            else:validate_feedback_context(data['context'],data['schema']==3)
         for key in ['eventId']+(['installationId'] if kind=='usage' else []):
             if not isinstance(data[key],str) or str(uuid.UUID(data[key]))!=data[key]:raise ValueError('标识格式错误')
         if not isinstance(data['version'],str) or not VERSION.fullmatch(data['version']):raise ValueError('版本格式错误')
         now=dt.datetime.now(dt.timezone.utc);day=now.date().isoformat()
         if kind=='usage':
             if data['os'] not in ['Windows','macOS'] or data['eventType']!='launch':raise ValueError('事件不受支持')
-        elif kind=='diagnostics':validate_diagnostic(data['report'],extended)
+        elif kind=='diagnostics':validate_diagnostic(data['report'],extended,data['schema']==3)
         elif not isinstance(data['message'],str) or not 5<=len(data['message'].strip())<=4000:raise ValueError('反馈长度无效')
         with self.connect() as db:
             db.execute('DELETE FROM usage WHERE day < ?',((now.date()-dt.timedelta(days=90)).isoformat(),))

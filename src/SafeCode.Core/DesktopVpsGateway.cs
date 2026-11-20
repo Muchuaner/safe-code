@@ -43,6 +43,7 @@ public sealed class DesktopVpsGateway : IDisposable
     public async Task StartAsync(CancellationToken ct=default)
     {
         if(!session.IsConnected)throw new IOException("请先连接目标 VPS。");
+        session.RequireVerifiedHostControl();
         try
         {
             var remote=await RequestAsync("start",ct);
@@ -50,6 +51,7 @@ public sealed class DesktopVpsGateway : IDisposable
             tunnel=await session.OpenDesktopTunnelAsync((uint)remote.Port,ct,localPort);
             Endpoint="http://127.0.0.1:"+tunnel.BoundPort;
             if(!await RefreshAsync(ct))throw new IOException("VPS 网关未通过 SSH 隧道验证；未改写 Desktop 配置。");
+            session.RequireVerifiedHostControl();
         }
         catch
         {

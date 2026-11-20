@@ -12,6 +12,17 @@ class MacHostProof(unittest.TestCase):
    code="import subprocess,sys,json\noriginal=subprocess.run\ncommands=[]\ndef run(args,**kwargs):\n commands.append(args)\n text='tester\\n' if args[-1]=='whoami' else 'Darwin\\n501\\n'\n return subprocess.CompletedProcess(args,0,text,'')\nsubprocess.run=run\n"+agent.USER_FILES
    good=subprocess.run([sys.executable,'-I','-c',code],input=json.dumps(request),text=True,capture_output=True,env={**os.environ,'HOME':str(directory)})
    self.assertEqual(good.returncode,0,good.stderr);self.assertTrue(json.loads(good.stdout)['verified'])
+   config=target.with_name('config');pin=target.with_name('known_hosts')
+   original_config=(config.read_bytes(),config.stat().st_mtime_ns)
+   original_pin=(pin.read_bytes(),pin.stat().st_mtime_ns)
+   check={**request,'action':'verify'}
+   proof=subprocess.run([sys.executable,'-I','-c',code],input=json.dumps(check),text=True,capture_output=True,env={**os.environ,'HOME':str(directory)})
+   self.assertEqual(proof.returncode,0,proof.stderr);self.assertTrue(json.loads(proof.stdout)['verified'])
+   self.assertEqual((config.read_bytes(),config.stat().st_mtime_ns),original_config)
+   self.assertEqual((pin.read_bytes(),pin.stat().st_mtime_ns),original_pin)
+   check['port']=2049
+   wrong=subprocess.run([sys.executable,'-I','-c',code],input=json.dumps(check),text=True,capture_output=True,env={**os.environ,'HOME':str(directory)})
+   self.assertNotEqual(wrong.returncode,0);self.assertIn('配置或指纹已变化',wrong.stderr)
    request['userSid']='macos:502'
    bad=subprocess.run([sys.executable,'-I','-c',code],input=json.dumps(request),text=True,capture_output=True,env={**os.environ,'HOME':str(directory)})
    self.assertNotEqual(bad.returncode,0);self.assertIn('macOS',bad.stderr)

@@ -35,6 +35,62 @@ try{
   using var doc=JsonDocument.Parse(handler.Bodies[0]);Assert(doc.RootElement.EnumerateObject().Select(p=>p.Name).Order().SequenceEqual(new[]{"schema","eventId","installationId","version","os","eventType"}.Order()),"unexpected telemetry fields");
   await client.SetConsentAsync(false,false);await client.SendFeedbackAsync("Explicit user feedback",default);Assert(handler.Bodies.Count==2,"feedback failed after optout");using var feedback=JsonDocument.Parse(handler.Bodies[1]);Assert(!feedback.RootElement.TryGetProperty("installationId",out _),"feedback contains install identifier");
  }
+ var localKey=RandomNumberGenerator.GetBytes(32);
+ byte[] Seal(byte[] value)
+ {
+  var encrypted=new byte[28+value.Length];
+  RandomNumberGenerator.Fill(encrypted.AsSpan(0,12));
+  using var aes=new AesGcm(localKey,16);
+  aes.Encrypt(encrypted.AsSpan(0,12),value,encrypted.AsSpan(28),encrypted.AsSpan(12,16));
+  return encrypted;
+ }
+ byte[] Unseal(byte[] encrypted)
+ {
+  if(encrypted.Length<28)throw new CryptographicException();
+  var value=new byte[encrypted.Length-28];
+  using var aes=new AesGcm(localKey,16);
+  aes.Decrypt(encrypted.AsSpan(0,12),encrypted.AsSpan(28),encrypted.AsSpan(12,16),value);
+  return value;
+ }
+ var savedPath=Path.Combine(directory,"saved-login");
+ var remembered=new SafeCode.Core.ConnectionSettings("fixture.example","fixture-user","fixture-password",2222);
+ File.WriteAllBytes(savedPath,Seal(JsonSerializer.SerializeToUtf8Bytes(remembered,SafeCode.Core.JsonDefaults.Options)));
+ var login=new SavedLoginStore(savedPath,Seal,Unseal);
+ Assert(login.Load()==remembered,"prior-version encrypted login did not load");
+ login.Checkpoint();
+ File.WriteAllBytes(savedPath,[0x12,0x34]);
+ Assert(new SavedLoginStore(savedPath,Seal,Unseal).Load()==remembered,"encrypted backup did not recover after update");
+ var newer=remembered with{Password="updated-fixture"};
+ login.Save(newer);
+ Assert(login.Load()==newer,"recovered login could not be replaced");
+ Assert(!Encoding.UTF8.GetString(File.ReadAllBytes(savedPath)).Contains(newer.Password),"saved password was written in clear text");
+
+ var relay=new GatewayDiagnostic("messages");
+ relay.Response(200,null);
+ var requestId=Guid.NewGuid().ToString();
+ var fakeFrame=$"event: error\r\ndata: "+JsonSerializer.Serialize(new {safeCodeDiagnostic=new
+  {protocol=1,id=requestId,backend="cloudcli",stage="anthropic_response",gatewayStatus=400,
+   cloudcliStatus=200,anthropicStatus=400,anthropicRequestId="req_Example1234",
+   message="private diagnostic body",modelFamily="https://private.invalid",requestBytes=128}})+"\r\n\r\n";
+ var frame=Encoding.UTF8.GetBytes(fakeFrame);
+ relay.ObserveSse(frame.AsSpan(0,18));relay.ObserveSse(frame.AsSpan(18));
+ var details=relay.Finish(frame.Length);
+ Assert(relay.SawError&&relay.FailureStatus==400&&(string)details["id"]==requestId,"streamed gateway failure was not correlated");
+ Assert(!details.ContainsKey("message")&&!details.ContainsKey("modelFamily"),"unrecognized gateway values reached diagnostic");
+ var diagnosticPackets=new FakeHandler();
+ using(var reporting=new ClientServices(Path.Combine(directory,"gateway-diagnostic"),diagnosticPackets)){
+  await reporting.SetConsentAsync(false,true);
+  reporting.SetDiagnosticConsent(true);
+  var trace=reporting.BeginDiagnostic("desktop_key_request")!;
+  trace.Gateway=details;
+  await reporting.SendDiagnosticAsync(trace,new HttpRequestException(null,null,HttpStatusCode.BadRequest),default);
+  await reporting.SendFeedbackAsync("Test failure correlation",default);
+  Assert(diagnosticPackets.Bodies.Count==2,"gateway error did not attach to diagnostics and feedback");
+  foreach(var body in diagnosticPackets.Bodies){
+   using var packet=JsonDocument.Parse(body);
+   Assert(packet.RootElement.GetProperty("schema").GetInt32()==3&&body.Contains(requestId)&&!body.Contains("private"),"invalid diagnostic envelope");
+  }
+ }
  using(var next=new ClientServices(directory,new FakeHandler())){Assert(JsonSerializer.Serialize(next.Preferences()).Contains("\"enabled\":false"),"optout did not survive restart");}
  var blocking=new BlockingHandler();using(var client=new ClientServices(Path.Combine(directory,"cancel"),blocking)){var sending=client.SetConsentAsync(true,true);await blocking.Started.Task;await client.SetConsentAsync(false,false);await sending;Assert(blocking.Cancelled,"optout did not cancel in-flight reporting");}
  Assert(ReleaseNumber.Parse("Beta-0.4.3.2")!.CompareTo(ReleaseNumber.Parse("Beta-0.4.3.1"))>0,"beta revision not increasing");

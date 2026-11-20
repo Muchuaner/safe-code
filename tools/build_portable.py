@@ -3,7 +3,7 @@
 import argparse,hashlib,json,os,shutil,subprocess,zipfile
 from xml.etree import ElementTree
 from pathlib import Path
-p=argparse.ArgumentParser();p.add_argument('--dotnet',default='dotnet');p.add_argument('--output-dir',type=Path);p.add_argument('--openssh-payload',type=Path);p.add_argument('--codex-bridge-payload',type=Path);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--dotnet',default='dotnet');p.add_argument('--output-dir',type=Path);p.add_argument('--openssh-payload',type=Path);p.add_argument('--frp-payload',type=Path);p.add_argument('--codex-bridge-payload',type=Path);a=p.parse_args()
 root=Path(__file__).resolve().parent.parent
 project=root/'src/SafeCode.Desktop/SafeCode.Desktop.csproj'
 app_version=ElementTree.parse(project).findtext('./PropertyGroup/InformationalVersion')
@@ -43,6 +43,15 @@ if a.openssh_payload:
  with zipfile.ZipFile(a.openssh_payload) as source:
   for name in ['LICENSE.txt','NOTICE.txt']:(legal/('Win32-OpenSSH-'+name)).write_bytes(source.read('OpenSSH-Win64/'+name))
  (bundled/'source.json').write_text(json.dumps({'version':'10.4.0.0p1-Preview','sha256':expected,'source':'https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.4.0.0p1-Preview/OpenSSH-Win64.zip'}))
+if a.frp_payload:
+ expected='b90074b2b6a1d792a7a40f085ac6d276bcab2d1bc60201f8a86ca53ce65ce821'
+ if hashlib.sha256(a.frp_payload.read_bytes()).hexdigest()!=expected:raise SystemExit('FRP 官方包 SHA256 不匹配。')
+ bundled=output/'Payloads/frp';bundled.mkdir(parents=True)
+ with zipfile.ZipFile(a.frp_payload) as source:
+  prefix='frp_0.71.1_windows_amd64/'
+  (bundled/'frpc.exe').write_bytes(source.read(prefix+'frpc.exe'))
+  (legal/'FRP-0.71.1-Apache.txt').write_bytes(source.read(prefix+'LICENSE'))
+ (bundled/'source.json').write_text(json.dumps({'version':'0.71.1','sha256':expected,'source':'https://github.com/fatedier/frp/releases/download/v0.71.1/frp_0.71.1_windows_amd64.zip'}))
 if a.codex_bridge_payload:
  if hashlib.sha256(a.codex_bridge_payload.read_bytes()).hexdigest()!='5aa7eac204d3a8273ceb25924520d62f6d705d2004a29d38aa5f6d63751b8348':raise SystemExit('Claude Codex 用户附件 SHA256 不匹配。')
  bundled=output/'Payloads/codex-claude';bundled.mkdir(parents=True)

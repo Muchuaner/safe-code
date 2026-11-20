@@ -53,6 +53,31 @@ class FeedbackTests(unittest.TestCase):
             self.assertEqual(stored['correlation'],event['context']);self.assertEqual(stored['report']['stage'],'job_started')
         feedback['eventId']=str(uuid.uuid4());feedback['context']=None
         self.assertEqual(self.post('/v1/feedback',feedback),202)
+    def test_gateway_diagnostics_are_searchable_and_reject_unstructured_fields(self):
+        event=self.diagnostic_v2()
+        event['schema']=3
+        gateway_id=str(uuid.uuid4())
+        event['report'].update(operation='desktop_key_request', outcome='failure',
+                               errorKind='gateway_invalid_request', stage='started', signals=[],
+                               gateway=dict(id=gateway_id,endpoint='messages',platform='windows',
+                                            stage='anthropic_response',httpStatus=200,gatewayStatus=400,
+                                            cloudcliStatus=200,anthropicStatus=400,responseBytes=8192,
+                                            sseError=True,anthropicError='invalid_request_error',
+                                            anthropicRequestId='req_Fixture1234'))
+        self.assertEqual(self.post('/v1/diagnostics',event),202)
+        feedback=dict(schema=3,eventId=str(uuid.uuid4()),version=event['version'],message='网关回复失败',
+                      context=dict(correlation=event['context'],report=event['report']))
+        self.assertEqual(self.post('/v1/feedback',feedback),202)
+        for flag in ('--diagnostics','--feedback'):
+            path=Path(__file__).with_name('report.py')
+            result=subprocess.check_output([sys.executable,str(path),self.store.path,flag,'--issue',gateway_id])
+            self.assertEqual(len(json.loads(result)),1)
+        for field,value in [('message','private prompt'),('backend','https://private.example'),
+                            ('anthropicRequestId','Bearer password'),('httpStatus',True)]:
+            event['report']['gateway'][field]=value
+            self.assertEqual(self.post('/v1/diagnostics',event),400)
+            event['report']['gateway'].pop(field)
+
     def test_feature_diagnostics_and_feedback_use_same_fixed_vocabulary(self):
         gateway=self.diagnostic_v2();gateway['report'].update(operation='gateway_key_issue',outcome='success',errorKind='none')
         self.assertEqual(self.post('/v1/diagnostics',gateway),202)

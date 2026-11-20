@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using SafeCode.Core;
 namespace SafeCode.Desktop;
 // The AES key is obtained by the native app from macOS Keychain and passed only over stdin.
@@ -21,14 +20,9 @@ internal static class LocalSecrets
         byte[] plain=new byte[encrypted.Length-28];using var aes=new AesGcm(RequireKey(),16);
         aes.Decrypt(encrypted.AsSpan(0,12),encrypted.AsSpan(28),encrypted.AsSpan(12,16),plain);return plain;
     }
-    public static void Save(ConnectionSettings settings)
-    {
-        byte[] plain=JsonSerializer.SerializeToUtf8Bytes(settings,JsonDefaults.Options);
-        try{string path=Path.Combine(DirectoryOverride,"login.aes");File.WriteAllBytes(path+".new",Protect(plain));MacFiles.Protect(path+".new");File.Move(path+".new",path,true);}finally{CryptographicOperations.ZeroMemory(plain);}
-    }
-    public static ConnectionSettings? Load()
-    {
-        string path=Path.Combine(DirectoryOverride,"login.aes");if(!File.Exists(path))return null;
-        byte[] plain=Unprotect(File.ReadAllBytes(path));try{return JsonSerializer.Deserialize<ConnectionSettings>(plain,JsonDefaults.Options);}finally{CryptographicOperations.ZeroMemory(plain);}
-    }
+    private static SavedLoginStore Login => new(Path.Combine(DirectoryOverride,"login.aes"),Protect,Unprotect);
+    public static bool HasSavedLogin => Login.Exists;
+    public static void Save(ConnectionSettings settings) => Login.Save(settings);
+    public static ConnectionSettings? Load() => Login.Load();
+    public static void CheckpointLogin() => Login.Checkpoint();
 }

@@ -11,17 +11,72 @@ internal static class MacFiles
 // Uses the user's explicitly enabled macOS Remote Login service. Never enables it or alters sshd.
 internal sealed class MacHostControl : IDisposable
 {
-    private readonly string directory,ssh,auth,owned;
-    private SshSession? session;
+    private sealed record ResumePreference(GatewayPreference Server, string WorkspaceUser, string Alias, string Client);
+    private readonly string directory,ssh,auth,owned,preferencePath;
+    private volatile SshSession? session;
     private string client="";
     public bool Enabled=>session?.HasHostControl==true;
     public HostControlStatus Status=>session?.HostControlStatus??new(false,"disabled","","","未启用；需先开启系统远程登录");
     public MacHostControl(string directory)
     {
         this.directory=directory;ssh=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".ssh");auth=Path.Combine(ssh,"authorized_keys");owned=Path.Combine(directory,"host-authorized-line.json");
-        RevokeLocal(); // A stale owned key from an interrupted app is never silently reactivated.
+        preferencePath=Path.Combine(directory,"host-control-resume.aes");
+        RevokeLocal();
     }
     public async Task<HostControlStatus> EnableAsync(SshSession target,string alias,CancellationToken ct)
+    {
+        if(Enabled)throw new InvalidOperationException("本机控制已启用。");
+        string id=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(directory+target.Host+target.Port+target.Fingerprint)))[..20].ToLowerInvariant();
+        // A failed explicit enable must not leave consent for an older target.
+        File.Delete(preferencePath);
+        var status=await EnableCoreAsync(target,alias,id,ct);
+        if(LocalSecrets.IsUnlocked&&target.Server?.Username is {Length:>0} workspaceUser)
+        {
+            try
+            {
+                var preference=new ResumePreference(GatewayPreference.For(target),workspaceUser,alias,id);
+                DesktopKeyAccess.WriteProfileFile(preferencePath,LocalSecrets.Protect(JsonSerializer.SerializeToUtf8Bytes(preference)));
+            }
+            catch(Exception error)when(error is IOException or UnauthorizedAccessException or CryptographicException)
+            {
+                return status with{Message="本机控制已连接。未能保存重启后的恢复设置。"};
+            }
+        }
+        return status;
+    }
+    private ResumePreference? ReadPreference()
+    {
+        if(!LocalSecrets.IsUnlocked||!File.Exists(preferencePath))return null;
+        try
+        {
+            byte[] data=LocalSecrets.Unprotect(File.ReadAllBytes(preferencePath));
+            try
+            {
+                var value=JsonSerializer.Deserialize<ResumePreference>(data);
+                return value?.Server is {Fingerprint.Length:>0} ? value : null;
+            }
+            finally{CryptographicOperations.ZeroMemory(data);}
+        }
+        catch(Exception error)when(error is IOException or UnauthorizedAccessException or CryptographicException or JsonException)
+        {return null;}
+    }
+    public bool CanResume(ConnectionSettings settings)=>ReadPreference()?.Server.Matches(settings)==true;
+    public Task MaintainForChatAsync(CancellationToken ct)=>session?.MaintainHostControlForChatAsync(ct)??Task.CompletedTask;
+    public async Task<string?> ResumeAsync(SshSession target,CancellationToken ct)
+    {
+        var preference=ReadPreference();
+        if(Enabled||preference==null)return null;
+        if(!preference.Server.Matches(target))return "服务器身份与保存的授权不一致，请重新启用本机远程控制。";
+        if(target.Server?.Username!=preference.WorkspaceUser)return "服务器工作用户已变化，请重新启用本机远程控制。";
+        try
+        {
+            await EnableCoreAsync(target,preference.Alias,preference.Client,ct);
+            return null;
+        }
+        catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
+        catch(Exception error){return "本机远程控制恢复失败："+error.Message;}
+    }
+    private async Task<HostControlStatus> EnableCoreAsync(SshSession target,string alias,string id,CancellationToken ct)
     {
         if(Enabled)throw new InvalidOperationException("本机控制已启用。");
         using(var probe=new TcpClient())
@@ -32,7 +87,7 @@ internal sealed class MacHostControl : IDisposable
         var hostKey=File.ReadAllText("/etc/ssh/ssh_host_ed25519_key.pub").Trim();
         string uid=(await MacClients.Run("/usr/bin/id",["-u"],ct)).Trim();
         if(!uint.TryParse(uid,out uint userId)||userId==0)throw new InvalidOperationException("不支持以 root 账户开放本机控制。");
-        client=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(directory+target.Host+target.Port+target.Fingerprint)))[..20].ToLowerInvariant();
+        client=id;
         session=target;
         try
         {
@@ -75,6 +130,11 @@ internal sealed class MacHostControl : IDisposable
         if(File.Exists(auth))WriteAuth(File.ReadAllLines(auth).Where(line=>line!=entry));File.Delete(owned);
     }
     public async Task<HostControlStatus> DisableAsync(CancellationToken ct)
+    {
+        File.Delete(preferencePath);
+        return await SuspendAsync(ct);
+    }
+    public async Task<HostControlStatus> SuspendAsync(CancellationToken ct)
     {
         RevokeLocal();if(session!=null)await session.StopHostControlAsync(ct);var result=Status;session=null;return result;
     }

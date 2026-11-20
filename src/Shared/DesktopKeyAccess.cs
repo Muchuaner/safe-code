@@ -27,11 +27,13 @@ namespace SafeCode.Desktop;
 // Claude receives a device-local bearer. Only SafeCode holds the remote bearer and TLS pin.
 internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]> protect,
     Func<byte[],byte[]> unprotect, string? profileDirectory=null,ClientServices? diagnostics=null,
-    string? windowsPolicyPath=null) : IDisposable
+    string? windowsPolicyPath=null,Func<CancellationToken,Task>? beforeMessages=null) : IDisposable
 {
-    private sealed record Ticket(string Url,string Pin,string Key);
+    internal sealed record Ticket(string Url,string Pin,string Key);
+    internal sealed record DeviceBinding(string DeviceId,string DeviceProof,string Alias,int Port,string PublicKey);
+    internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing);
     private sealed record Saved(Ticket Remote,string Local,int Port,string Profile,string Previous,JsonNode? Hybrid,bool CreatedMeta=false,
-        Dictionary<string,PolicyValue>? WindowsPolicy=null);
+        Dictionary<string,PolicyValue>? WindowsPolicy=null,DeviceBinding? Device=null);
     private sealed record Relay(WebApplication App,HttpClient Client,int Port) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
@@ -107,13 +109,52 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     {
         var pin=Convert.FromHexString(t.Pin);
         var handler=new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false};
-        handler.ServerCertificateCustomValidationCallback=(_,cert,_,_)=>cert!=null&&
-            DateTime.UtcNow>=cert.NotBefore.ToUniversalTime()&&DateTime.UtcNow<=cert.NotAfter.ToUniversalTime()&&
-            CryptographicOperations.FixedTimeEquals(pin,cert.GetCertHash(HashAlgorithmName.SHA256));
+        handler.ServerCertificateCustomValidationCallback=(_,cert,_,_)=>MatchesPin(pin,cert);
         var c=new HttpClient(handler){BaseAddress=new Uri(t.Url),Timeout=TimeSpan.FromMinutes(11),MaxResponseContentBufferSize=1024*1024};
         c.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",t.Key);
         c.DefaultRequestHeaders.Add("X-SafeCode-Platform",OperatingSystem.IsMacOS()?"macos":"windows");
         return c;
+    }
+
+    internal static bool MatchesPin(ReadOnlySpan<byte> pin,System.Security.Cryptography.X509Certificates.X509Certificate2? certificate)
+        =>certificate!=null&&DateTime.UtcNow>=certificate.NotBefore.ToUniversalTime()&&
+            DateTime.UtcNow<=certificate.NotAfter.ToUniversalTime()&&
+            CryptographicOperations.FixedTimeEquals(pin,certificate.GetCertHash(HashAlgorithmName.SHA256));
+
+    internal static async Task<JsonElement> DeviceControlAsync(Ticket ticket,object request,CancellationToken ct)
+    {
+        using var client=Remote(ticket);
+        client.Timeout=TimeSpan.FromSeconds(15);
+        using var body=new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(request,Json));
+        body.Headers.ContentType=new MediaTypeHeaderValue("application/json");
+        using var response=await client.PostAsync("/v1/device-control",body,ct).ConfigureAwait(false);
+        if(!response.IsSuccessStatusCode)
+            throw new InvalidOperationException("网关未能完成本机远程控制操作（HTTP "+(int)response.StatusCode+"）。请检查该 Key 的设备授权与 FRP 状态。");
+        using var document=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
+        return document.RootElement.Clone();
+    }
+
+    internal async Task<DeviceSetup> VerifyDeviceGatewayAsync(string code,bool replace,bool useSaved,CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            var saved=Configured?Load():null;
+            if(useSaved&&saved==null)throw new InvalidOperationException("没有保存的接入 Key。");
+            if(saved!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」。");
+            var ticket=useSaved?saved!.Remote:Parse(code.Trim());
+            using var client=Remote(ticket);
+            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(20));
+            using var response=await VerifyRemoteAsync(client,deadline.Token);
+            if(response.StatusCode==HttpStatusCode.Unauthorized)throw new InvalidOperationException("Key 无效或已撤销。");
+            response.EnsureSuccessStatusCode();
+            var capabilities=await DeviceControlAsync(ticket,new{action="capability"},deadline.Token);
+            if(!capabilities.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)
+                throw new InvalidOperationException("此网关尚未支持通过 HTTPS 建立本机远程控制。");
+            return new(ticket,replace,useSaved,saved?.Remote==ticket?saved.Device:null);
+        }
+        finally{gate.Release();}
     }
 
     private async Task Forward(HttpContext ctx,HttpClient client,string token)
@@ -138,15 +179,46 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         foreach(var h in new[]{"anthropic-version","anthropic-beta","x-claude-code-session-id"})
             if(ctx.Request.Headers.TryGetValue(h,out var v))req.Headers.TryAddWithoutValidation(h,v.ToArray());
-        var trace=diagnostics?.BeginDiagnostic("desktop_key_request",background:true);
+        var trace=diagnostics?.BeginDiagnostic("desktop_key_request");
+        var gateway=trace==null?null:new GatewayDiagnostic(path switch
+        {
+            "/v1/models"=>"models", "/v1/messages/count_tokens"=>"count_tokens", _=>"messages"
+        });
+        long bytes=0;
+        if(gateway!=null)req.Headers.Add("X-SafeCode-Diagnostics","1");
         Exception? failure=null;
         try
         {
+            if(path=="/v1/messages"&&beforeMessages!=null)await beforeMessages(ctx.RequestAborted);
             using var res=await client.SendAsync(req,HttpCompletionOption.ResponseHeadersRead,ctx.RequestAborted);
-            if(trace!=null&&!res.IsSuccessStatusCode)failure=new HttpRequestException(null,null,res.StatusCode);
+            if(gateway!=null)
+            {
+                res.Headers.TryGetValues("X-SafeCode-Gateway-Diagnostic",out var headers);
+                gateway.Response((int)res.StatusCode,headers);
+                if(!res.IsSuccessStatusCode)failure=new HttpRequestException(null,null,res.StatusCode);
+            }
             ctx.Response.StatusCode=(int)res.StatusCode;
             ctx.Response.ContentType=res.Content.Headers.ContentType?.ToString()??"application/json";
-            await res.Content.CopyToAsync(ctx.Response.Body,ctx.RequestAborted);
+            if(gateway!=null&&res.Content.Headers.ContentType?.MediaType=="text/event-stream")
+            {
+                await using var input=await res.Content.ReadAsStreamAsync(ctx.RequestAborted);
+                var buffer=new byte[16384];
+                int count;
+                while((count=await input.ReadAsync(buffer,ctx.RequestAborted))>0)
+                {
+                    bytes+=count;
+                    gateway.ObserveSse(buffer.AsSpan(0,count));
+                    await ctx.Response.Body.WriteAsync(buffer.AsMemory(0,count),ctx.RequestAborted);
+                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+                }
+                if(gateway.SawError)failure=new HttpRequestException(null,null,(HttpStatusCode)(gateway.FailureStatus??502));
+                else if(!gateway.Ended)failure=new HttpRequestException(null,null,HttpStatusCode.BadGateway);
+            }
+            else
+            {
+                bytes=res.Content.Headers.ContentLength??0;
+                await res.Content.CopyToAsync(ctx.Response.Body,ctx.RequestAborted);
+            }
         }
         catch(Exception e) when(e is HttpRequestException or OperationCanceledException or IOException)
         {
@@ -156,17 +228,26 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         finally
         {
             if(trace!=null&&(failure!=null||path=="/v1/messages")&&!ctx.RequestAborted.IsCancellationRequested)
+            {
+                if(failure!=null)trace.Gateway=gateway?.Finish(bytes);
                 _=diagnostics!.SendDiagnosticAsync(trace,failure,CancellationToken.None);
+            }
         }
     }
 
-    private async Task<Relay> Listen(Ticket t,string local,int port,CancellationToken ct)
+    private async Task<Relay> Listen(Ticket t,string local,int port,CancellationToken ct,DeviceBinding? device=null)
     {
         var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions{Args=[],ContentRootPath=AppContext.BaseDirectory});
         builder.Configuration.Sources.Clear();
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(k=>{k.Limits.MaxRequestBodySize=8*1024*1024;k.Limits.MaxConcurrentConnections=32;k.Listen(IPAddress.Loopback,port);});
-        var app=builder.Build();var client=Remote(t);app.Run(ctx=>Forward(ctx,client,local));
+        var app=builder.Build();var client=Remote(t);
+        if(device!=null)
+        {
+            client.DefaultRequestHeaders.Add("X-SafeCode-Device",device.DeviceId);
+            client.DefaultRequestHeaders.Add("X-SafeCode-Device-Proof",device.DeviceProof);
+        }
+        app.Run(ctx=>Forward(ctx,client,local));
         try
         {
             await app.StartAsync(ct);
@@ -418,7 +499,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
     }
 
-    internal async Task<object> RestoreAsync(CancellationToken ct,bool interactive=false)
+    internal async Task<object> RestoreAsync(CancellationToken ct,bool interactive=false,bool requireDevice=false)
     {
         await gate.WaitAsync(ct);
         try
@@ -429,7 +510,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 Exception? failure=null;
                 try
                 {
-                    var saved=Load();string lib=Library();
+                    var saved=Load();
+                    if(requireDevice||saved.Device!=null)return Status("请重新启用本机远程控制，验证设备连接后恢复接入。");
+                    string lib=Library();
                     var meta=ReadProfileMeta(lib);
                     if((string?)meta["appliedId"]==saved.Profile)
                     {
@@ -473,7 +556,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         finally{gate.Release();}
     }
-    internal async Task<object> EnableAsync(string code,CancellationToken ct,bool replace=false,bool useSaved=false)
+    internal async Task<object> EnableAsync(string code,CancellationToken ct,bool replace=false,bool useSaved=false,DeviceSetup? verified=null,DeviceBinding? device=null)
     {
         await gate.WaitAsync(ct);
         try
@@ -481,7 +564,10 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var previous=Configured?Load():null;
             if(useSaved&&previous==null)throw new InvalidOperationException("没有保存的接入 Key，请输入新的 Key。");
             if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」切换已保存的接入。");
-            var t=useSaved?previous!.Remote:Parse(code.Trim());
+            var t=verified?.Remote??(useSaved?previous!.Remote:Parse(code.Trim()));
+            if(verified!=null&&(device==null||replace!=verified.Replace||useSaved!=verified.UseSaved||
+               useSaved&&t!=previous!.Remote))
+                throw new InvalidOperationException("接入配置已变更，请重新验证设备。");
             using var client=Remote(t);using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(45));
             using var result=await VerifyRemoteAsync(client, timeout.Token);
@@ -507,13 +593,13 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             string applied=(string?)meta["appliedId"]??"";
             bool wasApplied=previous!=null&&applied==profileId;
             string local=previous?.Local??Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-            var next=await Listen(t,local,0,ct);
+            var next=await Listen(t,local,0,ct,device);
             Action? undoPolicy=null;
             bool profileWritten=false,metaWritten=false;
             try
             {
                 var s=new Saved(t,local,next.Port,profileId,wasApplied?previous!.Previous:applied,
-                    (wasApplied?previous!.Hybrid:meta["hybridPointer"])?.DeepClone(),wasApplied?previous!.CreatedMeta:originalMeta==null);
+                    (wasApplied?previous!.Hybrid:meta["hybridPointer"])?.DeepClone(),wasApplied?previous!.CreatedMeta:originalMeta==null,Device:device);
                 var profile=new JsonObject{["inferenceProvider"]="gateway",["inferenceGatewayBaseUrl"]="http://127.0.0.1:"+next.Port,
                     ["inferenceGatewayAuthScheme"]="bearer",["inferenceCredentialKind"]="static",["inferenceGatewayApiKey"]=local,
                     ["deploymentMode"]="3p",["disableDeploymentModeChooser"]=true,["deploymentDisplayName"]="SafeCode",
@@ -580,9 +666,10 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         await gate.WaitAsync(ct);
         try
         {
+            Saved? revoke=null;
             if(Configured)
             {
-                var s=Load();var lib=Library();
+                var s=Load();revoke=s;var lib=Library();
                 string metaPath=Path.Combine(lib,"_meta.json"),profilePath=Path.Combine(lib,s.Profile+".json");
                 byte[]? originalMeta=ReadOptionalFile(metaPath),originalProfile=ReadOptionalFile(profilePath);
                 var meta=ParseProfileMeta(originalMeta);var entries=meta["entries"]!.AsArray();
@@ -615,6 +702,14 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                         finally{undoPolicy?.Invoke();}
                     }
                     throw;
+                }
+            }
+            if(revoke is {Device:{} binding})
+            {
+                try{await DeviceControlAsync(revoke.Remote,new{action="revoke",binding.DeviceId,binding.DeviceProof},ct);}
+                catch(Exception error) when(error is IOException or HttpRequestException or InvalidOperationException or OperationCanceledException)
+                {
+                    // Closing the local SSH lease also prevents remote access when offline.
                 }
             }
             if(relay!=null){await relay.DisposeAsync();relay=null;}

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import select
 import socket
 import socketserver
 import sqlite3
@@ -22,8 +23,10 @@ import time
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from desktop_gateway import COUNT_TOKENS_PATH, MESSAGES_PATH, GatewayError, Handler, Manager
-from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, ClaudeSubscription, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
+from claude_usage import read_subscription
+from desktop_gateway import COUNT_TOKENS_PATH, MAX_REQUEST, MESSAGES_PATH, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
+from device_bridge import DeviceError, Devices, read_json
+from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
 
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
@@ -122,6 +125,22 @@ class AdminHandler(socketserver.StreamRequestHandler):
 
 
 
+def relay_frp(client, upstream):
+    # The client starts the FRP protocol only after the CONNECT response.
+    # Read decrypted bytes already buffered by TLS before waiting on the socket.
+    while True:
+        ready = [client] if client.pending() else []
+        readable, _, _ = select.select([client, upstream], [], [], 0 if ready else 90)
+        if not (ready or readable):
+            return
+        for source in set(ready + readable):
+            data = source.recv(65536)
+            if not data:
+                return
+            destination = upstream if source is client else client
+            destination.sendall(data)
+
+
 class PublicHandler(Handler):
     timeout = 12
 
@@ -131,7 +150,7 @@ class PublicHandler(Handler):
 
     @property
     def manager(self):
-        return self.server.account(self.digest,self.platform)
+        return self.server.account(self.digest, self.platform, self.device)
 
     def authorized(self):
         value = self.headers.get('Authorization', '')
@@ -148,18 +167,126 @@ class PublicHandler(Handler):
         return True
 
     def do_GET(self):
+        self.device = None
         if self.path.partition('?')[0] != '/v1/models':
             return self.reply(404, {'error':{'message':'Unknown endpoint'}})
         if not self.server.public_enabled:
             return self.public_disabled()
         super().do_GET()
 
+    def do_CONNECT(self):
+        self.close_connection = True
+        if self.path != '/v1/device-frp':
+            return self.device_error(404, 'Unknown endpoint')
+        if not self.server.public_enabled or not self.authorized() or not self.server.devices:
+            return self.device_error(403, 'SafeCode device authorization is unavailable')
+        try:
+            row = self.server.devices.enrolled(
+                self.digest, self.platform, self.headers.get('X-SafeCode-Device'),
+                self.headers.get('X-SafeCode-Device-Proof'))
+            if row['expires'] <= time.time():
+                raise DeviceError('Device lease expired')
+        except (DeviceError, sqlite3.Error):
+            return self.device_error(403, 'SafeCode device authorization is unavailable')
+        # The target is fixed by the gateway operator. This is not an HTTP proxy.
+        try:
+            upstream = socket.create_connection(('127.0.0.1', self.server.frp_port), timeout=4)
+        except OSError:
+            return self.device_error(503, 'SafeCode FRP is unavailable')
+        with upstream:
+            try:
+                self.send_response(200)
+                self.end_headers()
+                upstream.settimeout(10)
+                self.connection.settimeout(10)
+                relay_frp(self.connection, upstream)
+            except OSError:
+                pass
+
     def do_POST(self):
+        self.device = None
         if self.path.partition('?')[0] not in (MESSAGES_PATH, COUNT_TOKENS_PATH):
+            return self.handle_public()
+        with self.request_diagnostic('unknown'):
+            self.handle_public()
+
+    def handle_public(self):
+        path = self.path.partition('?')[0]
+        if path not in (MESSAGES_PATH, COUNT_TOKENS_PATH, '/v1/device-control'):
             return self.reply(404, {'error':{'message':'Unknown endpoint'}})
         if not self.server.public_enabled:
             return self.public_disabled()
-        super().do_POST()
+        if path == '/v1/device-control':
+            return self.device_control()
+        device = self.headers.get('X-SafeCode-Device')
+        proof = self.headers.get('X-SafeCode-Device-Proof')
+        if not self.authorized():
+            return self.reject_device_message(401, 'SafeCode Key required')
+        if self.headers.get('X-SafeCode-Diagnostics') == '1':
+            active, waiting, slots = self.server.queue.snapshot()
+            diagnostic(backend='cloudcli' if self.server.config['cloudcli'] else 'claude_code',
+                       active=min(1000000, sum(active.values())), waiting=min(1000000, sum(waiting.values())),
+                       slots=min(1000000, slots))
+        if device is None and proof is None:
+            if self.server.devices and self.server.devices.required(self.digest):
+                return self.reject_device_message(403, 'Verify SafeCode local device control before starting a chat')
+        else:
+            diagnostic(stage='device_check')
+            try:
+                if self.server.devices is None:
+                    raise DeviceError('Device pairing is unavailable')
+                self.device = self.server.devices.chat_binding(self.digest, self.platform, device, proof)
+            except (DeviceError, sqlite3.Error):
+                return self.reject_device_message(403, 'SafeCode device authorization is unavailable')
+        super().handle_messages()
+
+    def reject_device_message(self, status, message):
+        # Read a bounded request before closing TLS so the rejection body reaches the relay.
+        try:
+            remaining = int(self.headers.get('Content-Length', '0'))
+            if not self.headers.get('Transfer-Encoding') and 0 < remaining <= MAX_REQUEST:
+                while remaining:
+                    chunk = self.rfile.read(min(remaining, 65536))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+        except (ValueError, OSError):
+            pass
+        return self.device_error(status, message)
+
+    def device_error(self, status, message):
+        return self.reply(status, {'type': 'error', 'error': {'type': 'permission_error', 'message': message}})
+
+    def device_control(self):
+        if not self.authorized():
+            return self.device_error(401, 'SafeCode Key required')
+        devices = self.server.devices
+        if devices is None or not devices.permitted(self.digest):
+            return self.device_error(403, 'Device control is unavailable for this Key')
+        try:
+            request = read_json(self)
+            action = request.get('action')
+            if action == 'capability':
+                return self.reply(200, {'supported': True, 'transport': 'frp', 'httpsTunnel': True, 'port': self.server.frp_port,
+                                        'deviceRequired': devices.required(self.digest)})
+            if action == 'prepare':
+                if request.get('accepted') is not True:
+                    raise DeviceError('Local control consent is required')
+                return self.reply(200, devices.prepare(self.digest, self.platform, request.get('hostname')))
+            row = devices.enrolled(self.digest, self.platform, request.get('deviceId'), request.get('deviceProof'))
+            if action == 'verify':
+                return self.reply(200, {'command': devices.configure(row, request.get('username'), request.get('hostKey'))})
+            if action == 'renew':
+                devices.renew(row)
+                return self.reply(200, {'ready': bool(row['ready'])})
+            if action == 'revoke':
+                devices.revoke(row)
+                return self.reply(200, {'revoked': True})
+            raise DeviceError('Unknown device action')
+        except (DeviceError, ValueError, TypeError):
+            return self.device_error(400, 'SafeCode could not apply the device request')
+        except (OSError, sqlite3.Error):
+            return self.device_error(503, 'SafeCode device control is unavailable')
 
     def public_disabled(self):
         self.close_connection = True
@@ -173,9 +300,11 @@ class PublicHandler(Handler):
         enqueued = time.monotonic()
         started = None
         record = {'model': model, 'outcome': 'success', 'status': 200, 'wait_ms': 0, 'duration_ms': None}
+        diagnostic(stage='gateway_queue')
         try:
             with self.server.queue.slot(self.digest, lambda: peer_disconnected(self.connection)):
                 started = time.monotonic()
+                diagnostic(stage='gateway_validation', waitMs=round((started-enqueued)*1000))
                 manager = self.manager
                 manager.accounting.before = {}
                 manager.accounting.model = model
@@ -226,20 +355,28 @@ class PublicServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, root, config):
-        self.root, self.config = root, config
+        cloudcli = load_cloudcli_config()
+        if cloudcli and not ipaddress.ip_address(config['bind']).is_loopback:
+            raise ValueError('The CloudCLI gateway requires a loopback listener. Connect through the SafeCode SSH tunnel.')
+        self.root, self.config = root, {**config, 'cloudcli': cloudcli}
+        self.frp_port = config.get('deviceFrpPort')
+        if self.frp_port is not None and (type(self.frp_port) is not int or not 1024 <= self.frp_port <= 65535):
+            raise ValueError('Invalid private FRP control port')
+        self.devices = Devices(root) if cloudcli and self.frp_port else None
         self.accounts = {}
         self.lock = threading.Lock()
+        self.usage_lock = threading.Lock()
+        self.subscription = {'state': 'unavailable', 'windows': {}}
         self.registry = KeyRegistry(root)
         self.registry.prune_requests()
         self.next_log_cleanup = time.monotonic() + 3600
         try:
             concurrency = int((root/PUBLIC_CONCURRENCY).read_text())
         except (FileNotFoundError, ValueError):
-            concurrency = 1
-        self.queue = RequestQueue(self.registry, concurrency=max(1, concurrency))
-        self.subscription = ClaudeSubscription()
+            concurrency = 0
+        self.queue = RequestQueue(self.registry, concurrency=max(0, concurrency))
         # CLI turns can retain their processes between HTTP requests while awaiting tools.
-        self.turns = Capacity(lambda: self.queue.concurrency + 2)
+        self.turns = Capacity(lambda: self.queue.concurrency + 2 if self.queue.concurrency else 0)
         self.webfetch_turns = Capacity(lambda: self.queue.concurrency)
         self.workers = Capacity(lambda: max(24, self.queue.concurrency + self.queue.max_queue + 8))
         self.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -293,18 +430,20 @@ class PublicServer(ThreadingHTTPServer):
         for chat in abandoned:
             chat.close()
 
-    def account(self, digest, platform):
-        identity = digest+'-'+platform
+    def account(self, digest, platform, device=None):
+        identity = digest+'-'+platform+('-'+device['id'] if device else '')
         with self.lock:
             if identity not in self.accounts:
                 folder = self.root/'sessions'/identity
                 folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-                m = PublicManager(folder, {**self.config, 'instance':digest[:32], 'clientPlatform':platform})
+                m = PublicManager(folder, {**self.config, 'instance':digest[:32], 'clientPlatform':platform,
+                                           'pairedDevice':device})
+                if m.cloudcli:
+                    m.cloudcli.parallel = True
                 m.live_slots = self.turns
                 m.webfetch_slots = self.webfetch_turns
                 self.accounts[identity] = m
             return self.accounts[identity]
-
 
     def manage(self, request):
         operation = request.get('action')
@@ -314,7 +453,7 @@ class PublicServer(ThreadingHTTPServer):
                 active, waiters, concurrency = self.queue.snapshot()
                 status.update(active=sum(active.values()), waiting=sum(waiters.values()),
                               concurrency=concurrency, concurrency_text=str(concurrency), queue_limit=self.queue.max_queue,
-                              subscription=self.subscription.snapshot())
+                              subscription=self.subscription)
             return status
         if operation == 'enable_public':
             if request.get('accepted') is not True:
@@ -323,15 +462,30 @@ class PublicServer(ThreadingHTTPServer):
             return {'enabled': self.public_enabled}
         if not self.public_enabled:
             raise ValueError(PUBLIC_DISABLED_MESSAGE)
+        if operation == 'refresh_subscription':
+            if not self.usage_lock.acquire(blocking=False):
+                return {'state': 'loading', 'windows': self.subscription['windows']}
+            try:
+                try:
+                    windows = read_subscription()
+                except (OSError, ValueError, AttributeError, TypeError):
+                    windows = {}
+                if windows:
+                    self.subscription = {'state': 'available', 'windows': windows, 'sampled_at': int(time.time())}
+                else:
+                    self.subscription = {**self.subscription, 'state': 'stale' if self.subscription['windows'] else 'unavailable'}
+                return self.subscription
+            finally:
+                self.usage_lock.release()
         if operation == 'set_concurrency':
             concurrency = request.get('concurrency')
             try:
-                if isinstance(concurrency, str) and re.fullmatch(r'[1-9][0-9]*', concurrency):
+                if isinstance(concurrency, str) and re.fullmatch(r'0|[1-9][0-9]*', concurrency):
                     concurrency = int(concurrency)
-                if type(concurrency) is not int or concurrency < 1:
+                if type(concurrency) is not int or concurrency < 0:
                     raise ValueError()
             except ValueError:
-                raise ValueError('处理槽位必须是可保存的正整数。') from None
+                raise ValueError('处理槽位必须是非负整数，0 表示不限。') from None
             with self.lock:
                 atomic_write(self.root/PUBLIC_CONCURRENCY, str(concurrency))
                 self.queue.resize(concurrency)
@@ -366,7 +520,7 @@ class PublicServer(ThreadingHTTPServer):
                       'wait_limit':self.queue.max_wait}
             if request.get('details') is True:
                 result.update(self.registry.overview(), recent=self.registry.recent_requests())
-                result['subscription'] = self.subscription.snapshot()
+                result['subscription'] = self.subscription
                 period = request.get('analytics')
                 if isinstance(period, str) and period in ANALYTICS_RANGES:
                     result['analytics'] = self.registry.analytics(period)

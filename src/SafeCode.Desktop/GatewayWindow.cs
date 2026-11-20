@@ -11,6 +11,7 @@ internal sealed class GatewayWindow : Window
 {
     private const string Page = "https://safe-code.local/web/gateway.html";
     private const string CreatorChannel = "https://space.bilibili.com/49985881";
+    private const string ClaudeUsage = "https://claude.ai/settings/usage";
     private readonly WebView2 browser = new();
     private readonly Func<JsonElement, Task<JsonElement>> manage;
     private bool closed;
@@ -50,9 +51,9 @@ internal sealed class GatewayWindow : Window
             {
                 if (e.Uri == Page) return;
                 e.Cancel = true;
-                if (e.IsUserInitiated && string.Equals(e.Uri, CreatorChannel, StringComparison.Ordinal))
+                if (e.IsUserInitiated && e.Uri is CreatorChannel or ClaudeUsage)
                 {
-                    try { WindowsClients.OpenUrl(CreatorChannel); } catch { }
+                    try { WindowsClients.OpenUrl(e.Uri); } catch { }
                 }
             };
             view.NewWindowRequested += (_, e) => { e.Handled = true; };
