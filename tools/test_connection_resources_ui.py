@@ -40,7 +40,7 @@ with sync_playwright() as p:
       }}};
     ''')
     page.clock.install()
-    page.goto('https://safe-code.local/index.html')
+    page.goto('https://safe-code.local/web/index.html')
     page.wait_for_function('window.safeCodeNativeReady')
     page.locator('#advanced-connect').click()
     actions = page.locator('#advanced-dialog .dialog-buttons button')

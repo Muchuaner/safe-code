@@ -10,12 +10,13 @@ if not shutil.which('swiftc'):raise SystemExit('需要 Apple Command Line Tools 
 version='Beta-0.4.4.19';base=a.output_dir.resolve()/a.arch;base.mkdir(parents=True,exist_ok=True);work=a.work_dir.resolve()/version/a.arch;work.mkdir(parents=True,exist_ok=True);app=work/'Safe Code.app'
 if app.exists():shutil.rmtree(app)
 contents=app/'Contents';resources=contents/'Resources';core=resources/'Core';web=resources/'Web';macos=contents/'MacOS'
-for folder in [core,web,macos]:folder.mkdir(parents=True)
+web_pages=web/'web'
+for folder in [core,web_pages,macos]:folder.mkdir(parents=True)
 def run(args,**kwargs):subprocess.run([str(x) for x in args],check=True,cwd=root,**kwargs)
 run([a.dotnet,'publish','src/SafeCode.MacBackend','-c','Release','-r','osx-'+a.arch,'--self-contained','true','-o',core,'--nologo'])
 for path in core.glob('*.pdb'):path.unlink()
 run(['swiftc','-swift-version','5','-parse-as-library','-O','-target','arm64-apple-macos15.0','macos/SafeCode.swift','-o',macos/'SafeCode','-framework','AppKit','-framework','WebKit','-framework','Security'])
-for name in ['index.html','styles.css','app.js','native.js','qrcode.min.js','gateway.html','gateway.css','gateway.js','gateway-charts.js','gateway-status.js']:shutil.copy2(root/name,web/name)
+for name in ['index.html','styles.css','app.js','native.js','qrcode.min.js','gateway.html','gateway.css','gateway.js','gateway-charts.js','gateway-status.js']:shutil.copy2(root/'web'/name,web_pages/name)
 (web/'assets').mkdir()
 for name in ['safe-code-logo.png','server-login-tutorial.png','workspace-mascot.png','claude-client.png','codex-client.webp']:shutil.copy2(root/'assets'/name,web/'assets'/name)
 with tempfile.TemporaryDirectory(prefix='safecode-icon-') as temp:
@@ -25,7 +26,8 @@ with tempfile.TemporaryDirectory(prefix='safecode-icon-') as temp:
  run(['iconutil','-c','icns',iconset,'-o',resources/'AppIcon.icns'])
 info={'CFBundleIdentifier':'org.safecode.desktop','CFBundleName':'Safe Code','CFBundleDisplayName':'Safe Code','CFBundleExecutable':'SafeCode','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.4.4','CFBundleVersion':'0.4.4.19','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'15.0','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'用系统 Terminal 打开已核验服务器的 SSH 终端；不向终端传递密码。','NSHumanReadableCopyright':'Safe Code contributors. MIT License.'}
 (contents/'Info.plist').write_bytes(plistlib.dumps(info))
-for name in ['LICENSE','THIRD_PARTY_NOTICES.md']:shutil.copy2(root/name,resources/name)
+shutil.copy2(root/'LICENSE',resources/'LICENSE')
+shutil.copy2(root/'third_party'/'THIRD_PARTY_NOTICES.md',resources/'THIRD_PARTY_NOTICES.md')
 shutil.copy2(root/'docs/MACOS.md',resources/'使用说明.md')
 legal=resources/'licenses';legal.mkdir()
 # Preserve the license documents from the exact restored packages and bundled runtime.

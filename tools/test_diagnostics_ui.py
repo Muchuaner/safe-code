@@ -28,7 +28,7 @@ with sync_playwright() as p:
         queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
       }}};
     ''')
-    page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady')
+    page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady')
     page.wait_for_function("!document.querySelector('#settings-diagnostics-consent').disabled")
     page.wait_for_function("document.querySelector('#notice-screen').hidden===false")
     assert not page.locator('#diagnostics-consent').is_checked()

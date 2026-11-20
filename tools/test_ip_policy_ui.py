@@ -35,7 +35,7 @@ with sync_playwright() as p:
         queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
       }}};
     ''')
-    page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady')
+    page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady')
     page.evaluate("void window.safeCodeRunIpAcceptance({host:'8.8.8.8',ingressIp:'8.8.8.8',egressIp:'1.1.1.1',username:'fixture',password:'fixture-only'})")
     try:page.wait_for_function('window.ipCalls.length===1',timeout=8000)
     except Exception:

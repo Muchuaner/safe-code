@@ -28,7 +28,7 @@ with sync_playwright() as p:
         queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
       }}};
     ''')
-    page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady')
+    page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady')
     notice=page.locator('#title-update-notice');assert not notice.is_visible()
     page.locator('[data-open-services]:visible').first.click();page.locator('#check-update').click()
     page.wait_for_function("!document.querySelector('#title-update-notice').hidden")

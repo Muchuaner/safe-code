@@ -14,7 +14,7 @@ with sync_playwright() as p:
   queueMicrotask(()=>safeCodeNativeResponse({id:m.id,result}));
  }}};
  ''')
- page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady');page.evaluate("showScreen('workspace');switchMode('maintenance');void document.querySelector('#bridge-manage').onclick()")
+ page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady');page.evaluate("showScreen('workspace');switchMode('maintenance');void document.querySelector('#bridge-manage').onclick()")
  assert '亚撒西の空白' in page.locator('#bridge-credit').inner_text()
  assert page.locator('.unified-maintenance-cards > :last-child').get_attribute('class')=='advanced-card bridge-card'
  assert '未经本人测试' not in page.locator('.bridge-card').inner_text()

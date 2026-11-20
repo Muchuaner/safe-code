@@ -33,7 +33,7 @@ with sync_playwright() as p:
    queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result,error}));
  }}};
  ''')
- page.goto('https://safe-code.local/index.html');page.wait_for_function('window.safeCodeNativeReady');page.evaluate("showScreen('login')")
+ page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady');page.evaluate("showScreen('login')")
  a=page.locator('#advanced-connect').bounding_box();b=page.locator('#login-help').bounding_box();main=page.locator('#connect').bounding_box()
  assert abs(a['width']-main['width']/2)<10 and b['x']>a['x']+a['width']
  assert b['y']+b['height']<536 and page.locator('#back').bounding_box()['y']<536

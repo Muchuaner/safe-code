@@ -25,7 +25,7 @@ with sync_playwright() as p:
    queueMicrotask(()=>window.safeCodeNativeResponse?.({id:m.id,result,error}));
  }}};'''
  page.add_init_script(main_fixture)
- page.goto((root/'index.html').as_uri());page.wait_for_function('window.safeCodeNativeReady===true')
+ page.goto((root/'web'/'index.html').as_uri());page.wait_for_function('window.safeCodeNativeReady===true')
  page.evaluate("showScreen('workspace');switchMode('maintenance')")
  assert page.locator('.window-controls').is_hidden();assert page.locator('#codex-launch').is_disabled();assert page.locator('#claude-desktop-launch').is_disabled();assert '暂不可用' in page.locator('#bridge-state').inner_text()
  assert 'macOS' in page.locator('#usage-detail').inner_text();assert '系统设置' in page.locator('.host-risk small').inner_text()
@@ -90,7 +90,7 @@ with sync_playwright() as p:
      m.op==='gateways.resume-settings'?{host:'192.0.2.42',username:'fixture',password:'fixture-only',port:22}:""")
    .replace("m.op==='connect'?{server:", """m.op==='connect'&&++window.resumeAttempts===1?{retryable:true}:
      m.op==='connect'?{server:"""))
- resumed.goto((root/'index.html').as_uri())
+ resumed.goto((root/'web'/'index.html').as_uri())
  expect(resumed.locator('#connection-progress-text')).to_contain_text('5 秒后自动重连')
  resumed.clock.run_for(5100)
  expect(resumed.locator('#public-gateway-runtime')).to_have_text('公网网关 · 并发 1/1 · 排队 2')
@@ -137,7 +137,7 @@ with sync_playwright() as p:
    calls.push({op,args});
    queueMicrotask(()=>window.safeCodeNativeResponse({id,result:rpc(op,args)}));
  }}};""")
- gateway.goto((root/'gateway.html').as_uri())
+ gateway.goto((root/'web'/'gateway.html').as_uri())
  expect(gateway.locator('#metric-queue')).to_have_text('1 / 1')
  expect(gateway.locator('#gateway-claude-limits [data-limit=five_hour]')).to_have_text('72.5%')
  assert gateway.locator('dialog[open]').count()==0
