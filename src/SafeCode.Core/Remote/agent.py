@@ -663,23 +663,6 @@ def file_sha256(file):
     for block in iter(lambda:file.read(1024*1024),b''):digest.update(block)
     return digest.hexdigest()
 
-PARITY_CHECK=Path('/opt/safe-code/verify-示例环境-runtime.py')
-
-def has_pinned_model_runtime():
-    return os.uname().nodename=='fixture-gateway' and (PARITY_CHECK.exists() or PARITY_CHECK.is_symlink())
-
-def verify_pinned_model_runtime(service):
-    metadata=PARITY_CHECK.lstat()
-    if PARITY_CHECK.is_symlink() or not PARITY_CHECK.is_file() or metadata.st_uid!=0 or metadata.st_mode&0o022:
-        raise RuntimeError('示例环境 固定运行环境的校验脚本权限异常。')
-    command=['systemd-run','--quiet','--wait','--collect','--pipe','--property=User=workspace',
-             '--property=NoNewPrivileges=yes','--property=EnvironmentFile=/home/workspace/.config/safe-code/anthropic-simulator.env']
-    if service=='cloudcli':
-        command+=['--setenv=HOST=127.0.0.1','--setenv=SERVER_PORT=3001',
-                  '--setenv=CLAUDE_CLI_PATH=/home/workspace/.local/bin/claude',
-                  '--setenv=PATH=/opt/safe-code/node/bin:/usr/bin:/bin']
-    run(command+['/usr/bin/python3','-I','-B',str(PARITY_CHECK),service],timeout=20)
-
 def download_claude(target):
     import platform,socket,urllib.request,urllib.error
     target_platform={'x86_64':'linux-x64','aarch64':'linux-arm64'}.get(platform.machine())
@@ -728,10 +711,6 @@ def download_claude(target):
         raise
 
 def setup_claude(options):
-    if has_pinned_model_runtime():
-        verify_pinned_model_runtime('claude')
-        log('示例环境 已使用校验通过的固定版 Claude Code。')
-        return
     account();apt(['curl','ca-certificates','git','tmux'])
     with tempfile.TemporaryDirectory(prefix='claude-install-',dir='/opt/safe-code') as directory:
         source=Path(directory)/'claude'
@@ -778,15 +757,6 @@ def setup_cloud_onboarding(options):
     return report
 
 def setup_cloud(options):
-    if has_pinned_model_runtime():
-        verify_pinned_model_runtime('cloudcli')
-        preflight=run(['systemctl','show','-p','ExecStartPre','--value','safe-code-cloudcli.service']).stdout
-        if str(PARITY_CHECK) not in preflight:
-            raise RuntimeError('示例环境 CloudCLI 缺少固定版本启动校验，未重新配置服务。')
-        if not active('safe-code-cloudcli'):
-            run(['systemctl','start','safe-code-cloudcli.service'],timeout=30)
-        log('示例环境 已使用校验通过的 CloudCLI，继续通过现有 HTTPS 入口访问。')
-        return
     secure_root_directory('/mnt/safe-code',0o755)
     a=account();apt(['curl','xz-utils','ca-certificates','git'])
     setup_git_identity()
@@ -822,8 +792,6 @@ def setup_cloud(options):
 
 def setup_cloud_public(options):
     require_ubuntu()
-    if has_pinned_model_runtime():
-        raise RuntimeError('示例环境 CloudCLI 使用已有的 HTTPS 双重验证入口，无需直开 3001 端口。')
     service_path=Path('/etc/systemd/system/safe-code-cloudcli.service')
     if not service_path.exists() or not active('safe-code-cloudcli'):
         log('正在准备 CloudCLI 基础服务…')
@@ -1350,7 +1318,7 @@ def main():
         if op not in mapping:raise RuntimeError('未知部署操作。')
         log('开始部署：'+op)
         if (op=='account' and not read_config()) or op in ['localization','desktop','chrome','input','claude','cloud','mount_install']:
-            if op not in ('claude','cloud') or not has_pinned_model_runtime():prepare_system()
+            prepare_system()
         mapping[op](options)
         result(inspect())
 
