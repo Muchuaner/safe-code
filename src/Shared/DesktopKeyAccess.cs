@@ -26,7 +26,8 @@ namespace SafeCode.Desktop;
 
 // Claude receives a device-local bearer. Only SafeCode holds the remote bearer and TLS pin.
 internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]> protect,
-    Func<byte[],byte[]> unprotect, string? profileDirectory=null,ClientServices? diagnostics=null) : IDisposable
+    Func<byte[],byte[]> unprotect, string? profileDirectory=null,ClientServices? diagnostics=null,
+    string? windowsPolicyPath=null) : IDisposable
 {
     private sealed record Ticket(string Url,string Pin,string Key);
     private sealed record Saved(Ticket Remote,string Local,int Port,string Profile,string Previous,JsonNode? Hybrid,bool CreatedMeta=false,
@@ -36,6 +37,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         public async ValueTask DisposeAsync()
         {
             try{await App.StopAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);}
+            catch(OperationCanceledException){}
             finally
             {
                 try{await App.DisposeAsync().ConfigureAwait(false);}
@@ -61,7 +63,11 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(OperatingSystem.IsMacOS())return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"Library/Application Support/Claude-3p/configLibrary");
         var local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         string package=Path.Combine(local,"Packages","Claude_pzs8sxrjxfjjc");
-        return Path.Combine(Directory.Exists(package)?Path.Combine(package,"LocalCache","Local"):local,"Claude-3p","configLibrary");
+        string packaged=Path.Combine(package,"LocalCache","Local","Claude-3p","configLibrary");
+        string unpackaged=Path.Combine(local,"Claude-3p","configLibrary");
+        if(File.Exists(Path.Combine(packaged,"_meta.json")))return packaged;
+        if(File.Exists(Path.Combine(unpackaged,"_meta.json")))return unpackaged;
+        return Directory.Exists(packaged)||Directory.Exists(package)&&!Directory.Exists(unpackaged)?packaged:unpackaged;
     }
     private static Ticket Parse(string text)
     {
@@ -180,12 +186,28 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             using(var stream=new FileStream(temp,options)){stream.Write(data);stream.Flush(true);}
             File.Move(temp,path,true);
         }
-        finally{File.Delete(temp);}
+        finally{DeleteOptionalFile(temp);}
+    }
+    private static byte[]? ReadOptionalFile(string path)
+    {
+        try{return File.ReadAllBytes(path);}
+        catch(FileNotFoundException){return null;}
+        catch(DirectoryNotFoundException){return null;}
+    }
+    private static void DeleteOptionalFile(string path)
+    {
+        try{File.Delete(path);}
+        catch(DirectoryNotFoundException){}
+    }
+    private static void RestoreFile(string path,byte[]? original)
+    {
+        if(original==null)DeleteOptionalFile(path);else WriteProfileFile(path,original);
     }
     internal static JsonObject ReadProfileMeta(string lib)
+        =>ParseProfileMeta(ReadOptionalFile(Path.Combine(lib,"_meta.json")));
+    private static JsonObject ParseProfileMeta(byte[]? data)
     {
-        var path=Path.Combine(lib,"_meta.json");
-        var meta=File.Exists(path)?JsonNode.Parse(File.ReadAllText(path)) as JsonObject:new JsonObject{["entries"]=new JsonArray(),["appliedId"]=""};
+        var meta=data!=null?JsonNode.Parse(data) as JsonObject:new JsonObject{["entries"]=new JsonArray(),["appliedId"]=""};
         if(meta?["entries"] is not JsonArray)throw new IOException("Claude 配置列表无法读取。");
         return meta;
     }
@@ -197,8 +219,14 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         finally{CryptographicOperations.ZeroMemory(data);}
     }
 
+    private sealed record PolicyChange(PolicyValue? Before,PolicyValue? After);
+    private string WindowsPolicyPath=>windowsPolicyPath??ClaudeDesktopPolicy.RegistryPath;
+    private const string WindowsPolicyPermissionMessage="Windows 拒绝访问 Claude Desktop 的本机策略。请先安全退出 Safe Code，再用当前 Windows 账户右键 Safe Code，选择「以管理员身份运行」后重试。若此账户没有管理员权限，或重试后仍失败，请联系管理员检查策略权限。";
+    private const string WindowsPolicyConflictMessage="Claude Desktop 现有管理策略与 Safe Code API 接入冲突，请先停用原管理配置。";
+
     [SupportedOSPlatform("windows")]
-    private static (Dictionary<string,PolicyValue> Owned,Dictionary<string,PolicyValue> Missing) PlanWindowsPolicy(JsonObject profile,Saved saved)
+    private (Dictionary<string,PolicyValue> Owned,Dictionary<string,PolicyChange> Changes) PlanWindowsPolicy(
+        JsonObject profile,Saved saved,IReadOnlyDictionary<string,PolicyValue>? previousPolicy=null)
     {
         // The Windows app selects its deployment mode before loading the per-user profile.
         // Wire the supported policy only to the device-local relay URL and bearer.
@@ -219,73 +247,152 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         };
         if(profile["claudeCodeSettings"]?["env"]?["CLAUDE_CODE_AUTO_MODE_MODEL"] is JsonValue model&&model.TryGetValue<string>(out var classifier))
             desired["autoModeClassifierModel"]=PolicyValue.FromString(classifier);
-        using var machine=Registry.LocalMachine.OpenSubKey(ClaudeDesktopPolicy.RegistryPath,false);
-        using var user=Registry.CurrentUser.OpenSubKey(ClaudeDesktopPolicy.RegistryPath,false);
-        var owned=new Dictionary<string,PolicyValue>();
-        var missing=new Dictionary<string,PolicyValue>();
-        foreach(var (field,value) in desired)
-        {
-            var machineValue=machine?.GetValue(field,null,RegistryValueOptions.DoNotExpandEnvironmentNames);
-            var userValue=user?.GetValue(field,null,RegistryValueOptions.DoNotExpandEnvironmentNames);
-            if((machineValue!=null&&!MatchesPolicyValue(machineValue,value))||(userValue!=null&&!MatchesPolicyValue(userValue,value)))
-                throw new InvalidOperationException("Claude Desktop 现有管理策略与 Safe Code API 接入冲突，请先停用原管理配置。");
-            if(machineValue==null&&userValue==null)missing[field]=value;
-            if(missing.ContainsKey(field)||saved.WindowsPolicy?.ContainsKey(field)==true)owned[field]=value;
-        }
-        return (owned,missing);
-    }
-
-    private static bool MatchesPolicyValue(object? current,PolicyValue value)=>value.Kind==PolicyValueKind.DWord?
-        current is int number&&number==value.Number:current is string text&&text==value.Text;
-
-    [SupportedOSPlatform("windows")]
-    private static void ApplyWindowsPolicy(IReadOnlyDictionary<string,PolicyValue> fields)
-    {
-        if(fields.Count==0)return;
-        using var key=OpenWindowsPolicyForValues()??Registry.CurrentUser.CreateSubKey(ClaudeDesktopPolicy.RegistryPath,true)
-            ??throw new IOException("无法打开 Claude Desktop 本机策略。");
-        var written=new Dictionary<string,PolicyValue>();
+        previousPolicy??=saved.WindowsPolicy;
         try
         {
-            foreach(var (field,value) in fields)
+            using var machine=OpenWindowsPolicy(Registry.LocalMachine);
+            using var user=OpenWindowsPolicy(Registry.CurrentUser);
+            var owned=new Dictionary<string,PolicyValue>(StringComparer.OrdinalIgnoreCase);
+            var changes=new Dictionary<string,PolicyChange>(StringComparer.OrdinalIgnoreCase);
+            foreach(var (field,value) in desired)
             {
-                var current=key.GetValue(field,null,RegistryValueOptions.DoNotExpandEnvironmentNames);
-                if(MatchesPolicyValue(current,value))continue;
-                if(current!=null)throw new InvalidOperationException("Claude Desktop 策略已变更，请重新启用 Safe Code API 接入。");
-                if(value.Kind==PolicyValueKind.DWord)key.SetValue(field,value.Number!.Value,RegistryValueKind.DWord);
-                else key.SetValue(field,value.Text!,RegistryValueKind.String);
-                written[field]=value;
+                var machineValue=ReadPolicyValue(machine,field);
+                var userValue=ReadPolicyValue(user,field);
+                var previous=previousPolicy?.GetValueOrDefault(field);
+                bool stillOwned=previous!=null&&MatchesPolicyValue(userValue,previous);
+                if((machineValue!=null&&!MatchesPolicyValue(machineValue,value))||
+                    (userValue!=null&&!stillOwned&&!MatchesPolicyValue(userValue,value)))
+                    throw new InvalidOperationException(WindowsPolicyConflictMessage);
+                if(!stillOwned&&(machineValue!=null||userValue!=null))continue;
+                owned[field]=value;
+                if(!MatchesPolicyValue(userValue,value))changes[field]=new(stillOwned?previous:null,value);
             }
+            if(previousPolicy!=null)
+                foreach(var (field,value) in previousPolicy)
+                    if(!desired.ContainsKey(field)&&MatchesPolicyValue(ReadPolicyValue(user,field),value))
+                        changes[field]=new(value,null);
+            return (owned,changes);
         }
-        catch
+        catch(Exception error) when(error is SecurityException or UnauthorizedAccessException)
         {
-            DeleteMatchingPolicyValues(key,written);
-            throw;
+            throw new InvalidOperationException(WindowsPolicyPermissionMessage,error);
+        }
+    }
+
+    private static bool MatchesPolicyValue(object? current,PolicyValue? value)=>value switch
+    {
+        null=>current==null,
+        {Kind:PolicyValueKind.DWord}=>current is int number&&number==value.Number,
+        _=>current is string text&&text==value.Text
+    };
+
+    [SupportedOSPlatform("windows")]
+    private static object? ReadPolicyValue(RegistryKey? key,string field)=>
+        key?.GetValue(field,null,RegistryValueOptions.DoNotExpandEnvironmentNames);
+
+    [SupportedOSPlatform("windows")]
+    private RegistryKey? OpenWindowsPolicy(RegistryKey hive,bool writable=false)=>hive.OpenSubKey(
+        WindowsPolicyPath,writable?RegistryKeyPermissionCheck.ReadWriteSubTree:RegistryKeyPermissionCheck.ReadSubTree,
+        writable?RegistryRights.QueryValues|RegistryRights.SetValue:RegistryRights.QueryValues);
+
+    [SupportedOSPlatform("windows")]
+    private RegistryKey OpenOrCreateWindowsPolicy()
+    {
+        if(OpenWindowsPolicy(Registry.CurrentUser,writable:true) is {} key)return key;
+        using var created=Registry.CurrentUser.CreateSubKey(WindowsPolicyPath,RegistryKeyPermissionCheck.ReadSubTree);
+        return OpenWindowsPolicy(Registry.CurrentUser,writable:true)??throw new IOException("无法打开 Claude Desktop 本机策略。");
+    }
+
+    [SupportedOSPlatform("windows")]
+    private Action ApplyWindowsPolicy(IReadOnlyDictionary<string,PolicyChange> changes)
+    {
+        if(changes.Count==0)return static ()=>{};
+        var applied=new List<KeyValuePair<string,PolicyChange>>();
+        try
+        {
+            using var key=OpenOrCreateWindowsPolicy();
+            try
+            {
+                foreach(var change in changes)
+                {
+                    var (field,value)=change;
+                    if(!MatchesPolicyValue(ReadPolicyValue(key,field),value.Before))
+                        throw new InvalidOperationException("Claude Desktop 策略已变更，请重试。");
+                    WritePolicyValue(key,field,value.After);
+                    applied.Add(change);
+                }
+            }
+            catch
+            {
+                RestorePolicyValues(key,applied);
+                throw;
+            }
+            return ()=>UndoWindowsPolicy(applied);
+        }
+        catch(Exception error) when(error is SecurityException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(WindowsPolicyPermissionMessage,error);
         }
     }
 
     [SupportedOSPlatform("windows")]
-    private static RegistryKey? OpenWindowsPolicyForValues()=>Registry.CurrentUser.OpenSubKey(
-        ClaudeDesktopPolicy.RegistryPath,RegistryKeyPermissionCheck.ReadWriteSubTree,RegistryRights.QueryValues|RegistryRights.SetValue);
-
-    [SupportedOSPlatform("windows")]
-    private static void RemoveWindowsPolicy(IReadOnlyDictionary<string,PolicyValue>? fields)
+    private Action RemoveWindowsPolicy(IReadOnlyDictionary<string,PolicyValue>? fields)
     {
-        if(fields is not {Count:>0})return;
-        using var read=Registry.CurrentUser.OpenSubKey(ClaudeDesktopPolicy.RegistryPath,false);
-        if(read==null||!fields.Any(pair=>MatchesPolicyValue(read.GetValue(pair.Key,null,RegistryValueOptions.DoNotExpandEnvironmentNames),pair.Value)))return;
-        using var key=OpenWindowsPolicyForValues();
-        if(key!=null)DeleteMatchingPolicyValues(key,fields);
+        if(fields is not {Count:>0})return static ()=>{};
+        try
+        {
+            using var read=OpenWindowsPolicy(Registry.CurrentUser);
+            var changes=fields.Where(pair=>MatchesPolicyValue(ReadPolicyValue(read,pair.Key),pair.Value))
+                .ToDictionary(pair=>pair.Key,pair=>new PolicyChange(pair.Value,null));
+            return ApplyWindowsPolicy(changes);
+        }
+        catch(Exception error) when(error is SecurityException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(WindowsPolicyPermissionMessage,error);
+        }
     }
 
     [SupportedOSPlatform("windows")]
-    private static void DeleteMatchingPolicyValues(RegistryKey key,IReadOnlyDictionary<string,PolicyValue> fields)
+    private void UndoWindowsPolicy(List<KeyValuePair<string,PolicyChange>> applied)
     {
-        foreach(var (field,value) in fields)
-            if(MatchesPolicyValue(key.GetValue(field,null,RegistryValueOptions.DoNotExpandEnvironmentNames),value))key.DeleteValue(field,false);
+        try
+        {
+            using var key=OpenWindowsPolicy(Registry.CurrentUser,writable:true);
+            if(key!=null)RestorePolicyValues(key,applied);
+        }
+        catch(Exception error) when(error is SecurityException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(WindowsPolicyPermissionMessage,error);
+        }
     }
 
-    private const string WindowsPolicyPermissionMessage="Windows 拒绝访问 Claude Desktop 的本机策略。请用原来配置接入的 Windows 账户打开 Safe Code，或请管理员检查该账户的策略权限。";
+    [SupportedOSPlatform("windows")]
+    private static void RestorePolicyValues(RegistryKey key,List<KeyValuePair<string,PolicyChange>> applied)
+    {
+        for(int i=applied.Count-1;i>=0;i--)
+        {
+            var (field,value)=applied[i];
+            if(MatchesPolicyValue(ReadPolicyValue(key,field),value.After))WritePolicyValue(key,field,value.Before);
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void WritePolicyValue(RegistryKey key,string field,PolicyValue? value)
+    {
+        switch(value)
+        {
+            case null:
+                key.DeleteValue(field,false);
+                if(ReadPolicyValue(key,field)!=null)throw new UnauthorizedAccessException("无法删除本机策略字段。");
+                break;
+            case {Kind:PolicyValueKind.DWord}:
+                key.SetValue(field,value.Number!.Value,RegistryValueKind.DWord);
+                break;
+            default:
+                key.SetValue(field,value.Text!,RegistryValueKind.String);
+                break;
+        }
+    }
     private object Status(string? error=null)=>new{configured=Configured,running=relay!=null,error};
     // The classifier accepts permission checks only. Publishing it as a chat model
     // also makes it compete with the real Sonnet family default in Desktop.
@@ -323,9 +430,12 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 try
                 {
                     var saved=Load();string lib=Library();
-                    if((string?)ReadProfileMeta(lib)["appliedId"]==saved.Profile)
+                    var meta=ReadProfileMeta(lib);
+                    if((string?)meta["appliedId"]==saved.Profile)
                     {
                         var path=Path.Combine(lib,saved.Profile+".json");
+                        if(ReadOptionalFile(path)==null)
+                            return Status("Claude Desktop 的接入配置已被移除。请选择「重新启用」或「更换 Key」。");
                         MigrateClassifier(path);
                         var restored=await Listen(saved.Remote,saved.Local,saved.Port,ct);
                         try
@@ -333,10 +443,14 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                             if(OperatingSystem.IsWindows())
                             {
                                 var profile=JsonNode.Parse(File.ReadAllBytes(path))?.AsObject()??throw new IOException("无法读取 Claude 接入配置。");
-                                var (fields,missing)=PlanWindowsPolicy(profile,saved);
-                                if(saved.WindowsPolicy==null||!ClaudeDesktopPolicy.MatchesWritten(fields,saved.WindowsPolicy)||saved.WindowsPolicy.Count!=fields.Count)
-                                    Save(saved with{WindowsPolicy=fields});
-                                ApplyWindowsPolicy(missing);
+                                var (fields,changes)=PlanWindowsPolicy(profile,saved);
+                                var undoPolicy=ApplyWindowsPolicy(changes);
+                                try
+                                {
+                                    if(saved.WindowsPolicy==null||!ClaudeDesktopPolicy.MatchesWritten(fields,saved.WindowsPolicy)||saved.WindowsPolicy.Count!=fields.Count)
+                                        Save(saved with{WindowsPolicy=fields});
+                                }
+                                catch{undoPolicy();throw;}
                             }
                             relay=restored;
                         }
@@ -348,8 +462,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 {
                     failure=error;
                     if(error is OperationCanceledException)throw;
-                    return Status(OperatingSystem.IsWindows()&&(error is SecurityException or UnauthorizedAccessException)
-                        ? WindowsPolicyPermissionMessage : error.Message);
+                    return Status(ProfileError(error).Message);
                 }
                 finally
                 {
@@ -360,12 +473,15 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         finally{gate.Release();}
     }
-    internal async Task<object> EnableAsync(string code,CancellationToken ct)
+    internal async Task<object> EnableAsync(string code,CancellationToken ct,bool replace=false,bool useSaved=false)
     {
-        var t=Parse(code.Trim());await gate.WaitAsync(ct);
+        await gate.WaitAsync(ct);
         try
         {
-            if(Configured)throw new InvalidOperationException("请先停用当前 Key 再切换。");
+            var previous=Configured?Load():null;
+            if(useSaved&&previous==null)throw new InvalidOperationException("没有保存的接入 Key，请输入新的 Key。");
+            if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」切换已保存的接入。");
+            var t=useSaved?previous!.Remote:Parse(code.Trim());
             using var client=Remote(t);using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(45));
             using var result=await VerifyRemoteAsync(client, timeout.Token);
@@ -384,49 +500,69 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 models.Add(entry);
             }
             if(models.Count==0)throw new IOException("远端 CLI 未提供可用模型。");
-            string lib=Library(),idNew=Guid.NewGuid().ToString();
-            var meta=ReadProfileMeta(lib);var entries=meta["entries"]!.AsArray();
-            string local=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            string lib=Library(),profileId=previous?.Profile??Guid.NewGuid().ToString();
+            string metaPath=Path.Combine(lib,"_meta.json"),profilePath=Path.Combine(lib,profileId+".json");
+            byte[]? originalMeta=ReadOptionalFile(metaPath),originalProfile=ReadOptionalFile(profilePath);
+            var meta=ParseProfileMeta(originalMeta);var entries=meta["entries"]!.AsArray();
+            string applied=(string?)meta["appliedId"]??"";
+            bool wasApplied=previous!=null&&applied==profileId;
+            string local=previous?.Local??Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             var next=await Listen(t,local,0,ct);
-            Dictionary<string,PolicyValue>? windowsPolicy=null;
-            Dictionary<string,PolicyValue>? appliedPolicy=null;
+            Action? undoPolicy=null;
+            bool profileWritten=false,metaWritten=false;
             try
             {
-                var s=new Saved(t,local,next.Port,idNew,(string?)meta["appliedId"]??"",meta["hybridPointer"]?.DeepClone(),!File.Exists(Path.Combine(lib,"_meta.json")));
+                var s=new Saved(t,local,next.Port,profileId,wasApplied?previous!.Previous:applied,
+                    (wasApplied?previous!.Hybrid:meta["hybridPointer"])?.DeepClone(),wasApplied?previous!.CreatedMeta:originalMeta==null);
                 var profile=new JsonObject{["inferenceProvider"]="gateway",["inferenceGatewayBaseUrl"]="http://127.0.0.1:"+next.Port,
                     ["inferenceGatewayAuthScheme"]="bearer",["inferenceCredentialKind"]="static",["inferenceGatewayApiKey"]=local,
                     ["deploymentMode"]="3p",["disableDeploymentModeChooser"]=true,["deploymentDisplayName"]="SafeCode",
                     ["inferenceModels"]=models,["modelDiscoveryEnabled"]=false,["autoModeEnabled"]=true,["chatTabEnabled"]=true};
                 if(classifier!=null)SetClassifier(profile,classifier);
-                Dictionary<string,PolicyValue>? missingPolicy=null;
-                if(OperatingSystem.IsWindows())(windowsPolicy,missingPolicy)=PlanWindowsPolicy(profile,s);
-                Save(s with{WindowsPolicy=windowsPolicy});
-                WriteProfileFile(Path.Combine(lib,idNew+".json"),JsonSerializer.SerializeToUtf8Bytes(profile));
-                if(OperatingSystem.IsWindows()&&missingPolicy!=null)
+                if(OperatingSystem.IsWindows())
                 {
-                    ApplyWindowsPolicy(missingPolicy);
-                    appliedPolicy=missingPolicy;
+                    var (owned,changes)=PlanWindowsPolicy(profile,s,previous?.WindowsPolicy);
+                    undoPolicy=ApplyWindowsPolicy(changes);
+                    s=s with{WindowsPolicy=owned};
                 }
-                entries.Add(new JsonObject{["id"]=idNew,["name"]="SafeCode"});
-                meta["appliedId"]=idNew;meta.Remove("hybridPointer");
-                WriteProfileFile(Path.Combine(lib,"_meta.json"),JsonSerializer.SerializeToUtf8Bytes(meta));
-                relay=next;
+                WriteProfileFile(profilePath,JsonSerializer.SerializeToUtf8Bytes(profile));
+                profileWritten=true;
+                if(!entries.Any(entry=>(string?)entry?["id"]==profileId))
+                    entries.Add(new JsonObject{["id"]=profileId,["name"]="SafeCode"});
+                meta["appliedId"]=profileId;meta.Remove("hybridPointer");
+                WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
+                metaWritten=true;
+                Save(s);
             }
-            catch(Exception error)
+            catch
             {
-                await next.DisposeAsync();
-                if(OperatingSystem.IsWindows())RemoveWindowsPolicy(appliedPolicy);
-                string profilePath=Path.Combine(lib,idNew+".json");
-                if(File.Exists(profilePath))File.Delete(profilePath);
-                if(File.Exists(StatePath))File.Delete(StatePath);
-                if(OperatingSystem.IsWindows()&&(error is SecurityException or UnauthorizedAccessException))
-                    throw new InvalidOperationException(WindowsPolicyPermissionMessage,error);
+                try{undoPolicy?.Invoke();}
+                finally
+                {
+                    try{if(metaWritten)RestoreFile(metaPath,originalMeta);}
+                    finally
+                    {
+                        try{if(profileWritten)RestoreFile(profilePath,originalProfile);}
+                        finally{await next.DisposeAsync();}
+                    }
+                }
                 throw;
             }
+            var oldRelay=relay;relay=next;
+            if(oldRelay!=null)await oldRelay.DisposeAsync();
             return Status();
         }
+        catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}
         finally{gate.Release();}
     }
+
+    private static bool IsProfileAccessError(Exception error)=>error is UnauthorizedAccessException or SecurityException or DirectoryNotFoundException or FileNotFoundException;
+    private static Exception ProfileError(Exception error)=>error switch
+    {
+        UnauthorizedAccessException or SecurityException=>new IOException("无法访问本机 Claude Desktop 或 Safe Code 的配置文件。请使用平时运行 Claude Desktop 的系统账户，并检查该账户的文件权限。",error),
+        DirectoryNotFoundException or FileNotFoundException=>new IOException("Claude Desktop 的本机配置位置已变更。请重新打开 Claude Desktop 后再试。",error),
+        _=>error
+    };
 
     private static async Task<HttpResponseMessage> VerifyRemoteAsync(HttpClient client, CancellationToken ct)
     {
@@ -446,8 +582,10 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             if(Configured)
             {
-                var s=Load();var lib=Library();var meta=ReadProfileMeta(lib);var entries=meta["entries"]!.AsArray();
-                if(OperatingSystem.IsWindows())RemoveWindowsPolicy(s.WindowsPolicy);
+                var s=Load();var lib=Library();
+                string metaPath=Path.Combine(lib,"_meta.json"),profilePath=Path.Combine(lib,s.Profile+".json");
+                byte[]? originalMeta=ReadOptionalFile(metaPath),originalProfile=ReadOptionalFile(profilePath);
+                var meta=ParseProfileMeta(originalMeta);var entries=meta["entries"]!.AsArray();
                 string? originalApplied=(string?)meta["appliedId"];
                 var ours=entries.FirstOrDefault(n=>(string?)n?["id"]==s.Profile);if(ours!=null)entries.Remove(ours);
                 if((string?)meta["appliedId"]==s.Profile)
@@ -456,13 +594,33 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     meta["appliedId"]=prior??"";
                     if(s.Hybrid!=null&&prior==s.Previous)meta["hybridPointer"]=s.Hybrid.DeepClone();
                 }
-                if(ours!=null && s.CreatedMeta && entries.Count==0 && meta.Count==2 && originalApplied==s.Profile)File.Delete(Path.Combine(lib,"_meta.json"));
-                else if(ours!=null || (string?)meta["appliedId"]!=originalApplied) WriteProfileFile(Path.Combine(lib,"_meta.json"),JsonSerializer.SerializeToUtf8Bytes(meta));
-                File.Delete(Path.Combine(lib,s.Profile+".json"));File.Delete(StatePath);
+                Action? undoPolicy=null;
+                bool metaChanged=false,profileDeleted=false;
+                try
+                {
+                    if(OperatingSystem.IsWindows())undoPolicy=RemoveWindowsPolicy(s.WindowsPolicy);
+                    if(ours!=null&&s.CreatedMeta&&entries.Count==0&&meta.Count==2&&originalApplied==s.Profile)
+                    {DeleteOptionalFile(metaPath);metaChanged=true;}
+                    else if(ours!=null||(string?)meta["appliedId"]!=originalApplied)
+                    {WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));metaChanged=true;}
+                    DeleteOptionalFile(profilePath);profileDeleted=originalProfile!=null;
+                    DeleteOptionalFile(StatePath);
+                }
+                catch
+                {
+                    try{if(profileDeleted)RestoreFile(profilePath,originalProfile);}
+                    finally
+                    {
+                        try{if(metaChanged)RestoreFile(metaPath,originalMeta);}
+                        finally{undoPolicy?.Invoke();}
+                    }
+                    throw;
+                }
             }
             if(relay!=null){await relay.DisposeAsync();relay=null;}
             return Status();
         }
+        catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}
         finally{gate.Release();}
     }
     internal async Task StopAsync()
