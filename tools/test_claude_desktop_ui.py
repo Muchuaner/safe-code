@@ -90,7 +90,14 @@ with sync_playwright() as p:
     page.locator('#desktop-key-close').click()
     page.evaluate("showScreen('workspace');switchMode('maintenance')")
     page.evaluate("window.keyRunning=false;window.keyStatusFailure={result:{configured:true,running:false,error:'本机策略无法访问'}}")
-    page.locator('#desktop-key-settings').click()
+    workspace_key=page.locator('#desktop-key-workspace')
+    for width in (1000,360):
+        page.set_viewport_size({'width':width,'height':900})
+        button=workspace_key.bounding_box()
+        maintenance=page.locator('#maintenance-mode').bounding_box()
+        assert button['y']>=maintenance['y']+maintenance['height']
+    page.set_viewport_size({'width':1000,'height':900})
+    workspace_key.click()
     page.get_by_text('已保存 Key，暂未恢复接入。',exact=False).wait_for()
     assert not page.locator('#desktop-key-input').is_visible()
     assert page.locator('#desktop-key-disable').is_enabled()

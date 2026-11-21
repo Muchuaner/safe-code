@@ -931,9 +931,13 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         keyProgress.textContent=error.message;
       }finally{keyBusy=false;renderKey();}
     }
-    for(const id of ['desktop-key-login','desktop-key-settings']){
+    for(const id of ['desktop-key-login','desktop-key-settings','desktop-key-workspace']){
       const button=$('#'+id);button.hidden=false;
-      button.onclick=()=>{keyDialog.showModal();keyAction('status',{interactive:true});};
+      button.onclick=()=>{
+        if(keyDialog.open)return;
+        keyDialog.showModal();
+        keyAction('status',{interactive:true});
+      };
     }
     $('#desktop-key-form').onsubmit=event=>{
       event.preventDefault();

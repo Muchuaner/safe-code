@@ -306,7 +306,11 @@
 #desktop-key-replace:not([hidden])~.primary{margin-left:auto}
 #desktop-key-form #desktop-key-open{height:auto;min-height:36px;padding:5px 8px;line-height:1.2;text-align:center;white-space:nowrap}
 #desktop-key-open>span{font:inherit}
-#desktop-key-dialog [hidden],#desktop-key-login[hidden],#desktop-key-settings[hidden]{display:none!important}
+#desktop-key-dialog [hidden],#desktop-key-login[hidden],#desktop-key-settings[hidden],#desktop-key-workspace[hidden]{display:none!important}
+@media(max-width:470px){
+  .header-controls .mode-buttons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  #desktop-key-workspace{grid-column:1/-1}
+}
 
 /* AppKit supplies the macOS window title and controls. */
 html.macos-client .window{display:flex;flex-direction:column}

@@ -153,7 +153,7 @@ def anthropic_error(event, detail=None):
     nodes = [item for item in (event, event_error, detail) if isinstance(item, dict)]
     status = next((item['api_error_status'] for item in nodes
                    if type(item.get('api_error_status')) is int and 400 <= item['api_error_status'] <= 599), None)
-    evidence = 'cli_event'
+    evidence = 'cli_event' if status is not None else None
     prefix = re.match(r'^(?:API Error:|API error)\s*([45]\d\d)\b', detail) if isinstance(detail, str) else None
     if prefix:
         if status is None:
@@ -173,9 +173,10 @@ def anthropic_error(event, detail=None):
     kind = next((item['type'] for item in nodes if isinstance(item.get('type'), str) and item['type'] in REJECTION_TYPES), None)
     request = next((item['request_id'] for item in nodes if isinstance(item.get('request_id'), str)
                     and PROVIDER_ID.fullmatch(item['request_id'])), None)
-    if status is not None or request is not None:
-        diagnostic(stage='anthropic_response', anthropicEvidence=evidence, anthropicStatus=status,
-                   anthropicError=kind, anthropicRequestId=request)
+    if status is not None or kind is not None or request is not None:
+        fields = {'anthropicEvidence': evidence, 'anthropicStatus': status,
+                  'anthropicError': kind, 'anthropicRequestId': request}
+        diagnostic(stage='anthropic_response', **{key: value for key, value in fields.items() if value is not None})
     return status
 
 
@@ -2487,6 +2488,7 @@ class Conversation:
             message_id=None
             usage_model=None
             stream_message=StreamMessage();native_error=None;truncated=False
+            provider_status = None
             calls = {}
             tool_batch_deadline = None
             deadline = time.monotonic() + 600
@@ -2522,9 +2524,10 @@ class Conversation:
                     elif line.get('type') == 'assistant':
                         if line.get('isApiErrorMessage') or line.get('error'):
                             native_error=line.get('error')
+                            provider_status = anthropic_error(line) or provider_status
                             for block in blocks(line.get('message', {}).get('content', [])):
                                 if isinstance(block, dict) and block.get('type') == 'text':
-                                    anthropic_error(line, block.get('text'))
+                                    provider_status = anthropic_error(line, block.get('text')) or provider_status
                             continue
                         message = line.get('message', {})
                         content = message.get('content', [])
@@ -2536,10 +2539,10 @@ class Conversation:
                     elif line.get('type') == 'result':
                         self.manager.record_result(self.turn_id,line.get('usage',{}))
                         if line.get('is_error'):
-                            if native_error=='max_output_tokens' or (native_error is None and line.get('api_error_status') is None and (stream_message.stop=='max_tokens' or line.get('stop_reason')=='max_tokens')):
+                            status = anthropic_error(line) or provider_status
+                            if native_error=='max_output_tokens' or (native_error is None and status is None and (stream_message.stop=='max_tokens' or line.get('stop_reason')=='max_tokens')):
                                 truncated=True;content=stream_message.partial()
                             else:
-                                status = anthropic_error(line)
                                 raise GatewayError('VPS Claude Code could not complete the model request', status or 502)
                 elif op == 'turn.toolcall':
                     calls[event['callId']] = event
@@ -2674,9 +2677,6 @@ class Manager:
             if c.scope == scope and not c.handling and not c.transient
             and any(call['name'].rsplit('__', 1)[-1] == name for call in c.pending.values())
         ), None)
-
-    def count_input_tokens(self, data, headers=None):
-        raise GatewayError('Token counting is unavailable on this CLI bridge', 501)
 
     def run(self, data, context_1m=False, session_header=None, stream=None):
         if self.cloudcli is not None:
@@ -2886,12 +2886,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(503, {'error': {'type': 'api_error', 'message': 'Native Claude Code model discovery unavailable'}})
         self.reply(404, {'error': {'type': 'not_found_error', 'message': 'Unknown CLI bridge endpoint'}})
 
-    def execute_message(self, data, *, count_headers=None, **options):
+    def execute_message(self, data, **options):
         if not self.manager.capacity.acquire(blocking=False):
             raise GatewayError('Too many active Desktop requests', 429)
         try:
-            if count_headers is not None:
-                return self.manager.count_input_tokens(data, count_headers)
             return self.manager.run(data, **options)
         finally:
             self.manager.capacity.release()
@@ -2926,9 +2924,7 @@ class Handler(BaseHTTPRequestHandler):
                     if isinstance(data.get(field), list):
                         diagnostic(**{name: min(1000000, len(data[field]))})
             if path == COUNT_TOKENS_PATH:
-                headers = {name: self.headers[name] for name in ('anthropic-version', 'anthropic-beta')
-                           if name in self.headers}
-                return self.reply(200, self.execute_message(data, count_headers=headers))
+                return self.message_error(None, 404, 'not_found_error', 'Token counting is unavailable on this CLI bridge')
             if isinstance(data, dict) and data.get('stream') and self.manager.cloudcli is not None:
                 stream = CloudCliMessagesStream(self, data.get('model'))
             response = self.execute_message(data, stream=stream, session_header=self.headers.get('x-claude-code-session-id'),

@@ -625,16 +625,22 @@ class SafeCodeApiTest(unittest.TestCase):
                 self.assertEqual(post('/v1/messages',key,False)[0],401)
                 self.assertEqual(post(counter_path,key,False)[0],401)
                 self.assertEqual(post(counter_path,body=False)[0],401)
-                self.assertEqual(post(counter_path,legacy_key)[0],501)
                 counter=manage('issue',note='Token count only',rpm=1)
                 counter_key=decode_new_ticket(counter['ticket'])['key']
-                with patch.object(fake,'count_input_tokens',return_value={'input_tokens':950}) as count:
-                    status, body=post(counter_path+'?beta=true',counter_key)
-                    self.assertEqual((status,json.loads(body)),(200,{'input_tokens':950}))
-                    self.assertEqual(post(counter_path,counter_key)[0],429)
-                    count.assert_called_once_with({'model':'claude-test'}, {})
-                    self.assertEqual(manage('usage',id=counter['id'])['models'][0]['input'],0)
-                    self.assertEqual(manage('usage',id=counter['id'])['recent'][1]['tokens'],0)
+                with patch.object(public, 'account', wraps=public.account) as account:
+                    for _ in range(2):
+                        status, body=post(counter_path+'?beta=true',counter_key)
+                        self.assertEqual(status,404)
+                        self.assertEqual(json.loads(body)['error']['type'],'not_found_error')
+                    account.assert_not_called()
+                self.assertEqual(manage('usage',id=counter['id']), {'models': [], 'recent': []})
+                self.assertEqual(manage('list',details=True)['stats']['requests'],0)
+                self.assertEqual(post('/v1/messages',counter_key)[0],200)
+                self.assertEqual(post('/v1/messages',counter_key)[0],429)
+                with patch.object(fake, 'run', side_effect=server.GatewayError('Simulated model request error',400)):
+                    self.assertEqual(post('/v1/messages',legacy_key)[0],400)
+                model_failure = manage('usage',id=legacy_id)['recent'][0]
+                self.assertEqual((model_failure['outcome'],model_failure['status']),('failed',400))
                 capped = manage('issue', budget_cents=0)
                 capped_key = decode_new_ticket(capped['ticket'])['key']
                 self.assertEqual(post('/v1/messages', capped_key)[0], 402)

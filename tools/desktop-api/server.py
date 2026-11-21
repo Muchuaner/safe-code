@@ -292,7 +292,7 @@ class PublicHandler(Handler):
         self.close_connection = True
         return self.reply(403, {'error': {'type': 'permission_error', 'message': PUBLIC_DISABLED_MESSAGE}})
 
-    def execute_message(self, data, *, count_headers=None, **options):
+    def execute_message(self, data, **options):
         if not isinstance(data,dict):
             raise GatewayError('Invalid Messages request',400)
         requested = data.get('model')
@@ -310,8 +310,6 @@ class PublicHandler(Handler):
                 manager.accounting.model = model
                 manager.accounting.finished = None
                 try:
-                    if count_headers is not None:
-                        return manager.count_input_tokens(data, count_headers)
                     return manager.run(data, **options)
                 except GatewayError as error:
                     record.update(outcome='failed', status=error.status)

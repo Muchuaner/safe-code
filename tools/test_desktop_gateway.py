@@ -366,10 +366,48 @@ class Tests(unittest.TestCase):
             with self.subTest(changes=changes),self.assertRaises(g.GatewayError):self.manager.run(request(**changes))
         self.assertFalse(FakeChannel.instances)
 
-    def test_cli_bridge_reports_unsupported_token_counting(self):
-        with self.assertRaises(g.GatewayError) as error:
-            self.manager.count_input_tokens({'model':'claude-opus-5-5','messages':[{'role':'user','content':'tok'}]})
-        self.assertEqual(error.exception.status, 501)
+    def test_http_keeps_cli_error_fields_across_assistant_and_result(self):
+        class Rejected(FakeChannel):
+            result_status = {}
+
+            def send(self, event):
+                details = {
+                    'type': 'error',
+                    'error': {'type': 'invalid_request_error', 'message': 'private request text'},
+                    'request_id': 'req_fixture123',
+                }
+                assistant = {'type': 'assistant', 'isApiErrorMessage': True, 'message': {'content': [
+                    {'type': 'text', 'text': 'API Error: 400 '+json.dumps(details)},
+                ]}}
+                result = {'type': 'result', 'is_error': True, **self.result_status}
+                for line in (assistant, result):
+                    self.events.put({'op': 'turn.event', 'turnId': event['turnId'], 'line': json.dumps(line)})
+
+        with g.Server(self.manager) as server, patch.object(g, 'Channel', Rejected):
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                for result_status in ({}, {'api_error_status': 400}):
+                    Rejected.result_status = result_status
+                    client = http.client.HTTPConnection(*server.server_address, timeout=5)
+                    try:
+                        client.request('POST', '/v1/messages', json.dumps(request()), {
+                            'Authorization': 'Bearer local', 'X-SafeCode-Diagnostics': '1',
+                        })
+                        response = client.getresponse()
+                        self.assertEqual(response.status, 400)
+                        report = json.loads(response.getheader(g.DIAGNOSTIC_HEADER))
+                        self.assertEqual(report['stage'], 'anthropic_response')
+                        self.assertEqual(report['anthropicStatus'], 400)
+                        self.assertEqual(report['anthropicError'], 'invalid_request_error')
+                        self.assertEqual(report['anthropicRequestId'], 'req_fixture123')
+                        self.assertNotIn('private request text', json.dumps(report))
+                        self.assertNotIn(b'private request text', response.read())
+                    finally:
+                        client.close()
+            finally:
+                server.shutdown()
+                thread.join()
 
     def test_sse_preserves_content_and_usage(self):
         response=self.manager.run(request());events=list(g.sse_response(response))
