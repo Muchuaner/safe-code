@@ -947,6 +947,57 @@ def sync_cloud_mount_projects():
         warning='目录挂载保持正常，CloudCLI 项目联动未完成：'+str(error)
         log(warning);return warning
 
+NODE_ROOT=Path('/opt/safe-code/node')
+
+def supports_gateway_node(node):
+    return bool(node and run([node, '-p', 'Number(process.versions.node.split(".")[0]) >= 20'],
+                             check=False, timeout=5).stdout.strip()=='true')
+
+def gateway_node():
+    node=NODE_ROOT/'bin/node'
+    if node.is_file():
+        if not supports_gateway_node(node):
+            raise RuntimeError('Safe Code API 需要 Node.js 20 或以上，请更新 VPS 上现有的 Node.js。')
+        return node
+    if NODE_ROOT.exists() or NODE_ROOT.is_symlink():
+        raise RuntimeError('Safe Code 的 Node.js 安装不完整，请检查 VPS 上的 Node.js 后重试。')
+    system_node=shutil.which('node')
+    if supports_gateway_node(system_node):
+        return Path(system_node)
+    arch={'x86_64':'x64','aarch64':'arm64'}.get(os.uname().machine)
+    if not arch:
+        raise RuntimeError('当前服务器架构不支持自动安装 Node.js。')
+    if not shutil.which('curl'):
+        raise RuntimeError('VPS 缺少 curl。请通过 Safe Code 部署 Claude Code，然后重试。')
+    log('正在从 Node.js 官方渠道安装所需运行时…')
+    source='https://nodejs.org/dist/'
+    curl=['curl','-q','-fLSs','--proto','=https','--connect-timeout','8']
+    releases=json.loads(run([*curl,'--max-time','14',source+'index.json'],timeout=16).stdout)
+    release=next((item['version'] for item in releases
+                  if item.get('lts') and re.fullmatch(r'v22\.[0-9]+\.[0-9]+',item.get('version',''))), None)
+    if release is None:
+        raise RuntimeError('未能取得官方 Node.js 长期支持版本，请稍后重试。')
+    filename=f'node-{release}-linux-{arch}.tar.gz'
+    url=source+release+'/'
+    sums=run([*curl,'--max-time','14',url+'SHASUMS256.txt'],timeout=16).stdout
+    digest=next((line.split()[0] for line in sums.splitlines()
+                 if re.fullmatch(r'[a-f0-9]{64}\s+'+re.escape(filename),line)), None)
+    if digest is None:
+        raise RuntimeError('官方 Node.js 下载文件缺少 SHA-256 校验信息。')
+    with tempfile.TemporaryDirectory(prefix='node-install-',dir=NODE_ROOT.parent) as folder:
+        stage=Path(folder)
+        archive=stage/filename
+        run([*curl,'--max-time','75',url+filename,'-o',archive],timeout=77)
+        with archive.open('rb') as source_file:
+            if file_sha256(source_file)!=digest:
+                raise RuntimeError('Node.js 下载文件校验失败，未安装。')
+        run(['tar','-xzf',archive,'--no-same-owner','-C',stage],timeout=24)
+        candidate=stage/filename.removesuffix('.tar.gz')
+        if not supports_gateway_node(candidate/'bin/node'):
+            raise RuntimeError('官方 Node.js 运行时未通过版本检查。')
+        candidate.rename(NODE_ROOT)
+    return node
+
 CODEX_BRIDGE_SOURCE_HASH='3d6c8d98604e7301bd92046b00ead3b08eddefa157e1c5661d2c9599aefe58c3'
 def codex_bridge(options):
     action=options.get('action','');a=account();parameters={k:options[k] for k in ['publicKey','keyId','clientId']}
@@ -1069,9 +1120,9 @@ def install_safe_code_api(entry, command, options):
     ):
         raise ValueError('Safe Code API 安装组件不完整，请重新安装客户端。')
     secure_root_directory(STATE,0o700)
-    with (STATE/'desktop-api-install.lock').open('a') as guard:
+    with (STATE/'install.lock').open('a') as guard:
         try:fcntl.flock(guard,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except BlockingIOError:raise OperationError('deployment_busy','其他客户端正在安装 Safe Code API，请稍后重试。') from None
+        except BlockingIOError:raise OperationError('deployment_busy','VPS 有部署正在运行，请等待完成后重试。') from None
         status={'action':'public_status'}
         if (API_DIRECTORY/'server.py').is_file():
             return safe_code_api_admin(command,status)
@@ -1082,10 +1133,6 @@ def install_safe_code_api(entry, command, options):
         work_home=Path(entry.pw_dir)
         if not os.access(work_home/'.local/bin/claude',os.X_OK):
             raise RuntimeError('请先在 Safe Code 的部署列表中安装 Claude Code，再安装 API 服务。')
-        node=Path('/opt/safe-code/node/bin/node')
-        if not node.is_file():node=shutil.which('node')
-        if not node or run([node,'-p','Number(process.versions.node.split(".")[0]) >= 20'],check=False).stdout.strip()!='true':
-            raise RuntimeError('Safe Code API 需要 Node.js 20 或以上。请先部署 CloudCLI 或安装 Node.js 后重试。')
         cloud_config=work_home/'.config/safe-code/cloudcli-gateway.json'
         bind='127.0.0.1' if cloud_config.exists() or cloud_config.is_symlink() else '0.0.0.0'
         import socket
@@ -1098,6 +1145,7 @@ def install_safe_code_api(entry, command, options):
                 (Path(folder)/name).write_bytes(base64.b64decode(data,validate=True))
             if hashlib.sha256((Path(folder)/'codex_bridge.zip').read_bytes()).hexdigest()!=CODEX_BRIDGE_SOURCE_HASH:
                 raise ValueError('Safe Code API 安装组件校验失败。')
+            gateway_node()
             try:
                 run(['/bin/bash',str(Path(folder)/'install.sh'),entry.pw_name,bind,'45143'],
                     env={**os.environ,'SAFECODE_INITIAL_API_INSTALL':'1'},timeout=60)

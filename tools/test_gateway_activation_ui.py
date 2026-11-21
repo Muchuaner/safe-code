@@ -137,6 +137,7 @@ def test_gateway_activation():
             settings = page.locator('#settings-dialog')
             expect(settings).to_be_visible()
             expect(page.locator('#settings-origin')).to_have_value('')
+            expect(page.locator('#settings-origin-hint')).to_contain_text('入站 TCP 45143')
             settings.get_by_role('button', name='关闭', exact=True).last.click()
             expect(settings).to_be_hidden()
             expect(note).to_have_value('保留草稿')

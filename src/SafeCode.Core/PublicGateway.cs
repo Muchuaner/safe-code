@@ -64,7 +64,7 @@ public sealed partial class SshSession
                 Convert.ToBase64String(buffer.ToArray()));
         }
         return await RequestGatewayAsync(new { action = "install", accepted = true, files }, ct,
-            timeout: TimeSpan.FromSeconds(100));
+            timeout: TimeSpan.FromSeconds(225));
     }
 
     private void RememberPublicGateway(JsonElement result)

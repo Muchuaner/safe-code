@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import http.client
 import importlib.util
+import io
 import json
 from pathlib import Path
 import socket
@@ -14,6 +15,7 @@ import sqlite3
 import ssl
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -288,12 +290,13 @@ class SafeCodeApiTest(unittest.TestCase):
         cloud_config.parent.mkdir(parents=True)
         cloud_config.touch()
         start_fails = True
+        expected_bind = '127.0.0.1'
 
         def run(args, **kwargs):
             if args[0] == 'systemctl':
                 return SimpleNamespace(stdout='not-found\n')
             if args[0] == '/bin/bash':
-                self.assertEqual(args[2:], ['fixture', '127.0.0.1', '45143'])
+                self.assertEqual(args[2:], ['fixture', expected_bind, '45143'])
                 self.assertEqual(kwargs['env']['SAFECODE_INITIAL_API_INSTALL'], '1')
                 self.assertEqual({file.name for file in Path(args[1]).parent.iterdir()}, agent.API_FILES)
                 app.mkdir()
@@ -307,6 +310,7 @@ class SafeCodeApiTest(unittest.TestCase):
         with (patch.object(agent, 'STATE', self.root),
               patch.object(agent, 'API_DIRECTORY', app),
               patch.object(agent, 'API_UNIT', unit),
+              patch.object(agent, 'NODE_ROOT', self.root/'node'),
               patch.object(agent, 'CODEX_BRIDGE_SOURCE_HASH', hashlib.sha256(b'fixture').hexdigest()),
               patch.object(agent, 'account', return_value={'username': 'fixture'}),
               patch.object(agent.pwd, 'getpwnam', return_value=entry),
@@ -328,12 +332,55 @@ class SafeCodeApiTest(unittest.TestCase):
             self.assertTrue(cloud_config.is_file())
             self.assertTrue(any(call.args[0][1:3]==['disable','--now'] for call in runner.call_args_list))
             start_fails = False
+            cloud_config.unlink()
+            expected_bind = '0.0.0.0'
             self.assertEqual(agent.safe_code_api(install), {'enabled':False})
             calls = runner.call_count
             self.assertEqual(agent.safe_code_api(install), {'enabled':False})
             self.assertEqual(runner.call_count, calls)
             self.assertEqual([call.args[1] for call in admin.call_args_list], [{'action':'public_status'}]*2)
             self.assertTrue(unit.is_file())
+
+    def test_gateway_provisions_verified_node_without_cloudcli(self):
+        node_root = self.root/'node'
+        filename = 'node-v22.1.0-linux-x64.tar.gz'
+        executable = b'#!/bin/sh\necho true\n'
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode='w:gz') as bundle:
+            entry = tarfile.TarInfo('node-v22.1.0-linux-x64/bin/node')
+            entry.mode = 0o755
+            entry.size = len(executable)
+            bundle.addfile(entry, io.BytesIO(executable))
+        artifact = archive.getvalue()
+        verified = True
+        downloads = []
+
+        def run(args, **kwargs):
+            if args[0] != 'curl':
+                return subprocess.run(args, text=True, capture_output=True, **kwargs)
+            if str(args[-1]).endswith('index.json'):
+                return SimpleNamespace(stdout=json.dumps([{'version':'v22.1.0','lts':'fixture'}]))
+            if str(args[-1]).endswith('SHASUMS256.txt'):
+                digest = hashlib.sha256(artifact).hexdigest() if verified else '0'*64
+                return SimpleNamespace(stdout=digest+'  '+filename+'\n')
+            self.assertTrue(args[-3].endswith(filename))
+            Path(args[-1]).write_bytes(artifact)
+            downloads.append(args[-3])
+            return SimpleNamespace(stdout='')
+
+        with (patch.object(agent, 'STATE', self.root),
+              patch.object(agent, 'NODE_ROOT', node_root),
+              patch.object(agent.os, 'uname', return_value=SimpleNamespace(machine='x86_64')),
+              patch.object(agent.shutil, 'which', side_effect=lambda cmd:'/usr/bin/curl' if cmd=='curl' else None),
+              patch.object(agent, 'run', side_effect=run)):
+            verified = False
+            with self.assertRaisesRegex(RuntimeError, '校验失败'):
+                agent.gateway_node()
+            self.assertFalse(node_root.exists())
+            verified = True
+            self.assertEqual(agent.gateway_node(), node_root/'bin/node')
+            self.assertEqual(agent.gateway_node(), node_root/'bin/node')
+            self.assertEqual(len(downloads), 2)
 
     def test_failed_gateway_turn_without_final_usage_releases_partial_accounting(self):
         manager = server.PublicManager(self.root, {'instance': 'fixture'})

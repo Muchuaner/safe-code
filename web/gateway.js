@@ -510,6 +510,13 @@ function renderSettings(value) {
   byId('settings-bind').value = value.bind;
   byId('settings-port').value = value.port;
   byId('settings-origin').value = value.origin || '';
+  const loopback = value.bind === '127.0.0.1' || value.bind === '::1';
+  byId('settings-origin-hint').textContent = value.origin
+    ? '创建密钥时使用此地址。外部地址或端口变更后，请重新签发密钥。'
+    : loopback
+      ? '网关只监听 VPS 本机，请填写为此网关配置的 HTTPS 转发入口。'
+      : '直连时请检查 VPS 防火墙和云安全组是否允许入站 TCP ' + value.port +
+        '。使用 FRP 等转发时，可填写实际的 HTTPS 入口。';
   byId('settings-fields').hidden = false;
   updateSettingsButtons();
 }

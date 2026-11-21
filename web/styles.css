@@ -202,6 +202,7 @@
 .claude-desktop-dialog>.titlebar{flex-shrink:0}
 .claude-desktop-dialog .config-body{display:flex;flex-direction:column;min-height:0;max-height:none;padding:0;overflow:hidden}
 .claude-desktop-content{min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:23px 25px}
+.claude-desktop-dialog.public-api-only .claude-desktop-content>:not(#safe-code-api-intro,#safe-code-api-progress,#safe-code-api-deploy-claude){display:none!important}
 .claude-desktop-dialog h2{font-size:16px;margin:0 0 12px}
 .claude-desktop-dialog .bridge-check{display:flex!important;align-items:flex-start;gap:9px}
 .claude-desktop-dialog .bridge-check input{width:14px!important;height:14px!important;min-height:14px!important;margin:3px 0 0!important}

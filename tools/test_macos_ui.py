@@ -8,13 +8,20 @@ with sync_playwright() as p:
  window.desktopFixture={active:false,managed:false,configured:false,installed:true};
  window.gatewayOnline=true;window.hostEnabled=false;
  window.publicGatewayFixture=null;
+ window.claudeInstalled=true;window.cloudInstalled=false;
  window.quotaFixture={state:'available',windows:{five_hour:{used:21,resets_at:1929168000},seven_day:{used:92}}};
  window.chrome={webview:{postMessage(m){
    calls.push(m);
    if(m.op==='host.enable')window.hostEnabled=m.args.riskAccepted===true;
    if(m.op==='claudeDesktop.start')window.desktopFixture={active:true,managed:true,configured:true,installed:true,endpoint:'http://127.0.0.1:18899'};
    if(m.op==='claudeDesktop.stop')window.desktopFixture={active:false,managed:false,configured:false,installed:true};
-   if(m.op==='safeCodeApi.install')window.publicGatewayFixture={enabled:false};
+   if(m.op==='safeCodeApi.install'){
+     if(!window.claudeInstalled){
+       const error='请先在 Safe Code 的部署列表中安装 Claude Code，再安装 API 服务。';
+       queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,error}));return;
+     }
+     window.publicGatewayFixture={enabled:false};
+   }
    if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true};
    const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:
      m.op==='desktopKey.status'?{configured:false,running:false}:
@@ -27,7 +34,7 @@ with sync_playwright() as p:
      ['safeCodeApi.publicStatus','safeCodeApi.install','safeCodeApi.enablePublic'].includes(m.op)?
        window.publicGatewayFixture||{enabled:true,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
      m.op==='window.gateway.open'?true:
-     m.op==='connect'?{server:{statuses:{account:true},assignedIps:[],osVersion:'24.04'}}:
+     m.op==='connect'?{server:{statuses:{account:true,claude:window.claudeInstalled},cloudReady:window.cloudInstalled,assignedIps:[],osVersion:'24.04'}}:
      m.op.startsWith('claudeDesktop.')?window.desktopFixture:null;
    const error=m.op==='safeCodeApi.publicStatus'&&!window.gatewayOnline?'网络中断':undefined;
    queueMicrotask(()=>window.safeCodeNativeResponse?.({id:m.id,result,error}));
@@ -137,6 +144,48 @@ with sync_playwright() as p:
  expect(page.locator('#claude-desktop-stop')).to_be_visible()
  assert page.evaluate("calls.filter(m=>m.op==='claudeDesktop.start').at(-1).args")=={'accepted':True,'replaceOldProfile':orphan_id}
  page.locator('#claude-desktop-close').click()
+ assert not errors,errors
+
+ for cloud_installed in (False,True):
+  newbie=browser.new_page(viewport={'width':740,'height':634})
+  newbie.on('pageerror',lambda e:errors.append(str(e)))
+  flags='window.publicGatewayFixture={installed:false,enabled:false};window.claudeInstalled=false;'
+  newbie.add_init_script(main_fixture+';'+flags+'window.cloudInstalled='+str(cloud_installed).lower()+';')
+  newbie.goto((root/'web'/'index.html').as_uri())
+  newbie.wait_for_function('window.safeCodeNativeReady===true')
+  newbie.evaluate("showScreen('login')")
+  newbie.locator('#restore-saved-login').click()
+  expect(newbie.locator('#password')).to_have_value('fixture-only')
+  newbie.locator('#connect').click()
+  badge=newbie.locator('#public-gateway-runtime')
+  expect(badge).to_have_text('公网网关 · 待安装')
+  badge.click()
+  expect(newbie.locator('#claude-desktop-title')).to_have_text('Safe Code API · 公网网关')
+  expect(newbie.locator('#host-dialog')).to_be_hidden()
+  expect(newbie.locator('#claude-desktop-consent')).to_be_hidden()
+  enable=newbie.locator('#safe-code-api-enable')
+  expect(enable).to_have_text('安装 API 服务')
+  enable.click()
+  newbie.locator('#app-message-confirm').click()
+  expect(newbie.locator('#safe-code-api-progress')).to_contain_text('安装 Claude Code')
+  newbie.locator('#safe-code-api-deploy-claude').click()
+  expect(newbie.locator('#deployment-panel')).to_be_visible()
+  # Resume after completing the Claude Code step on this simulated VPS.
+  newbie.evaluate('window.claudeInstalled=true')
+  badge.click()
+  enable.click()
+  expect(newbie.locator('#app-message-body')).to_contain_text('缺少 Node.js 时会从官方渠道安装')
+  newbie.locator('#app-message-confirm').click()
+  expect(enable).to_have_text('公网启用')
+  expect(newbie.locator('#safe-code-api-manage')).to_be_disabled()
+  enable.click()
+  expect(newbie.locator('#app-message-confirm')).to_have_text('保证自用')
+  newbie.locator('#app-message-confirm').click()
+  expect(enable).to_have_text('公网已启用')
+  newbie.locator('#safe-code-api-manage').click()
+  newbie.wait_for_function("calls.some(message=>message.op==='window.gateway.open')")
+  assert not newbie.evaluate("""calls.some(message=>['host.enable','claudeDesktop.start','cloud.install'].includes(message.op))""")
+  newbie.close()
  assert not errors,errors
 
  resumed=browser.new_page(viewport={'width':740,'height':634})
