@@ -7,20 +7,25 @@ with sync_playwright() as p:
  main_fixture='''window.__safeCodeDesktop=true;window.__safeCodePlatform='macos';window.__safeCodeAcceptance=true;window.calls=[];
  window.desktopFixture={active:false,managed:false,configured:false,installed:true};
  window.gatewayOnline=true;window.hostEnabled=false;
+ window.publicGatewayFixture=null;
  window.quotaFixture={state:'available',windows:{five_hour:{used:21,resets_at:1929168000},seven_day:{used:92}}};
  window.chrome={webview:{postMessage(m){
    calls.push(m);
    if(m.op==='host.enable')window.hostEnabled=m.args.riskAccepted===true;
    if(m.op==='claudeDesktop.start')window.desktopFixture={active:true,managed:true,configured:true,installed:true,endpoint:'http://127.0.0.1:18899'};
    if(m.op==='claudeDesktop.stop')window.desktopFixture={active:false,managed:false,configured:false,installed:true};
+   if(m.op==='safeCodeApi.install')window.publicGatewayFixture={enabled:false};
+   if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true};
    const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:
      m.op==='desktopKey.status'?{configured:false,running:false}:
      m.op==='notice.state'?{accepted:false}:
+     m.op==='notice.claudeDesktop.state'?calls.some(call=>call.op==='notice.claudeDesktop.accept'):
      m.op==='login.restoreAvailable'?true:
      m.op==='login.restoreSaved'?{host:'192.0.2.42',username:'fixture',password:'fixture-only',port:22}:
      ['host.status','host.enable'].includes(m.op)?{enabled:window.hostEnabled,state:window.hostEnabled?'connected':'disabled',alias:'mac',command:'',message:'未启用'}:
      m.op==='bridge.status'?{running:false}:
-     m.op==='safeCodeApi.publicStatus'?{enabled:true,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
+     ['safeCodeApi.publicStatus','safeCodeApi.install','safeCodeApi.enablePublic'].includes(m.op)?
+       window.publicGatewayFixture||{enabled:true,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
      m.op==='window.gateway.open'?true:
      m.op==='connect'?{server:{statuses:{account:true},assignedIps:[],osVersion:'24.04'}}:
      m.op.startsWith('claudeDesktop.')?window.desktopFixture:null;
@@ -92,6 +97,45 @@ with sync_playwright() as p:
  page.locator('#claude-desktop-stop').click()
  page.wait_for_function("document.querySelector('#claude-desktop-stop').hidden")
  assert page.locator('#claude-desktop-launch').is_disabled()
+ page.locator('#claude-desktop-close').click()
+
+ # A VPS without the independent API can install it before consenting to public use.
+ orphan_id='3d54faac-2ae7-44d8-ac39-aa93a16cb17b'
+ page.evaluate("""id=>{
+   window.publicGatewayFixture={installed:false,enabled:false};
+   window.desktopFixture.oldProfile=id;
+   window.dispatchEvent(new Event('online'));
+ }""",orphan_id)
+ page.locator('#claude-desktop-manage').click()
+ expect(page.locator('#claude-desktop-dialog')).to_be_visible()
+ expect(page.locator('#safe-code-api-enable')).to_have_text('安装 API 服务')
+ expect(page.locator('#safe-code-api-progress')).to_contain_text('尚未安装')
+ expect(page.locator('#safe-code-api-manage')).to_be_disabled()
+ page.locator('#safe-code-api-enable').click()
+ page.locator('#app-message-cancel').click()
+ assert not page.evaluate("calls.some(m=>m.op==='safeCodeApi.install')")
+ page.locator('#safe-code-api-enable').click()
+ expect(page.locator('#app-message-confirm')).to_have_text('安装 API 服务')
+ page.locator('#app-message-confirm').click()
+ expect(page.locator('#safe-code-api-enable')).to_have_text('公网启用')
+ expect(page.locator('#safe-code-api-manage')).to_be_disabled()
+ assert not page.evaluate("calls.some(m=>m.op==='safeCodeApi.enablePublic')")
+ page.locator('#safe-code-api-enable').click()
+ expect(page.locator('#app-message-confirm')).to_have_text('保证自用')
+ page.locator('#app-message-confirm').click()
+ expect(page.locator('#safe-code-api-enable')).to_have_text('公网已启用')
+ expect(page.locator('#safe-code-api-manage')).to_be_enabled()
+
+ expect(page.locator('#claude-desktop-start')).to_have_text('重新配置 SSH 接入')
+ page.locator('#claude-desktop-consent').check()
+ page.locator('#claude-desktop-start').click()
+ expect(page.locator('#app-message-confirm')).to_have_text('重新配置')
+ page.locator('#app-message-cancel').click()
+ assert page.evaluate("calls.filter(m=>m.op==='claudeDesktop.start').length")==1
+ page.locator('#claude-desktop-start').click()
+ page.locator('#app-message-confirm').click()
+ expect(page.locator('#claude-desktop-stop')).to_be_visible()
+ assert page.evaluate("calls.filter(m=>m.op==='claudeDesktop.start').at(-1).args")=={'accepted':True,'replaceOldProfile':orphan_id}
  page.locator('#claude-desktop-close').click()
  assert not errors,errors
 

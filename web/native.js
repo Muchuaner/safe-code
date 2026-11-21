@@ -131,7 +131,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let hostBusy=false,hostStatus=null,hostStatusTask,hostChange=0,requiredHostControl;
     let bridgeBusy=false,bridgeStatus=null,bridgePolling=false;
     let claudeDesktopBusy=false,claudeDesktopStatus=null,claudeDesktopPolling=false;
-    let publicGatewayEnabled=false,publicGatewayLoading=false,publicGatewayReachable=false;
+    let publicGatewayEnabled=false,publicGatewayLoading=false,publicGatewayReachable=false,publicGatewayMissing=false;
     let publicGatewayTask,publicGatewayTimer;
     let publicGatewaySubscription;
     let startupRetryTimer;
@@ -263,7 +263,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     function connectionProgress(text,failed=false){$('#connection-progress').hidden=false;$('#connection-progress').classList.toggle('failed',failed);$('#connection-progress-text').textContent=text;$('#cancel-connect').hidden=failed;$('#retry-connect').hidden=!failed;$('#edit-connection').hidden=!failed;if(failed){busy=false;renderTasks();const values=$$('.network-top strong');for(const value of values)value.textContent='—';$('#rating-state').textContent='未连接';$('#ip-location').textContent='等待连接服务器';$('#server-address').textContent='待确认';}}
     function prepareWorkspace(settings){
       clearTimeout(publicGatewayTimer);
-      publicGatewayEnabled=false;publicGatewayReachable=false;publicGatewayLoading=false;
+      publicGatewayEnabled=false;publicGatewayReachable=false;publicGatewayLoading=false;publicGatewayMissing=false;
       publicGatewaySubscription=undefined;
       $('#public-gateway-footer').hidden=true;
       clearInterval(metricsTimer);clearInterval(resourceTimer);clearInterval(environmentTimer);setResources(null,'等待服务器连接完成。');setEnvironmentAssessment(null,'等待连接');$('#update-login-password').hidden=true;nativeServer=null;connectionReady=false;connectionInFlight=true;busy=false;currentTask=-1;accountOptions={};resetDeploymentSettings();ipPolicy={lockIngress:false,lockEgress:false};
@@ -690,12 +690,12 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#claude-desktop-open').hidden=!installed;$('#claude-desktop-install').hidden=installed;
       setLaunchAvailability('claude-desktop-open',launchReady);
       $('#claude-desktop-start').hidden=managed&&(active||(!isMac&&!!current?.endpoint));
-      $('#claude-desktop-start').textContent=managed?'恢复接入':'部署并启用';
+      $('#claude-desktop-start').textContent=managed?'恢复接入':current?.oldProfile?'重新配置 SSH 接入':'部署并启用';
       $('#claude-desktop-start').disabled=claudeDesktopBusy||!$('#claude-desktop-consent').checked||
         !nativeServer?.statuses?.account||keyState.configured||(isMac&&!installed);
       const gatewayUnavailable=claudeDesktopBusy||busy||publicGatewayLoading||!nativeServer?.statuses?.account;
       $('#safe-code-api-enable').disabled=gatewayUnavailable||publicGatewayEnabled||!publicGatewayReachable;
-      $('#safe-code-api-enable').textContent=publicGatewayEnabled?'公网已启用':'公网启用';
+      $('#safe-code-api-enable').textContent=publicGatewayMissing?'安装 API 服务':publicGatewayEnabled?'公网已启用':'公网启用';
       $('#safe-code-api-manage').disabled=gatewayUnavailable||!publicGatewayEnabled;
       $('#claude-desktop-stop').hidden=!managed;$('#claude-desktop-stop').disabled=claudeDesktopBusy;
       $('#claude-desktop-dialog-state').textContent=$('#claude-desktop-state').textContent;
@@ -704,7 +704,10 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     }
     function fillClaudeDesktopForm(){
       const current=claudeDesktopStatus;
-      $('#claude-desktop-consent').checked=!!current?.managed;$('#claude-desktop-progress').textContent=isMac&&keyState.configured?'请先停用 API Key 接入，再启用 SSH 接入。':(current?.message||'请先连接目标 VPS，再部署并启用。');
+      $('#claude-desktop-consent').checked=!!current?.managed;
+      $('#claude-desktop-progress').textContent=isMac&&keyState.configured?'请先停用 API Key 接入，再启用 SSH 接入。':
+        current?.oldProfile?'Claude Desktop 仍选中了旧的 SafeCode SSH 配置，可以重新配置接入。':
+        (current?.message||'请先连接目标 VPS，再部署并启用。');
     }
     window.safeCodeClaudeDesktopStatus=renderClaudeDesktop;
     async function pollClaudeDesktop(){if(claudeDesktopPolling||claudeDesktopBusy||(!nativeServer&&!isMac))return;claudeDesktopPolling=true;try{renderClaudeDesktop(await native('claudeDesktop.status'));}catch{}finally{claudeDesktopPolling=false;}}
@@ -718,11 +721,13 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const reachable=Boolean(status);
       if(reachable)publicGatewayEnabled=status.enabled===true;
       publicGatewayReachable=reachable;
+      publicGatewayMissing=status?.installed===false;
       badge.disabled=!publicGatewayEnabled;
       badge.classList.toggle('inactive',!reachable||!publicGatewayEnabled);
       badge.title=error||'打开 Safe Code API 网关管理';
       if(!reachable)badge.textContent=/SSH 认证失败|服务器身份已变化/.test(error||'')
         ?'公网网关 · 需检查 SSH':publicGatewayEnabled?'公网网关 · 管理连接重连中':'公网网关 · 状态不可用';
+      else if(publicGatewayMissing)badge.textContent='公网网关 · 待安装';
       else if(!publicGatewayEnabled)badge.textContent='公网网关 · 未启用';
       else if(status.waiting==null)badge.textContent='公网网关 · 已启用';
       else {
@@ -758,12 +763,14 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         try{
           const status=await native('safeCodeApi.publicStatus');
           if(attempt!==connectionAttempt)return;
+          const wasMissing=publicGatewayMissing;
           renderPublicGatewayStatus(status);
-          if(interactive)publicGatewayNotice('');
+          if(!claudeDesktopBusy&&(interactive||wasMissing||publicGatewayMissing))
+            publicGatewayNotice(publicGatewayMissing?'当前 VPS 尚未安装 Safe Code API 管理服务。安装后可启用公网。':'');
         }catch(error){
           if(attempt!==connectionAttempt)return;
           renderPublicGatewayStatus(null,error.message);
-          if(interactive)publicGatewayNotice(error.message);
+          if(!claudeDesktopBusy&&(interactive||$('#claude-desktop-dialog').open))publicGatewayNotice(error.message);
         }finally{
           if(attempt===connectionAttempt){
             publicGatewayLoading=false;
@@ -809,9 +816,23 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#safe-code-api-enable').onclick=async()=>{
       if($('#safe-code-api-enable').disabled)return;
       const attempt=connectionAttempt;
+      if(publicGatewayMissing){
+        if(!await showAppMessage('将在当前 VPS 安装 Safe Code API，默认端口为 45143，安装后仍需确认启用公网。',
+          {title:'安装 Safe Code API',confirm:'安装 API 服务',cancel:'取消'}))return;
+        if(attempt!==connectionAttempt||!publicGatewayMissing||$('#safe-code-api-enable').disabled||!$('#claude-desktop-dialog').open)return;
+        claudeDesktopBusy=true;renderClaudeDesktop();publicGatewayNotice('正在安装 Safe Code API 服务…');
+        try{
+          const status=await native('safeCodeApi.install',{accepted:true});
+          if(attempt!==connectionAttempt)return;
+          renderPublicGatewayStatus(status);
+          publicGatewayNotice(publicGatewayEnabled?'API 服务已启用，可以管理网关。':'API 服务已安装，可以启用公网。');
+        }catch(error){if(attempt===connectionAttempt)publicGatewayNotice(error.message);}
+        finally{claudeDesktopBusy=false;renderClaudeDesktop();}
+        return;
+      }
       if(!await showAppMessage('高并发、大量调用会显著增加账户风险，由此造成的损失 SafeCode 概不负责！请确保您知道自己在做什么！',
         {title:'⚠️ 公网启用警告',confirm:'保证自用',cancel:'我点错了'}))return;
-      if(attempt!==connectionAttempt||$('#safe-code-api-enable').disabled||!$('#claude-desktop-dialog').open)return;
+      if(attempt!==connectionAttempt||publicGatewayMissing||$('#safe-code-api-enable').disabled||!$('#claude-desktop-dialog').open)return;
       claudeDesktopBusy=true;renderClaudeDesktop();publicGatewayNotice('正在启用公网…');
       try{
         const status=await native('safeCodeApi.enablePublic',{accepted:true});
@@ -916,6 +937,10 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#claude-desktop-form').onsubmit=async event=>{
       event.preventDefault();if(claudeDesktopBusy||!$('#claude-desktop-consent').checked||!$('#claude-desktop-form').reportValidity())return;
       const attempt=connectionAttempt,progress=$('#claude-desktop-progress');
+      const oldProfile=isMac?claudeDesktopStatus?.oldProfile:null;
+      if(oldProfile&&!await showAppMessage('将创建并选中新配置。旧的 SafeCode SSH 配置会保留在 Claude Desktop 中。',
+        {title:'重新配置 SSH 接入',confirm:'重新配置',cancel:'取消'}))return;
+      if(attempt!==connectionAttempt||claudeDesktopBusy||!$('#claude-desktop-dialog').open)return;
       claudeDesktopBusy=true;renderClaudeDesktop();progress.textContent='正在检查本机远程控制…';
       try{
         if(!await requireHostControl(attempt)||!isHostSetupCurrent(attempt)){
@@ -923,7 +948,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           return;
         }
         progress.textContent='正在部署 VPS 网关、验证 SSH 通道并保存本机策略…';
-        claudeDesktopStatus=await native('claudeDesktop.start',{accepted:true});progress.textContent=claudeDesktopStatus.message+'。请重启 Claude Desktop。';
+        claudeDesktopStatus=await native('claudeDesktop.start',oldProfile?{accepted:true,replaceOldProfile:oldProfile}:{accepted:true});
+        progress.textContent=claudeDesktopStatus.message+'。请重启 Claude Desktop。';
       }
       catch(error){if(attempt===connectionAttempt)progress.textContent=error.message;}
       finally{claudeDesktopBusy=false;renderClaudeDesktop();}

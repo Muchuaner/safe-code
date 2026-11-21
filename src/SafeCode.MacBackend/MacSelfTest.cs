@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using SafeCode.Core;
 namespace SafeCode.Desktop;
 internal static class MacSelfTest
@@ -22,6 +23,45 @@ internal static class MacSelfTest
            (string?)profile["claudeCodeSettings"]?["env"]?["CLAUDE_CODE_AUTO_MODE_MODEL"]!="claude-fixture-classifier")
             throw new Exception("Mac Claude Desktop 模型和分类器配置错误。");
         Console.WriteLine("MAC_CLAUDE_PROFILE_CHAT_AND_CLASSIFIER_CONFIGURATION_OK");
+        string profileTest = Directory.CreateTempSubdirectory("safecode-mac-profile-").FullName;
+        try
+        {
+            string library = Path.Combine(profileTest, "configLibrary");
+            string id = Guid.NewGuid().ToString("D");
+            string profilePath = Path.Combine(library, id + ".json");
+            string metaPath = Path.Combine(library, "_meta.json");
+            string statePath = Path.Combine(profileTest, "desktop-ssh.aes");
+            var meta = new JsonObject
+            {
+                ["appliedId"] = id,
+                ["entries"] = new JsonArray(new JsonObject { ["id"] = id, ["name"] = "SafeCode SSH" })
+            };
+            profile["inferenceGatewayApiKey"] = "__sealed__:v1:fixture-only";
+            DesktopKeyAccess.WriteProfileFile(profilePath, JsonSerializer.SerializeToUtf8Bytes(profile));
+            DesktopKeyAccess.WriteProfileFile(metaPath, JsonSerializer.SerializeToUtf8Bytes(meta));
+            using var bridge = new MacClaudeDesktopBridge(profileTest, false, library);
+            var orphan = JsonSerializer.SerializeToElement(await bridge.RefreshAsync(CancellationToken.None));
+            if (orphan.GetProperty("oldProfile").GetString() != id)
+                throw new Exception("未识别旧版遗留的 SafeCode SSH 配置。");
+            meta["hybridPointer"] = "fixture";
+            DesktopKeyAccess.WriteProfileFile(metaPath, JsonSerializer.SerializeToUtf8Bytes(meta));
+            var protectedProfile = JsonSerializer.SerializeToElement(await bridge.RefreshAsync(CancellationToken.None));
+            if (protectedProfile.GetProperty("oldProfile").ValueKind != JsonValueKind.Null)
+                throw new Exception("将 Claude 混合模式误判为可替换的旧配置。");
+            meta.Remove("hybridPointer");
+            DesktopKeyAccess.WriteProfileFile(metaPath, JsonSerializer.SerializeToUtf8Bytes(meta));
+
+            var state = new { Server = new GatewayPreference(), Id = id, Token = "fixture-local-token", Port = 18899 };
+            DesktopKeyAccess.WriteProfileFile(statePath, LocalSecrets.Protect(JsonSerializer.SerializeToUtf8Bytes(state)));
+            await bridge.StopAsync(CancellationToken.None);
+            var after = DesktopKeyAccess.ReadProfileMeta(library);
+            if (File.Exists(profilePath) || File.Exists(statePath) || after["appliedId"]?.GetValue<string>() != "")
+                throw new Exception("停止 SSH 接入后遗留了加密过的本机配置。");
+            if (MacClaudeDesktopBridge.IsSealedGatewayProfile(profile, 18900))
+                throw new Exception("密文前缀匹配时也必须校验原端口。");
+            Console.WriteLine("MAC_SEALED_SSH_PROFILE_DETECTION_AND_STOP_OK");
+        }
+        finally { Directory.Delete(profileTest, true); }
         string fingerprint=new('A',64);
         var rdp=MacClients.FreeRdpArguments(new(22119,"fixture",fingerprint),new("workspace","fixture password"),
             new(2560,1600),RdpResizeMode.Dynamic,true);

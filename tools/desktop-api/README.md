@@ -6,6 +6,8 @@ Linux 服务以现有 Claude Code 工作账户运行。可以直连 VPS，也可
 
 公网调用默认关闭，本机 Claude Desktop 仍可使用 SSH 桥接。在连接 VPS 的 Safe Code 客户端，进入「维护模式 → 本地 Claude Desktop 接入 → 设置 → 公网启用」，阅读警告后点击「保证自用」才会启用 VPS 的独立 API。启用状态保存在该 VPS 的工作账户中，重启后仍有效。此前签发的密钥在确认后恢复可用。随后点击「管理网关」，在独立窗口搜索、创建、修改或撤销密钥，并查看逐把密钥的请求和用量。完整密钥仅在创建时显示。
 
+如果 VPS 尚未安装独立 API，设置窗口会显示「安装 API 服务」。安装复用 VPS 工作账户，需要该账户已安装 Claude Code，服务器有 Node.js 20 或以上。新服务默认使用 45143 端口。使用 CloudCLI 后端时监听回环地址，其他情况监听 IPv4 网卡。安装完成后，仍需单独确认「公网启用」。已有 API 服务继续沿用原安装。
+
 客户端确认 VPS 已开通公网后，会记住该 SSH 账户和已验证的主机指纹。下次启动时，保存的登录信息可用就自动恢复管理连接。网络短暂中断会自动重连。若服务器身份变化或登录密码失效，需要核对后继续。主窗口底部显示公网并发和排队，网关总览同时显示 VPS 上 Claude 订阅的 5 小时与 7 天剩余额度。订阅用量由 VPS 向 Anthropic 查询并缓存五分钟，密钥和订阅登录凭据均不会出现在监控响应中。
 
 「网关总览 → 网关设置」显示 Linux 网关实际监听的 IP 和端口。直接监听公网 IP 时显示「公网 IP」。如果 VPS 的公网地址由云平台映射，可在安装时用第四个参数传入该公网 IP，窗口会同时显示公网 IP 和本地监听 IP。保存新端口会重启服务，启动失败时尝试恢复原端口。若使用 TCP 中转，请同步更新其目标端口。若外部访问地址或端口也变更，请用新的 HTTPS 地址重新签发密钥。
@@ -20,7 +22,7 @@ Linux 服务以现有 Claude Code 工作账户运行。可以直连 VPS，也可
 
 创建或编辑密钥时可填写累计美元额度，留空不限额。余额等于累计额度减已用金额。请求完成后扣除实际观测用量的估算费用，余额用完则后续 Messages 请求返回 HTTP 402。一笔在余额为正时开始的请求可能使余额变为负数。提高累计额度即可补充余额。
 
-部署时将本目录的 `install.sh`、`server.py`、`management.py`、`pricing.py`、`configure_cloudcli.py`、`host_control_mcp.py`，以及 `src/SafeCode.Core/Remote/` 中的 `desktop_gateway.py` 和 `codex_bridge.zip` 放在同一目录。将示例中的账户名、监听地址和端口替换为你的配置，再以管理员身份运行以下命令。
+手动安装时，将本目录的 `install.sh`、`server.py`、`management.py`、`claude_usage.py`、`pricing.py`、`configure_cloudcli.py`、`host_control_mcp.py`、`device_bridge.py`，以及 `src/SafeCode.Core/Remote/` 中的 `desktop_gateway.py` 和 `codex_bridge.zip` 放在同一目录。将示例中的账户名、监听地址和端口替换为你的配置，再以管理员身份运行以下命令。
 
 ```sh
 bash install.sh workspace 192.0.2.10 45143

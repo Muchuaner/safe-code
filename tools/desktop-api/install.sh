@@ -13,6 +13,12 @@ node=/opt/safe-code/node/bin/node
 [[ -x "$node" ]] || node=$(command -v node)
 [[ $("$node" -p 'Number(process.versions.node.split(".")[0]) >= 20') == true ]]
 dir=$(cd "$(dirname "$0")" && pwd)
+if [[ ${SAFECODE_INITIAL_API_INSTALL:-} == 1 ]]; then
+    runuser -u "$user" -- test ! -e "$state/public-enabled" || {
+        printf '检测到已启用过的公网网关配置，请在 VPS 恢复原服务。\n' >&2
+        exit 1
+    }
+fi
 for file in desktop_gateway.py server.py management.py claude_usage.py pricing.py configure_cloudcli.py host_control_mcp.py device_bridge.py codex_bridge.zip; do
     [[ -f "$dir/$file" ]] || { printf 'Missing SafeCode gateway component: %s\n' "$file" >&2; exit 1; }
 done
@@ -26,16 +32,20 @@ p=Path(sys.argv[1])
 assert hashlib.sha256(p.read_bytes()).hexdigest()=='3d6c8d98604e7301bd92046b00ead3b08eddefa157e1c5661d2c9599aefe58c3'
 with zipfile.ZipFile(p) as z:z.extractall(Path(sys.argv[2])/'components')
 PY
-install -d -o "$user" -g "$(id -gn "$user")" -m 700 "$state" "$state/keys"
-runuser -u "$user" -- python3 - "$state" "$bind" "$port" "$node" "$app" "$public_ip" <<'PY'
+runuser -u "$user" -- python3 - "$state" "$bind" "$port" "$node" "$app" "$public_ip" "${SAFECODE_INITIAL_API_INSTALL:-}" <<'PY'
 import json,sys,os,ipaddress
 from pathlib import Path
-state,bind,port,node,app,public_ip=sys.argv[1:]
+state,bind,port,node,app,public_ip,initial=sys.argv[1:]
 assert 1024<=int(port)<=65535
 os.umask(0o077)
-p=Path(state)/'config.new'
-config_path=Path(state)/'config.json'
+directory=Path(state)
+directory.mkdir(parents=True,exist_ok=True)
+(directory/'keys').mkdir(exist_ok=True)
+p=directory/'config.new'
+config_path=directory/'config.json'
 config=json.loads(config_path.read_text()) if config_path.exists() else {}
+if initial == '1' and config and (config.get('bind'), config.get('port')) != (bind, int(port)):
+    raise ValueError('检测到保留的监听配置，请在 VPS 恢复原服务。')
 config.update(bind=str(ipaddress.ip_address(bind)),port=int(port),node=node,library=app+'/components')
 if public_ip:
     address=ipaddress.ip_address(public_ip)
@@ -43,7 +53,7 @@ if public_ip:
         raise ValueError('public-ip must be a public unicast IP address')
     config['publicIp']=str(address)
 p.write_text(json.dumps(config))
-p.replace(Path(state)/'config.json')
+p.replace(config_path)
 PY
 if [[ ! -e "$state/key.pem" && ! -e "$state/cert.pem" ]]; then
     runuser -u "$user" -- openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 730 -subj '/CN=SafeCode Desktop API' -keyout "$state/key.pem" -out "$state/cert.pem"

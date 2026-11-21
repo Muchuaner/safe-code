@@ -222,6 +222,62 @@ class SafeCodeApiTest(unittest.TestCase):
             self.assertEqual([call.args[1] for call in restarted.call_args_list], [new_port, 45143])
         self.assertEqual(json.loads(config_path.read_text()), original)
 
+    def test_install_missing_api_without_enabling_public_or_overwriting_an_existing_service(self):
+        app = self.root/'desktop-api'
+        unit = self.root/'safe-code-desktop-api.service'
+        entry = SimpleNamespace(pw_uid=1000, pw_name='fixture', pw_dir=str(self.root))
+        files = {name: base64.b64encode(b'fixture').decode() for name in agent.API_FILES}
+        cloud_config = self.root/'.config/safe-code/cloudcli-gateway.json'
+        cloud_config.parent.mkdir(parents=True)
+        cloud_config.touch()
+        start_fails = True
+
+        def run(args, **kwargs):
+            if args[0] == 'systemctl':
+                return SimpleNamespace(stdout='not-found\n')
+            if args[0] == '/bin/bash':
+                self.assertEqual(args[2:], ['fixture', '127.0.0.1', '45143'])
+                self.assertEqual(kwargs['env']['SAFECODE_INITIAL_API_INSTALL'], '1')
+                self.assertEqual({file.name for file in Path(args[1]).parent.iterdir()}, agent.API_FILES)
+                app.mkdir()
+                (app/'server.py').touch()
+                unit.touch()
+                if start_fails:
+                    raise RuntimeError('simulated service start failure')
+                return SimpleNamespace(stdout='')
+            return SimpleNamespace(stdout='true\n')
+
+        with (patch.object(agent, 'STATE', self.root),
+              patch.object(agent, 'API_DIRECTORY', app),
+              patch.object(agent, 'API_UNIT', unit),
+              patch.object(agent, 'CODEX_BRIDGE_SOURCE_HASH', hashlib.sha256(b'fixture').hexdigest()),
+              patch.object(agent, 'account', return_value={'username': 'fixture'}),
+              patch.object(agent.pwd, 'getpwnam', return_value=entry),
+              patch.object(agent, 'secure_root_directory'),
+              patch.object(agent.os, 'access', return_value=True),
+              patch.object(agent.shutil, 'which', return_value='/usr/bin/node'),
+              patch('socket.socket'),
+              patch.object(agent, 'run', side_effect=run) as runner,
+              patch.object(agent, 'safe_code_api_admin', return_value={'enabled': False}) as admin):
+            self.assertEqual(agent.safe_code_api({'action':'public_status'}), {'installed':False,'enabled':False})
+            with self.assertRaisesRegex(ValueError, '确认安装'):
+                agent.safe_code_api({'action':'install','files':files})
+            runner.assert_not_called()
+            install = {'action':'install','accepted':True,'files':files}
+            with self.assertRaisesRegex(RuntimeError, 'simulated service start failure'):
+                agent.safe_code_api(install)
+            self.assertFalse(app.exists())
+            self.assertFalse(unit.exists())
+            self.assertTrue(cloud_config.is_file())
+            self.assertTrue(any(call.args[0][1:3]==['disable','--now'] for call in runner.call_args_list))
+            start_fails = False
+            self.assertEqual(agent.safe_code_api(install), {'enabled':False})
+            calls = runner.call_count
+            self.assertEqual(agent.safe_code_api(install), {'enabled':False})
+            self.assertEqual(runner.call_count, calls)
+            self.assertEqual([call.args[1] for call in admin.call_args_list], [{'action':'public_status'}]*2)
+            self.assertTrue(unit.is_file())
+
     def test_failed_gateway_turn_without_final_usage_releases_partial_accounting(self):
         manager = server.PublicManager(self.root, {'instance': 'fixture'})
         manager.conversations.append(SimpleNamespace(turn_id='failed-turn', pending={'tool': True}))

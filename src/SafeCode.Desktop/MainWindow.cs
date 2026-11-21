@@ -392,6 +392,14 @@ public sealed class MainWindow : Window
                 return await RequireGatewaySession().RequestGatewayAsync(new { action = "refresh_subscription" },lifetime.Token);
             case "safeCodeApi.publicStatus":
                 return await ReadGatewayStatusAsync(RequireGatewaySession());
+            case "safeCodeApi.install":
+                if (!args.TryGetProperty("accepted", out var installAccepted) || installAccepted.ValueKind != JsonValueKind.True)
+                    throw new InvalidOperationException("请先确认安装 Safe Code API 服务。");
+                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                var installSession=RequireGatewaySession();
+                deploying=true;activeStep="gateway_install";
+                try{return await installSession.InstallPublicGatewayAsync(lifetime.Token);}
+                finally{deploying=false;activeStep="";}
             case "safeCodeApi.enablePublic":
                 if (!args.TryGetProperty("accepted", out var publicAccepted) || publicAccepted.ValueKind != JsonValueKind.True)
                     throw new InvalidOperationException("请先确认「保证自用」。");

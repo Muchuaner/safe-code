@@ -1,5 +1,6 @@
 using Renci.SshNet.Common;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 
 namespace SafeCode.Core;
@@ -33,6 +34,26 @@ public sealed partial class SshSession
     public Task<JsonElement> EnablePublicGatewayAsync(CancellationToken ct) =>
         RequestGatewayAsync(new { action = "enable_public", accepted = true }, ct, remember: true);
 
+    public async Task<JsonElement> InstallPublicGatewayAsync(CancellationToken ct)
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var files = new Dictionary<string, string>();
+        const string api = "SafeCode.Core.PublicApi.";
+        foreach (var resource in assembly.GetManifestResourceNames().Where(name => name.StartsWith(api, StringComparison.Ordinal))
+                     .Concat(["SafeCode.Core.Remote.desktop_gateway.py", "SafeCode.Core.Remote.codex_bridge.zip"]))
+        {
+            using var stream = assembly.GetManifestResourceStream(resource)
+                ?? throw new IOException("缺少 Safe Code API 安装组件。");
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, ct);
+            int prefix = resource.StartsWith(api, StringComparison.Ordinal) ? api.Length : "SafeCode.Core.Remote.".Length;
+            files.Add(resource[prefix..],
+                Convert.ToBase64String(buffer.ToArray()));
+        }
+        return await RequestGatewayAsync(new { action = "install", accepted = true, files }, ct,
+            timeout: TimeSpan.FromSeconds(100));
+    }
+
     private void RememberPublicGateway(JsonElement result)
     {
         var path = Path.Combine(dataDirectory, PublicGatewayPreferenceFile);
@@ -51,10 +72,10 @@ public sealed partial class SshSession
         }
     }
 
-    public async Task<JsonElement> RequestGatewayAsync(object options, CancellationToken ct, bool remember = false)
+    public async Task<JsonElement> RequestGatewayAsync(object options, CancellationToken ct, bool remember = false, TimeSpan? timeout = null)
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct, mountLifetime.Token);
-        budget.CancelAfter(TimeSpan.FromSeconds(30));
+        budget.CancelAfter(timeout ?? TimeSpan.FromSeconds(30));
         await gatewayControl.WaitAsync(budget.Token);
         try
         {

@@ -70,6 +70,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
         return new
         {
             active, managed, configured = managed, installed = !offline && Installed,
+            oldProfile = !offline && !managed ? FindOldProfile() : null,
             state = active ? "active" : managed ? "attention" : "unconfigured",
             message = message ?? (active ? "SSH 网关已连接，重启 Claude Desktop 后可使用。" : managed
                 ? "已保存 SSH 接入。请在原服务器上验证本机远程控制后恢复。" : "尚未启用 SSH 接入。"),
@@ -80,7 +81,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
         };
     }
 
-    public async Task<object> StartAsync(SshSession target, CancellationToken ct)
+    public async Task<object> StartAsync(SshSession target, CancellationToken ct, string replaceOldProfile = "")
     {
         await gate.WaitAsync(ct);
         try
@@ -103,7 +104,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
             else
             {
                 if (!Installed) throw new InvalidOperationException("请先安装官方 Claude Desktop。");
-                EnsureProfileSlotAvailable();
+                EnsureProfileSlotAvailable(replaceOldProfile);
                 var id = Guid.NewGuid();
                 var pending = new DesktopVpsGateway(target, id.ToString("N"));
                 try
@@ -114,7 +115,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
                     int port = new Uri(pending.Endpoint).Port;
                     var state = new ProfileState(GatewayPreference.For(target), id.ToString("D"), pending.LocalToken, port);
                     var profile = MakeProfile(pending.Endpoint, state.Token, models);
-                    Activate(state, profile);
+                    Activate(state, profile, replaceOldProfile);
                     gateway = pending;
                 }
                 catch
@@ -170,28 +171,72 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
     private string MetaPath => Path.Combine(library, "_meta.json");
     private string ProfilePath(ProfileState state) => Path.Combine(library, state.Id + ".json");
 
-    private JsonObject EnsureProfileSlotAvailable()
+    private string? FindOldProfile()
+    {
+        try { return FindOldProfile(DesktopKeyAccess.ReadProfileMeta(library)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private string? FindOldProfile(JsonObject meta)
+    {
+        string? id = Text(meta, "appliedId");
+        if (meta["hybridPointer"] != null || !Guid.TryParseExact(id, "D", out _)
+            || !meta["entries"]!.AsArray().OfType<JsonObject>().Any(entry =>
+                Text(entry, "id") == id && Text(entry, "name") == "SafeCode SSH"))
+            return null;
+        string path = Path.Combine(library, id + ".json");
+        if (!File.Exists(path) || JsonNode.Parse(File.ReadAllBytes(path)) is not JsonObject profile
+            || !Uri.TryCreate(Text(profile, "inferenceGatewayBaseUrl"), UriKind.Absolute, out var endpoint)
+            || endpoint.Port is < 1024 or > 65535 || !IsSealedGatewayProfile(profile, endpoint.Port))
+            return null;
+        return id;
+    }
+
+    private JsonObject EnsureProfileSlotAvailable(string replaceOldProfile)
     {
         var meta = DesktopKeyAccess.ReadProfileMeta(library);
-        if (!string.IsNullOrEmpty((string?)meta["appliedId"]) || meta["hybridPointer"] != null)
+        if (!string.IsNullOrEmpty(replaceOldProfile))
+        {
+            if (FindOldProfile(meta) != replaceOldProfile)
+                throw new InvalidOperationException("Claude Desktop 配置已变更，请重新打开 Safe Code 接入设置。");
+        }
+        else if (!string.IsNullOrEmpty(Text(meta, "appliedId")) || meta["hybridPointer"] != null)
             throw new InvalidOperationException("Claude Desktop 已启用其他配置，请先在 Claude Desktop 中停用该配置。");
         return meta;
     }
 
-    private static bool OwnsProfile(ProfileState state, JsonNode? profile) =>
-        (string?)profile?["inferenceGatewayBaseUrl"] == "http://127.0.0.1:" + state.Port &&
-        (string?)profile?["inferenceGatewayApiKey"] == state.Token;
+    private static string? Text(JsonObject? node, string key) =>
+        node?[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    internal static bool IsSealedGatewayProfile(JsonObject? profile, int port) =>
+        Text(profile, "inferenceGatewayBaseUrl") == "http://127.0.0.1:" + port &&
+        Text(profile, "inferenceProvider") == "gateway" &&
+        Text(profile, "inferenceGatewayAuthScheme") == "bearer" &&
+        Text(profile, "inferenceCredentialKind") == "static" &&
+        Text(profile, "deploymentDisplayName") == "SafeCode" &&
+        Text(profile, "inferenceGatewayApiKey") is { Length: > 14 } credential &&
+        credential.StartsWith("__sealed__:v1:", StringComparison.Ordinal);
+
+    private static bool OwnsProfile(ProfileState state, JsonObject? profile) =>
+        (Text(profile, "inferenceGatewayBaseUrl") == "http://127.0.0.1:" + state.Port &&
+         Text(profile, "inferenceGatewayApiKey") == state.Token)
+        // The profile ID comes from our encrypted state. Claude still has to authenticate
+        // to the original loopback endpoint using the original token.
+        || IsSealedGatewayProfile(profile, state.Port);
 
     private bool IsApplied(ProfileState state)
     {
         string path = ProfilePath(state);
         return (string?)DesktopKeyAccess.ReadProfileMeta(library)["appliedId"] == state.Id
-            && File.Exists(path) && OwnsProfile(state, JsonNode.Parse(File.ReadAllBytes(path)));
+            && File.Exists(path) && OwnsProfile(state, JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject);
     }
 
-    private void Activate(ProfileState state, JsonObject profile)
+    private void Activate(ProfileState state, JsonObject profile, string replaceOldProfile)
     {
-        var meta = EnsureProfileSlotAvailable();
+        var meta = EnsureProfileSlotAvailable(replaceOldProfile);
         ((JsonArray)meta["entries"]!).Add(new JsonObject { ["id"] = state.Id, ["name"] = "SafeCode SSH" });
         meta["appliedId"] = state.Id;
         byte[] data = JsonSerializer.SerializeToUtf8Bytes(state);
@@ -215,7 +260,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
         var entries = (JsonArray)meta["entries"]!;
         string path = ProfilePath(state);
         // Leave an externally edited profile and its metadata under the user's control.
-        if (!File.Exists(path) || OwnsProfile(state, JsonNode.Parse(File.ReadAllBytes(path))))
+        if (!File.Exists(path) || OwnsProfile(state, JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject))
         {
             var entry = entries.FirstOrDefault(node => (string?)node?["id"] == state.Id);
             if (entry != null) entries.Remove(entry);

@@ -961,20 +961,85 @@ def codex_bridge(options):
         parameters.update({'files':files,'node':str(node),'claude':str(claude),'sourceHash':CODEX_BRIDGE_SOURCE_HASH,'username':a['username']})
     return json.loads(user_files('codex_bridge','.local/state/safe-code/codex-bridge',action=action,**parameters).stdout)
 
+API_DIRECTORY=Path('/opt/safe-code/desktop-api')
+API_UNIT=Path('/etc/systemd/system/safe-code-desktop-api.service')
+API_FILES={'install.sh','desktop_gateway.py','server.py','management.py','claude_usage.py',
+           'pricing.py','configure_cloudcli.py','host_control_mcp.py','device_bridge.py','codex_bridge.zip'}
+
 def safe_code_api(options):
     action=options.get('action')
-    if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription'):
+    if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install'):
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
-    script=Path('/opt/safe-code/desktop-api/server.py')
-    if not script.is_file():raise RuntimeError('当前 VPS 尚未安装 Safe Code API 管理服务。')
+    script=API_DIRECTORY/'server.py'
     directory=Path(entry.pw_dir)/'.local/state/safe-code-desktop-api'
     command=['runuser','-u',entry.pw_name,'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin',
              'LANG=C.UTF-8','/usr/bin/python3','-B',str(script),'--state',str(directory)]
+    if action=='install':
+        return install_safe_code_api(entry, command, options)
+    if not script.is_file():
+        if action=='public_status':return {'installed':False,'enabled':False}
+        raise RuntimeError('当前 VPS 尚未安装 Safe Code API 管理服务。')
     if action == 'set_port':
         return change_safe_code_api_port(command, options)
     return safe_code_api_admin(command, options)
+
+def install_safe_code_api(entry, command, options):
+    if options.get('accepted') is not True:
+        raise ValueError('请先确认安装 Safe Code API 服务。')
+    files=options.get('files')
+    if not isinstance(files,dict) or set(files)!=API_FILES or any(
+        not isinstance(value,str) or len(value)>2*1024*1024 for value in files.values()
+    ):
+        raise ValueError('Safe Code API 安装组件不完整，请重新安装客户端。')
+    secure_root_directory(STATE,0o700)
+    with (STATE/'desktop-api-install.lock').open('a') as guard:
+        try:fcntl.flock(guard,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:raise OperationError('deployment_busy','其他客户端正在安装 Safe Code API，请稍后重试。') from None
+        status={'action':'public_status'}
+        if (API_DIRECTORY/'server.py').is_file():
+            return safe_code_api_admin(command,status)
+        if (API_DIRECTORY.exists() or API_DIRECTORY.is_symlink() or API_UNIT.exists() or API_UNIT.is_symlink()
+            or run(['systemctl','show','-p','LoadState','--value',API_UNIT.name],check=False).stdout.strip()!='not-found'):
+            raise RuntimeError('检测到已有的 Safe Code API 文件或服务。请在 VPS 修复现有安装后重试。')
+        secure_root_directory(API_DIRECTORY.parent,0o755)
+        work_home=Path(entry.pw_dir)
+        if not os.access(work_home/'.local/bin/claude',os.X_OK):
+            raise RuntimeError('请先在 Safe Code 的部署列表中安装 Claude Code，再安装 API 服务。')
+        node=Path('/opt/safe-code/node/bin/node')
+        if not node.is_file():node=shutil.which('node')
+        if not node or run([node,'-p','Number(process.versions.node.split(".")[0]) >= 20'],check=False).stdout.strip()!='true':
+            raise RuntimeError('Safe Code API 需要 Node.js 20 或以上。请先部署 CloudCLI 或安装 Node.js 后重试。')
+        cloud_config=work_home/'.config/safe-code/cloudcli-gateway.json'
+        bind='127.0.0.1' if cloud_config.exists() or cloud_config.is_symlink() else '0.0.0.0'
+        import socket
+        try:
+            with socket.socket() as listener:listener.bind((bind,45143))
+        except OSError as error:
+            raise RuntimeError('45143 端口无法监听，请检查是否已有服务占用。') from error
+        with tempfile.TemporaryDirectory(prefix='desktop-api-install-',dir=STATE) as folder:
+            for name,data in files.items():
+                (Path(folder)/name).write_bytes(base64.b64decode(data,validate=True))
+            if hashlib.sha256((Path(folder)/'codex_bridge.zip').read_bytes()).hexdigest()!=CODEX_BRIDGE_SOURCE_HASH:
+                raise ValueError('Safe Code API 安装组件校验失败。')
+            try:
+                run(['/bin/bash',str(Path(folder)/'install.sh'),entry.pw_name,bind,'45143'],
+                    env={**os.environ,'SAFECODE_INITIAL_API_INSTALL':'1'},timeout=60)
+                deadline=time.monotonic()+8
+                while time.monotonic()<deadline:
+                    try:return safe_code_api_admin(command,status,timeout=2)
+                    except (RuntimeError,subprocess.TimeoutExpired):time.sleep(0.25)
+                raise RuntimeError('Safe Code API 服务未能启动，请检查 VPS 上的服务日志和 45143 端口占用。')
+            except (RuntimeError,OSError,subprocess.TimeoutExpired):
+                if API_UNIT.is_file():
+                    try:run(['systemctl','disable','--now',API_UNIT.name],timeout=12)
+                    except (RuntimeError,OSError,subprocess.TimeoutExpired) as error:
+                        raise RuntimeError('Safe Code API 安装失败，VPS 服务未能回退，请检查该服务的状态。') from error
+                    API_UNIT.unlink()
+                    run(['systemctl','daemon-reload'],check=False,timeout=8)
+                if API_DIRECTORY.is_dir():shutil.rmtree(API_DIRECTORY)
+                raise
 
 def safe_code_api_admin(command, options, timeout=12):
     process = run([*command, 'admin'], check=False, stdin=json.dumps(options), timeout=timeout)

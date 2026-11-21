@@ -61,7 +61,7 @@ internal sealed class MacBackend : IDisposable
         {
             using var doc=JsonDocument.Parse(line);var root=doc.RootElement;id=root.GetProperty("id").GetString()??"";operation=root.GetProperty("op").GetString()??"";var args=root.GetProperty("args");
             bool modifies=operation is "deploy" or "job.resume" or "mount.apply" or "mount.install" or "cloud.install" or "cloud.expose" or "ip.apply" or "terminal" or "desktop" or "desktop.resolution.save" or "host.enable" or "host.disable" or "app.shutdown" or "connection.reauthenticate"
-                or "desktopKey.enable" or "desktopKey.disable" or "claudeDesktop.start" or "claudeDesktop.stop";
+                or "desktopKey.enable" or "desktopKey.disable" or "claudeDesktop.start" or "claudeDesktop.stop" or "safeCodeApi.install";
             if(modifies){if(!await mutation.WaitAsync(0))throw new InvalidOperationException("已有任务正在执行，请等待完成。");gate=true;Interlocked.Increment(ref activeMutations);}
             var diagnosticOperation=offline||operation=="mount.reconnect"&&session?.HasMounts!=true?null:DiagnosticTrace.OperationFor(operation,args);
             if(diagnosticOperation!=null)trace=services.BeginDiagnostic(diagnosticOperation,DiagnosticTrace.IsBackgroundOperation(diagnosticOperation,args));
@@ -147,6 +147,9 @@ internal sealed class MacBackend : IDisposable
                 return await RequireGatewaySession().RequestGatewayAsync(new { action = "refresh_subscription" },ct);
             case "safeCodeApi.publicStatus":
                 return await ReadGatewayStatusAsync(RequireGatewaySession(),ct);
+            case "safeCodeApi.install":
+                if (!Flag("accepted")) throw new InvalidOperationException("请先确认安装 Safe Code API 服务。");
+                return await RequireGatewaySession().InstallPublicGatewayAsync(ct);
             case "safeCodeApi.enablePublic":
                 if (!Flag("accepted")) throw new InvalidOperationException("请先确认「保证自用」。");
                 return await RequireGatewaySession().EnablePublicGatewayAsync(ct);
@@ -173,7 +176,7 @@ internal sealed class MacBackend : IDisposable
                 using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     deadline.CancelAfter(TimeSpan.FromSeconds(90));
-                    return await claudeDesktop.StartAsync(RequireSession(),deadline.Token);
+                    return await claudeDesktop.StartAsync(RequireSession(),deadline.Token,Read("replaceOldProfile"));
                 }
             case "claudeDesktop.stop":
                 if(connectionPending!=0)throw new InvalidOperationException("请等待当前服务器连接完成。");
