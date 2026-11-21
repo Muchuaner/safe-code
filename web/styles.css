@@ -340,8 +340,12 @@ html.native-dialog-window dialog.native-dialog-front{
   margin:0;border:0;border-radius:0;box-shadow:none;
 }
 .native-dialog-window dialog.native-dialog-front>.titlebar{display:none}
+html.native-dialog-window dialog.native-dialog-front:not(#client-window){
+  display:block;overflow:auto!important;overscroll-behavior:contain
+}
 .native-dialog-window .native-dialog-front iframe{height:100%}
-.native-dialog-window .native-dialog-front .config-body{max-height:none}
+.native-dialog-window .native-dialog-front .config-body{max-height:none;overflow:visible}
+.native-dialog-window .native-dialog-front .config-footer{position:static}
 
 #mac-rdp-options label.policy-toggle{display:flex;align-items:center;gap:7px;margin:12px 0 0}
 #rdp-fullscreen{width:13px;height:13px;margin:0;padding:0;accent-color:var(--green)}
@@ -361,20 +365,26 @@ html.native-dialog-window dialog.native-dialog-front{
 
 #app-message-body{white-space:pre-line;overflow-wrap:anywhere}
 
-.macos-client .workspace-bottom{grid-template-columns:auto minmax(0,1fr) auto;gap:10px}
-@media(max-width:680px){.macos-client .workspace-bottom{grid-template-columns:minmax(0,1fr) auto}}
+.workspace-bottom{grid-template-columns:auto minmax(0,1fr) auto;gap:10px}
+@media(max-width:680px){.workspace-bottom{grid-template-columns:minmax(0,1fr) auto}}
 .macos-client .claude-desktop-content{padding-bottom:15px}
 .macos-client .claude-desktop-content .config-description{margin:8px 0 14px;color:#66786d}
-.macos-client .native-dialog-front#claude-desktop-dialog .config-body{overflow:auto}
+.macos-client .native-dialog-front#claude-desktop-dialog .config-body{overflow:visible}
 .macos-client .native-dialog-front .claude-desktop-content{overflow:visible;flex-shrink:0}
 
 :where(h1,h2){font-size:var(--type-large)}
 :where(h3,h4,h5,h6,select,textarea){font-size:var(--type-medium)}
 :where(small,sub,sup){font-size:var(--type-small)}
-.macos-client .workspace :is(.advanced-copy p,.server-metadata,.ip-address-label,.metric-label){color:#677b6d}
-.macos-client .workspace-bottom>span,.macos-client .workspace-bottom-actions>button{color:#687c6f}
+.workspace :is(.advanced-copy p,.server-metadata,.ip-address-label,.metric-label){color:#677b6d}
+.workspace-bottom>span,.workspace-bottom-actions>button{color:#687c6f}
 .macos-client .claude-desktop-content .bridge-check small,.macos-client .claude-desktop-content .bridge-check{color:#66786d}
 
-.macos-client .connection-details-row{grid-template-columns:minmax(0,1fr) max-content;transform:none;padding-inline:13px}
-.macos-client .connection-card .server-metadata{grid-column:1}
-.macos-client .connection-details-row .credential-entry{grid-column:2}
+.connection-details-row{grid-template-columns:minmax(0,1fr) max-content;transform:none;padding-inline:10px}
+.connected-header .connection-card .server-metadata{grid-column:1}
+.connection-details-row .credential-entry{grid-column:2}
+
+/* Keep secondary text legible across the shared dialogs and forms. */
+dialog :is(.config-description,.dialog-hint,.account-description,.bridge-check small,.host-risk small),
+#notice-screen :is(.declaration p,.usage-consent small,.diagnostic-notice),
+#login-screen .login-heading p,#login-form .rating-disclosure{color:#626f66}
+dialog :is(.config-footer,.mount-footer){align-items:center}

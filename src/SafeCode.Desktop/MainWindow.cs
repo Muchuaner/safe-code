@@ -86,6 +86,7 @@ public sealed class MainWindow : Window
             if(trace!=null)_=services.SendDiagnosticAsync(trace,error,lifetime.Token);
         };
         Title = "Safe Code"; Width = 360; Height = 536;
+        UseLayoutRounding = SnapsToDevicePixels = true;
         MinWidth = 360; MinHeight = 500; WindowStartupLocation = WindowStartupLocation.CenterScreen;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResize; Background = Brushes.White;
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri("pack://application:,,,/Icons/safe-code-shortcut.ico"));
@@ -230,7 +231,7 @@ public sealed class MainWindow : Window
                 document.addEventListener('DOMContentLoaded',()=>{
                   if(window.safeCodeNativeReady)return;
                   document.querySelector('main')?.setAttribute('inert','');
-                  const panel=document.createElement('div');panel.style.cssText='position:fixed;inset:0;background:white;display:grid;place-content:center;padding:35px;font:13px sans-serif;color:#4b6654;text-align:center';
+                  const panel=document.createElement('div');panel.style.cssText='position:fixed;inset:0;background:white;display:grid;place-content:center;padding:35px;font:14px system-ui,sans-serif;color:#4b6654;text-align:center';
                   const message=document.createElement('p');message.textContent='客户端核心模块加载失败，已停止运行。请检查软件包是否完整。';
                   const close=document.createElement('button');close.setAttribute('data-safe-code-startup-close','');close.textContent='退出';close.onclick=()=>window.chrome.webview.postMessage({id:'failed-startup-close',op:'window.close',args:{}});panel.append(message,close);document.body.append(panel);
                 });

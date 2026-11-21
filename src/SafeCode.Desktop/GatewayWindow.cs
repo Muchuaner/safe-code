@@ -20,6 +20,7 @@ internal sealed class GatewayWindow : Window
     {
         this.manage = manage;
         Title = "Safe Code API · 网关管理";
+        UseLayoutRounding = SnapsToDevicePixels = true;
         Width = Math.Min(1100, SystemParameters.WorkArea.Width);
         Height = Math.Min(690, Math.Min(SystemParameters.WorkArea.Height, Width * 0.72));
         MinWidth = Math.Min(740, Width);

@@ -765,9 +765,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
             task = self.cloud.requests[-1][2]
             self.assertNotIn(test_folder, task['message'])
             if expected:
-                self.assertIn('Working directory: '+expected, task['message'])
+                self.assertIn(f'当前工作目录为 `{expected}`', task['message'])
             else:
-                self.assertNotIn('Working directory:', task['message'])
+                self.assertNotIn('当前工作目录为', task['message'])
                 self.assertNotEqual(task['projectPath'], str(self.project))
                 self.assertFalse((Path(task['projectPath'])/'.mcp.json').exists())
             if cwd == desktop:
@@ -796,10 +796,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         prompt = self.cloud.requests[-1][2]['message']
         self.assertIn(f'`ssh -F {ssh_config} desk-mac`', prompt)
-        self.assertIn(f'The user is working in `{workspace}` on Example Mac (`macOS`).', prompt)
-        self.assertIn('Start each remote command in the project root', prompt)
-        self.assertNotIn('host tools', prompt)
-        self.assertTrue(prompt.startswith('Identify this machine.\n\nSafeCode workspace context:'))
+        self.assertIn(f'本机是 Example Mac（`macOS`），当前工作目录为 `{workspace}`。', prompt)
+        self.assertIn('每条命令从项目根目录开始', prompt)
+        self.assertNotIn('本机文件工具', prompt)
+        self.assertTrue(prompt.startswith('Identify this machine.\n\n本机是'))
+        self.assertNotIn('SafeCode workspace context:', prompt)
+        self.assertNotIn('VPS', prompt)
         self.start_gateway()
         history = [*payload['messages'], {'role': 'assistant', 'content': reply['content']},
                    {'role': 'user', 'content': 'Continue in the same folder.'}]
@@ -1239,7 +1241,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertEqual(len(actions), 1)
             command = actions[0]
             self.assertEqual((command['type'], command['sessionId']), ('chat.send', CLOUD_SESSION))
-            self.assertTrue(command['content'].startswith('Inspect these fixtures.\n\nSafeCode workspace context:'))
+            self.assertTrue(command['content'].startswith('Inspect these fixtures.\n\n本机是'))
             self.assertIn('/Users/example/Work', command['content'])
             self.assertEqual([a['path'] for a in command['options']['attachments']],
                              ['/example/assets/0-attachment-1.png', '/example/assets/1-Report.pdf'])
@@ -1446,7 +1448,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 lambda *a, **kw: ChatSocketFixture(replace_first, events), OSError)):
             self.assertEqual(self.request(conversation('Replace the first question'))[0], 200)
         self.assertEqual(actions[-1]['anchorId'], first_anchor)
-        self.assertIn('SafeCode workspace context:', actions[-1]['content'])
+        self.assertTrue(actions[-1]['content'].startswith('Replace the first question\n\n本机是'))
         self.assertIn('/Users/example/Work', actions[-1]['content'])
 
     def test_desktop_one_time_permission_confirms_the_original_remote_operation(self):

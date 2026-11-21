@@ -10,15 +10,16 @@ namespace SafeCode.Desktop;
 
 internal sealed class MountTray : IDisposable
 {
+    private const double SmallText=12, MediumText=14, LargeText=22;
     private readonly Forms.NotifyIcon icon=new();
     private readonly Window panel;
     private readonly Button exitButton;
     private readonly TextBlock status=new(),summary=new(),duration=new(),sent=new(),received=new(),files=new();
     private readonly TextBlock codexState=new(),codexDuration=new(),codexDetail=new(),desktopState=new(),desktopDuration=new(),desktopDetail=new();
     private readonly Border codexPanel,desktopPanel;
-    private readonly Button keyBalance=new(){Content="查询 Key 余额",Margin=new Thickness(0,8,0,0),Visibility=Visibility.Collapsed};
+    private readonly Button keyBalance=new(){Content="查询 Key 余额",MinHeight=30,FontSize=MediumText,Margin=new Thickness(0,8,0,0),Visibility=Visibility.Collapsed};
     private readonly TextBlock keyBalanceText=new(){TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,4,0,0),
-        FontSize=11,Visibility=Visibility.Collapsed};
+        FontSize=SmallText,Visibility=Visibility.Collapsed};
     private readonly DispatcherTimer timer=new(){Interval=TimeSpan.FromSeconds(1)};
     private readonly DispatcherTimer dismissTimer=new(){Interval=TimeSpan.FromMilliseconds(100)};
     private bool dismissAfterMouseRelease;
@@ -43,20 +44,20 @@ internal sealed class MountTray : IDisposable
         var content=new StackPanel{Margin=new Thickness(14,12,14,13)};
         var header=new Grid{Margin=new Thickness(0,0,0,12)};
         header.ColumnDefinitions.Add(new ColumnDefinition());header.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        header.Children.Add(new TextBlock{Text="Safe Code",FontSize=14,FontWeight=FontWeights.SemiBold,Foreground=Brush("#2f7158"),VerticalAlignment=VerticalAlignment.Center});
-        status.FontSize=10;status.VerticalAlignment=VerticalAlignment.Center;status.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(status,1);header.Children.Add(status);content.Children.Add(header);
+        header.Children.Add(new TextBlock{Text="Safe Code",FontSize=LargeText,FontWeight=FontWeights.SemiBold,Foreground=Brush("#2f7158"),VerticalAlignment=VerticalAlignment.Center});
+        status.FontSize=SmallText;status.VerticalAlignment=VerticalAlignment.Center;status.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(status,1);header.Children.Add(status);content.Children.Add(header);
         var overview=new Grid{Margin=new Thickness(0,0,0,11)};
         overview.ColumnDefinitions.Add(new ColumnDefinition());overview.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        summary.FontSize=11;summary.Foreground=Brush("#536359");overview.Children.Add(summary);
-        duration.FontSize=11;duration.Foreground=Brush("#536359");duration.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(duration,1);overview.Children.Add(duration);content.Children.Add(overview);
+        summary.FontSize=SmallText;summary.Foreground=Brush("#536359");overview.Children.Add(summary);
+        duration.FontSize=SmallText;duration.Foreground=Brush("#536359");duration.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(duration,1);overview.Children.Add(duration);content.Children.Add(overview);
         var metrics=new Grid{Margin=new Thickness(0)};
         for(int i=0;i<3;i++)metrics.ColumnDefinitions.Add(new ColumnDefinition());
         var labels=new[]{"发送","接收","读写"};var values=new[]{sent,received,files};
         for(int i=0;i<3;i++)
         {
             var cell=new StackPanel{Margin=new Thickness(0,9,0,9)};
-            cell.Children.Add(new TextBlock{Text=labels[i],FontSize=10,Foreground=Brush("#7b887f"),HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,0,0,4)});
-            values[i].FontSize=13;values[i].FontWeight=FontWeights.SemiBold;values[i].Foreground=Brush("#354c3e");values[i].HorizontalAlignment=HorizontalAlignment.Center;
+            cell.Children.Add(new TextBlock{Text=labels[i],FontSize=SmallText,Foreground=Brush("#607367"),HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,0,0,4)});
+            values[i].FontSize=MediumText;values[i].FontWeight=FontWeights.SemiBold;values[i].Foreground=Brush("#354c3e");values[i].HorizontalAlignment=HorizontalAlignment.Center;
             values[i].TextTrimming=TextTrimming.CharacterEllipsis;values[i].MaxWidth=68;cell.Children.Add(values[i]);
             var border=new Border{Child=cell,BorderBrush=Brush("#e3eae3"),BorderThickness=new Thickness(i==0?0:1,0,0,0)};Grid.SetColumn(border,i);metrics.Children.Add(border);
         }
@@ -64,6 +65,7 @@ internal sealed class MountTray : IDisposable
         codexPanel=BuildIntegrationPanel("Codex 接入",codexState,codexDuration,codexDetail);
         desktopPanel=BuildIntegrationPanel("Claude Desktop 接入",desktopState,desktopDuration,desktopDetail);
         content.Children.Add(codexPanel);content.Children.Add(desktopPanel);
+        StyleAction(keyBalance,false);
         keyBalance.Click+=async (_,_)=>await RefreshKeyBalanceAsync();
         content.Children.Add(keyBalance);
         content.Children.Add(keyBalanceText);
@@ -73,7 +75,8 @@ internal sealed class MountTray : IDisposable
         AddButton(actions,1,"重连","立即尝试恢复挂载连接",async()=>{await retry();Update();},false);
         exitButton=AddButton(actions,2,"安全退出","同步文件并卸载目录后退出",exit,false);
         content.Children.Add(actions);
-        panel=new Window{Width=252,SizeToContent=SizeToContent.Height,WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,ShowInTaskbar=false,Topmost=true,AllowsTransparency=true,Background=Brushes.Transparent,Content=new Border{Background=Brushes.White,BorderBrush=Brush("#dfe7df"),BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(8),Child=content},FontFamily=new FontFamily("Segoe UI")};
+        panel=new Window{Width=292,UseLayoutRounding=true,SnapsToDevicePixels=true,SizeToContent=SizeToContent.Height,WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,ShowInTaskbar=false,Topmost=true,AllowsTransparency=true,Background=Brushes.Transparent,Content=new Border{Background=Brushes.White,BorderBrush=Brush("#dfe7df"),BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(8),Child=content},FontFamily=new FontFamily("Segoe UI"),FontSize=MediumText};
+        TextOptions.SetTextFormattingMode(panel,TextFormattingMode.Display);
         // The taskbar deactivates the panel before NotifyIcon receives MouseUp.
         // Let that click finish so clicking the icon can cancel dismissal.
         panel.Deactivated+=(_,_)=>{if(disposed)return;dismissAfterMouseRelease=false;dismissTimer.Start();};
@@ -95,24 +98,36 @@ internal sealed class MountTray : IDisposable
         var stack=new StackPanel();
         var header=new Grid();
         header.ColumnDefinitions.Add(new ColumnDefinition());header.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        header.Children.Add(new TextBlock{Text=title,FontSize=10,FontWeight=FontWeights.SemiBold,Foreground=Brush("#2f7158")});
-        state.FontSize=9;state.Foreground=Brush("#718075");state.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(state,1);header.Children.Add(state);
-        elapsed.FontSize=10;elapsed.Foreground=Brush("#536359");elapsed.Margin=new Thickness(0,4,0,0);elapsed.TextTrimming=TextTrimming.CharacterEllipsis;
-        detail.FontSize=9;detail.Foreground=Brush("#7b887f");detail.Margin=new Thickness(0,2,0,0);detail.TextTrimming=TextTrimming.CharacterEllipsis;
+        header.Children.Add(new TextBlock{Text=title,FontSize=SmallText,FontWeight=FontWeights.SemiBold,Foreground=Brush("#2f7158")});
+        state.FontSize=SmallText;state.Foreground=Brush("#627368");state.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(state,1);header.Children.Add(state);
+        elapsed.FontSize=SmallText;elapsed.Foreground=Brush("#536359");elapsed.Margin=new Thickness(0,4,0,0);elapsed.TextTrimming=TextTrimming.CharacterEllipsis;
+        detail.FontSize=SmallText;detail.Foreground=Brush("#607367");detail.Margin=new Thickness(0,2,0,0);detail.TextTrimming=TextTrimming.CharacterEllipsis;
         stack.Children.Add(header);stack.Children.Add(elapsed);stack.Children.Add(detail);
         return new Border{Child=stack,Background=Brush("#f7faf6"),BorderBrush=Brush("#e3eae3"),BorderThickness=new Thickness(0,0,0,0),CornerRadius=new CornerRadius(5),Padding=new Thickness(8,6,8,6),Margin=new Thickness(0,7,0,0),Visibility=Visibility.Collapsed};
     }
     private static Button AddButton(Grid panel,int column,string text,string hint,Action clicked,bool primary)
     {
-        var button=new Button{Content=text,ToolTip=hint,Height=28,Margin=new Thickness(column==0?0:5,0,0,0),Padding=new Thickness(2,0,2,0),Background=Brush(primary?"#347457":"#f0f4ef"),Foreground=primary?Brushes.White:Brush("#46634f"),BorderThickness=new Thickness(0),FontSize=11,Cursor=System.Windows.Input.Cursors.Hand};
+        var button=new Button{Content=text,ToolTip=hint,Height=28,Margin=new Thickness(column==0?0:5,0,0,0),FontSize=SmallText};
+        StyleAction(button,primary);
+        button.Click+=(_,_)=>clicked();Grid.SetColumn(button,column);panel.Children.Add(button);
+        return button;
+    }
+
+    private static void StyleAction(Button button,bool primary)
+    {
+        button.Padding=new Thickness(2,0,2,0);
+        button.Background=Brush(primary?"#347457":"#f0f4ef");
+        button.Foreground=primary?Brushes.White:Brush("#46634f");
+        button.BorderThickness=new Thickness(0);
+        button.Cursor=System.Windows.Input.Cursors.Hand;
         var border=new FrameworkElementFactory(typeof(Border));border.SetValue(Border.BackgroundProperty,new TemplateBindingExtension(Control.BackgroundProperty));border.SetValue(Border.CornerRadiusProperty,new CornerRadius(4));border.SetValue(Border.BorderBrushProperty,Brush("#347457"));border.SetValue(Border.BorderThicknessProperty,new Thickness(0));border.Name="surface";
         var presenter=new FrameworkElementFactory(typeof(ContentPresenter));presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Center);presenter.SetValue(FrameworkElement.VerticalAlignmentProperty,VerticalAlignment.Center);border.AppendChild(presenter);
         var template=new ControlTemplate(typeof(Button)){VisualTree=border};
         var hover=new Trigger{Property=UIElement.IsMouseOverProperty,Value=true};hover.Setters.Add(new Setter(Control.BackgroundProperty,Brush(primary?"#285d46":"#e3ebe1")));template.Triggers.Add(hover);
         var focus=new Trigger{Property=UIElement.IsKeyboardFocusedProperty,Value=true};focus.Setters.Add(new Setter(Border.BorderThicknessProperty,new Thickness(1),"surface"));template.Triggers.Add(focus);
-        var pressed=new Trigger{Property=Button.IsPressedProperty,Value=true};pressed.Setters.Add(new Setter(UIElement.OpacityProperty,0.8));template.Triggers.Add(pressed);button.Template=template;
-        button.Click+=(_,_)=>clicked();Grid.SetColumn(button,column);panel.Children.Add(button);
-        return button;
+        var pressed=new Trigger{Property=Button.IsPressedProperty,Value=true};pressed.Setters.Add(new Setter(UIElement.OpacityProperty,0.8));template.Triggers.Add(pressed);
+        var disabled=new Trigger{Property=UIElement.IsEnabledProperty,Value=false};disabled.Setters.Add(new Setter(UIElement.OpacityProperty,0.55));template.Triggers.Add(disabled);
+        button.Template=template;
     }
     public void SetExiting(bool exiting)
     {

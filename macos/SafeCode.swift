@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var balanceButton: NSButton!
     private var keyRunning=false
     private var popover = NSPopover()
+    private let statusContent = NSStackView()
     private var stateText: NSTextField!
     private var durationText: NSTextField!
     private var values: [NSTextField] = []
@@ -164,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         statusItem.button?.image=NSImage(systemSymbolName:"externaldrive.connected.to.line.below",accessibilityDescription:"Safe Code 挂载状态")
         statusItem.button?.target=self;statusItem.button?.action=#selector(toggleStatus)
         let controller=NSViewController();controller.view=NSView(frame:NSRect(x:0,y:0,width:276,height:196))
-        let main=NSStackView();main.orientation = .vertical;main.spacing=10;main.alignment = .leading;main.translatesAutoresizingMaskIntoConstraints=false
+        let main=statusContent;main.orientation = .vertical;main.spacing=10;main.alignment = .leading;main.translatesAutoresizingMaskIntoConstraints=false
         controller.view.addSubview(main);NSLayoutConstraint.activate([main.leadingAnchor.constraint(equalTo:controller.view.leadingAnchor,constant:16),main.trailingAnchor.constraint(equalTo:controller.view.trailingAnchor,constant:-16),main.topAnchor.constraint(equalTo:controller.view.topAnchor,constant:14)])
         let heading=NSTextField(labelWithString:"Safe Code");heading.font = .systemFont(ofSize:SafeCodeType.medium,weight:.semibold);main.addArrangedSubview(heading)
         stateText=NSTextField(labelWithString:"未挂载目录");stateText.font = .systemFont(ofSize:SafeCodeType.small);stateText.textColor = .secondaryLabelColor;main.addArrangedSubview(stateText)
@@ -185,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let buttons=NSStackView();buttons.orientation = .horizontal;buttons.spacing=7;buttons.distribution = .fillEqually
         for (title,selector) in [("主界面",#selector(showMain)),("重连",#selector(reconnect)),("安全退出",#selector(quit))] {let b=NSButton(title:title,target:self,action:selector);b.bezelStyle = .rounded;b.controlSize = .small;b.font = .systemFont(ofSize:SafeCodeType.small);buttons.addArrangedSubview(b)}
         main.addArrangedSubview(buttons);buttons.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
-        popover.contentViewController=controller;popover.behavior = .transient;popover.contentSize=NSSize(width:276,height:196)
+        popover.contentViewController=controller;popover.behavior = .transient;updateStatusSize()
     }
     private func startBackend() throws {
         let process=Process();process.executableURL=Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Core/SafeCode.MacBackend")
@@ -302,13 +303,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             inspectGatewayWindow(id,args:args)
         case "window.fitDialog":
             if let active=dialogWindows.last,active.id==args["id"] as? String,
-               ["desktop-key-dialog","claude-desktop-dialog"].contains(active.id),
+               active.id != "client-window",
                let height=args["height"] as? Double,height.isFinite {
                 let current=active.window.contentRect(forFrameRect:active.window.frame)
-                let screenHeight=active.window.screen?.visibleFrame.height ?? 720
+                let screen=active.window.screen ?? window.screen
+                let screenHeight=screen?.visibleFrame.height ?? 720
                 let fitted=max(active.window.contentMinSize.height,min(height,screenHeight-70))
                 if abs(current.height-fitted)>1 {
                     active.window.setContentSize(NSSize(width:current.width,height:fitted))
+                    if let screen {
+                        let original=active.window.frame
+                        let constrained=active.window.constrainFrameRect(original,to:screen)
+                        if constrained.origin != original.origin {active.window.setFrameOrigin(constrained.origin)}
+                    }
                 }
             }
             answer(id,true)
@@ -389,7 +396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             let size=NSSize(width:min(spec.size.width,visible.width),height:min(spec.size.height,visible.height-40))
             let panel=NSWindow(contentRect:NSRect(origin:.zero,size:size),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
             panel.title=spec.title
-            panel.contentMinSize=NSSize(width:min(size.width,320),height:min(size.height,["desktop-key-dialog","claude-desktop-dialog"].contains(spec.id) ? 120:220))
+            panel.contentMinSize=NSSize(width:min(size.width,320),height:min(size.height,spec.id=="client-window" ? 220:120))
             panel.isReleasedWhenClosed=false
             panel.delegate=self
             let frame=panel.frame
@@ -636,6 +643,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     @objc private func closeKeyWindow(){NSApp.keyWindow?.performClose(nil)}
     @objc private func showMain(){popover.performClose(nil);window.orderFront(nil);dialogHost.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)}
+    private func updateStatusSize(){
+        guard let content=popover.contentViewController?.view else{return}
+        content.layoutSubtreeIfNeeded()
+        let minimum: CGFloat = balanceButton.isHidden ? 168 : 232
+        let size=NSSize(width:276,height:max(minimum,ceil(statusContent.fittingSize.height)+28))
+        popover.contentSize=size
+        if !popover.isShown {content.setFrameSize(size)}
+    }
     @objc private func toggleStatus(){
         guard let button=statusItem.button else{return}
         if popover.isShown{popover.performClose(nil)}else{
@@ -647,6 +662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         guard keyRunning,balanceButton.isEnabled else{return}
         balanceButton.isEnabled=false
         balanceText.stringValue="正在查询余额…"
+        updateStatusSize()
         request("desktopKey.balance"){[weak self] result in
             guard let self=self else{return}
             self.balanceButton.isEnabled=true
@@ -657,6 +673,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 self.balanceText.stringValue=[balance?["remaining"] as? String,balance?["used"] as? String].compactMap{$0}.joined(separator:" · ")
             case .failure(let error):self.balanceText.stringValue=error.localizedDescription
             }
+            self.updateStatusSize()
         }
     }
     @objc private func reconnect(){request("mount.reconnect"){[weak self] result in if case .failure(let error)=result{self?.fail(error.localizedDescription)}}}
@@ -675,7 +692,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             balanceButton.isHidden = !running
             balanceText.isHidden = !running
             balanceText.stringValue=""
-            popover.contentSize=NSSize(width:276,height:running ? 284:196)
+            updateStatusSize()
             if running && popover.isShown {refreshKeyBalance()}
         }
         guarding=count>0 || (host["enabled"] as? Bool ?? false) || running || (message["desktopSshRunning"] as? Bool ?? false)
@@ -704,7 +721,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         DispatchQueue.main.asyncAfter(deadline:.now()+0.5){[weak self] in self?.runSmoke()}
     }
     private func saveSmokeScreenshot(_ name: String, replyID: String) {
-        guard let output=smokeOutput,["homepage","desktop-access","gateway","gateway-analysis","gateway-requests"].contains(name) else {
+        let views=["notice","login","deployment","maintenance","homepage","desktop-access","gateway","gateway-analysis","gateway-requests","status","status-key"]
+        guard let output=smokeOutput, views.contains(name) ||
+            (name.hasPrefix("dialog-") && name.count <= 48 && name.utf8.allSatisfy { $0 == 45 || (97...122).contains($0) }) else {
             answer(replyID,error:"Invalid smoke screenshot name");return
         }
         let target=output.deletingLastPathComponent().appendingPathComponent(name+".png")
@@ -715,7 +734,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             do {try data.write(to:target);self.answer(replyID,true)}
             catch {self.answer(replyID,error:error.localizedDescription)}
         }
-        if name.hasPrefix("gateway"),let window=gatewayWindow,let content=window.contentView {
+        if name.hasPrefix("status"),let content=popover.contentViewController?.view {
+            if name=="status-key" {
+                balanceButton.isHidden=false
+                balanceText.isHidden=false
+                balanceText.stringValue="余额 $4.98 · 已用 $0.02"
+                updateStatusSize()
+            }
+            defer {
+                if name=="status-key" {
+                    balanceButton.isHidden=true
+                    balanceText.isHidden=true
+                    updateStatusSize()
+                }
+            }
+            content.layoutSubtreeIfNeeded()
+            let bitmap=content.bitmapImageRepForCachingDisplay(in:content.bounds)
+            if let bitmap {content.cacheDisplay(in:content.bounds,to:bitmap)}
+            save(bitmap)
+        } else if name.hasPrefix("gateway"),let window=gatewayWindow,let content=window.contentView {
             let original = window.frame
             defer {window.setFrame(original,display:true)}
             window.setContentSize(NSSize(width:1100,height:name=="gateway-analysis" ? 1040:670))
@@ -738,6 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         if(await rpc('login.restoreAvailable')||await rpc('login.restoreSaved'))throw Error('Isolated preview accessed saved login');
         const prefs=await rpc('services.preferences');
         if(prefs.enabled||prefs.diagnosticsEnabled||prefs.serviceAvailable)throw Error('Unexpected first-run preferences');
+        if(capture)await rpc('window.smoke.screenshot',{name:'notice'});
         document.querySelector('#notice-screen [data-open-services]').click();
         if(document.querySelector('#services-dialog').open)throw Error('Services opened inside main window');
         const mount=await rpc('mount.status');if(mount.count!==0)throw Error('Unexpected mount');
@@ -750,7 +788,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           return state.id===id&&state.count===count&&state.native===(count>0)&&state.visible &&
             (!id||document.querySelector('#'+id).classList.contains('native-dialog-front'));
         },id||'main window');
-        showScreen('login');document.querySelector('#desktop-key-login').click();
+        showScreen('login');
+        await waitFor(()=>innerWidth===360,'login window width');
+        if(capture)await rpc('window.smoke.screenshot',{name:'login'});
+        document.querySelector('#desktop-key-login').click();
         await waitPanel('desktop-key-dialog',1);
         const keyPanel=await rpc('window.smoke.dialog');
         if(keyPanel.title!=='Safe Code API · Key 接入')throw Error('Incorrect API Key window title');
@@ -761,10 +802,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           const form=document.querySelector('#desktop-key-form');
           return Math.abs(state.contentHeight-Math.max(120,Math.ceil(form.getBoundingClientRect().height)))<=1;
         },'API Key window content height');
+        if(capture)await rpc('window.smoke.screenshot',{name:'dialog-desktop-key'});
         const keyField=document.querySelector('#desktop-key-input');
         keyField.value='fixture';
         const confirmation=showAppMessage('离线确认测试',{cancel:'取消'});
         await waitPanel('app-message-dialog',2);
+        if(capture)await rpc('window.smoke.screenshot',{name:'dialog-app-message'});
         const message=document.querySelector('#app-message-dialog');
         message.addEventListener('cancel',event=>event.preventDefault(),{once:true});
         await rpc('window.smoke.closeDialog');
@@ -784,6 +827,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           await waitPanel(dialog.id,1);
           const state=await rpc('window.smoke.dialog');
           if(state.title!==dialog.querySelector('.titlebar .app-name').textContent.trim()&&state.title!=='Safe Code')throw Error('Wrong title: '+dialog.id);
+          if(capture)await rpc('window.smoke.screenshot',{name:'dialog-'+dialog.id});
           await rpc('window.smoke.closeDialog');
           await waitPanel('',0);
         }
@@ -805,6 +849,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           await waitFor(()=>innerWidth===740,'home window width');
           if(getComputedStyle(document.querySelector('.window'),'::after').content!=='none')throw Error('Duplicate macOS border shown');
           if(getComputedStyle(document.querySelector('#public-gateway-footer')).display!=='none')throw Error('Extra gateway footer shown');
+          await rpc('window.smoke.screenshot',{name:'maintenance'});
+          switchMode('deployment');
+          await rpc('window.smoke.screenshot',{name:'deployment'});
+          switchMode('maintenance');
           document.querySelector('.maintenance-panel').scrollTop=10000;
           await rpc('window.smoke.screenshot',{name:'homepage'});
         }
@@ -845,6 +893,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         if(!document.querySelector('#codex-launch').disabled||!document.querySelector('#bridge-start').disabled)throw Error('Windows adapter enabled on Mac');
         if(document.querySelector('.host-risk small').textContent.includes('Windows'))throw Error('Windows permission copy retained');
         if(document.body.innerText.includes('客户端核心模块加载失败'))throw Error('Startup fallback displayed');
+        if(capture){
+          await rpc('window.smoke.screenshot',{name:'status'});
+          await rpc('window.smoke.screenshot',{name:'status-key'});
+        }
         return {success:true,nativeBridge:true,readOnlyStartup:true,unauthenticatedRejected:denied,nativeDialogWindows:all.length+2,nestedNativeDialogs:true,gatewayWindow:true,windowsAdapterDisabled:true,platform:window.__safeCodePlatform};
         """
         web.callAsyncJavaScript(script,arguments:["capture":captureSmokeScreenshots],in:nil,in:.page){[weak self] result in
@@ -867,8 +919,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                     guard let self=self else{return}
                     if case .failure(let error)=result {self.fail(error.localizedDescription);self.quit();return}
                     var report=value as? [String:Any] ?? [:];report["servicesNativeWindow"]=true
-                    try? Data(json(report).utf8).write(to:output)
-                    self.web.takeSnapshot(with:nil){image,error in if let image=image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),let data=bitmap.representation(using:.png,properties:[:]){try? data.write(to:output.appendingPathExtension("png"))};self.quit()}
+                    let finish = {
+                        try? Data(json(report).utf8).write(to:output)
+                        self.web.takeSnapshot(with:nil){image,_ in
+                            if let image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),
+                               let data=bitmap.representation(using:.png,properties:[:]){
+                                try? data.write(to:output.appendingPathExtension("png"))
+                            }
+                            self.quit()
+                        }
+                    }
+                    if self.captureSmokeScreenshots {
+                        view.takeSnapshot(with:nil){image,_ in
+                            if let image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),
+                               let data=bitmap.representation(using:.png,properties:[:]){
+                                try? data.write(to:output.deletingLastPathComponent().appendingPathComponent("services.png"))
+                            }
+                            finish()
+                        }
+                    }else{finish()}
                 }
             case .failure(let error):
                 let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String

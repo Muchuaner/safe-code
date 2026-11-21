@@ -108,20 +108,26 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         const title=dialog.querySelector(':scope>.titlebar .app-name');
         if(title)observer.observe(title,{childList:true,characterData:true,subtree:true});
       }
-      const fittedForms=['desktop-key-form','claude-desktop-form'].map(id=>document.getElementById(id));
-      const fitDialog=({target:form})=>{
-        const dialog=form.closest('.native-dialog-front');
-        if(!dialog)return;
-        const height=Math.ceil(form.getBoundingClientRect().height);
+      const fittedDialogs=dialogs.filter(dialog=>dialog.id!=='client-window');
+      const dialogContents=dialog=>[...dialog.children].filter(child=>!child.classList.contains('titlebar'));
+      const fitDialog=dialog=>{
+        if(!dialog?.classList.contains('native-dialog-front'))return;
+        const height=Math.ceil(dialogContents(dialog).reduce((sum,child)=>{
+          if(!child.getClientRects().length)return sum;
+          const style=getComputedStyle(child);
+          return sum+child.getBoundingClientRect().height+parseFloat(style.marginTop)+parseFloat(style.marginBottom);
+        },0));
         if(height>0)native('window.fitDialog',{id:dialog.id,height}).catch(()=>{});
       };
-      const formObserver=new ResizeObserver(entries=>entries.forEach(fitDialog));
-      fittedForms.forEach(form=>formObserver.observe(form));
+      const contentObserver=new ResizeObserver(entries=>{
+        const front=entries.map(({target})=>target.closest('dialog.native-dialog-front')).find(Boolean);
+        if(front)fitDialog(front);
+      });
+      fittedDialogs.flatMap(dialogContents).forEach(content=>contentObserver.observe(content));
       window.safeCodePresentNativeDialog=id=>{
         for(const dialog of dialogs)dialog.classList.toggle('native-dialog-front',dialog.id===id);
         document.documentElement.classList.toggle('native-dialog-window',!!id);
-        const form=fittedForms.find(form=>form.closest('dialog').id===id);
-        if(form)fitDialog({target:form});
+        fitDialog(fittedDialogs.find(dialog=>dialog.id===id));
       };
       window.safeCodeCloseNativeDialog=id=>{
         const dialog=stack.at(-1);

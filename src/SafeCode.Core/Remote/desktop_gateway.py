@@ -1720,21 +1720,14 @@ class CloudCliBackend:
     @staticmethod
     def ssh_workspace_instruction(target, system, workspace, command):
         if workspace is None:
-            return (f'Use `{command}` to do project work on {target} (`{system}`). '
-                    'Use the folder specified by the user. Ask for its path if the task needs it and it is unknown.')
+            return (f'本机是 {target}（`{system}`）。通过 `{command}` 在本机执行任务。'
+                    '请使用用户指定的目录。任务需要目录且路径未知时，再询问用户。')
         return (
-            f'The user is working in `{workspace}` on {target} (`{system}`).\n'
-            'Treat that folder as the project root for this session. When the user says '
-            '“here”, “this project”, or “my computer”, use this workspace.\n\n'
-            f'For project work, use `{command}` to connect to the target device. '
-            'Start each remote command in the project root and resolve relative paths there. '
-            'Use the same connection to read, search, edit, run Git, build, and test. '
-            "Read the project's existing instructions there when starting work. "
-            'Save project changes and generated files in that workspace.\n\n'
-            'The VPS runs CloudCLI and keeps the conversation state. When a task requires project access, '
-            'start with the appropriate action over SSH. If an operation fails, diagnose the actual error '
-            'and continue if it can be resolved within the existing permissions. '
-            'Ask the user only when their input or approval is needed.'
+            f'本机是 {target}（`{system}`），当前工作目录为 `{workspace}`。'
+            '把它当作本次会话的项目根目录，用户说「这里」「这个项目」或「我的电脑」时，就使用这个目录。\n\n'
+            f'需要操作项目时，通过 `{command}` 连接本机。每条命令从项目根目录开始，相对路径也以此为准。'
+            '通过同一连接读取项目说明、查找和修改文件、运行 Git、构建及测试。项目修改和生成的文件都保存在本机项目目录里。\n\n'
+            '如果操作失败，先检查实际错误，在现有权限内能解决就继续。仅在需要用户提供信息或确认时再询问。'
         )
 
     def host_instruction(self, project, workspace):
@@ -1745,8 +1738,7 @@ class CloudCliBackend:
         if host is None:
             return ''
         if workspace is None:
-            return ('The selected desktop folder is outside the configured SafeCode file workspace. '
-                    'The VPS filesystem is a different machine.')
+            return '所选本机目录超出了已配置的文件访问范围。需要操作项目文件时，请用户确认一个可访问的本机目录。'
         home = Path.home()
         client = host['clientId']
         allow_ssh_shell = host.get('allowSshShell', False)
@@ -1778,12 +1770,11 @@ class CloudCliBackend:
                     raise ValueError()
         except (OSError, ValueError, AttributeError, KeyError, TypeError):
             raise CloudCliError('SafeCode local host control is unavailable for the CloudCLI project', 409) from None
-        target = host['deviceName'] or 'the selected computer'
+        target = host['deviceName'] or '用户选定的电脑'
         if command is not None:
             return self.ssh_workspace_instruction(target, 'macOS', workspace, command)
-        return (f'Target computer: {target}. Working directory: {workspace}. '
-                'Use the SafeCode host tools for files on the selected computer. '
-                'The VPS filesystem is a different machine.')
+        return (f'本机是 {target}，当前工作目录为 `{workspace}`。'
+                '通过 SafeCode 本机文件工具操作这个目录中的文件。')
 
     def call(self, payload, progress):
         try:
@@ -2341,7 +2332,7 @@ class CloudCliBackend:
                                        (namespace, payload.get('sessionId'), position, fingerprint)).fetchone()
                     if known is None:
                         # Keep the user's opening words available for the CloudCLI title.
-                        payload['message'] = task+'\n\nSafeCode workspace context:\n'+host_instruction
+                        payload['message'] = task+'\n\n'+host_instruction
                         workspace_prompt_fingerprint = fingerprint
                 self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
