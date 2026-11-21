@@ -222,6 +222,63 @@ class SafeCodeApiTest(unittest.TestCase):
             self.assertEqual([call.args[1] for call in restarted.call_args_list], [new_port, 45143])
         self.assertEqual(json.loads(config_path.read_text()), original)
 
+    def test_public_origin_uses_the_gateway_port_and_valid_public_candidates(self):
+        settings = {'port':45143, 'publicIp':'198.18.0.5', 'bind':'0.0.0.0'}
+        self.assertEqual(agent.gateway_origin_candidates(
+            settings, 'Gate.Example.', ['10.1.2.3', '127.0.0.1', '192.0.2.42']),
+            ['https://gate.example:45143'])
+        settings = {'port':443, 'bind':'127.0.0.1'}
+        self.assertEqual(agent.gateway_origin_candidates(settings, 'localhost', []), [])
+        self.assertEqual(agent.gateway_origin_candidates(settings, 'user@gate.example', []), [])
+        self.assertEqual(agent.gateway_origin_candidates(settings, '127.0.0.1.', []), [])
+        self.assertEqual(agent.gateway_origin_candidates(settings, 'office.internal', []), [])
+        self.assertEqual(agent.gateway_origin_candidates(settings, 'gate.example', []), ['https://gate.example'])
+
+    def test_auto_public_origin_is_compatible_with_existing_api_and_preserves_manual_setting(self):
+        state = self.root/agent.API_STATE
+        state.mkdir(parents=True)
+        address_file = state/'public-origin'
+        pem = '-----BEGIN CERTIFICATE-----\nZml4dHVyZQ==\n-----END CERTIFICATE-----\n'
+        (state/'cert.pem').write_text(pem)
+        pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+        hints = {'sshHost':'gateway.example', 'assignedIps':[]}
+        origin = 'https://gateway.example:45143'
+        manual = 'https://frp.example:44333'
+        stale_once = False
+
+        def settings(command, request):
+            nonlocal stale_once
+            self.assertEqual(request, {'action':'settings'})
+            saved = address_file.read_text() if address_file.exists() and not stale_once else ''
+            stale_once = False
+            return {'origin':saved, 'bind':'0.0.0.0', 'port':45143}
+
+        def work_account(action, relative, **parameters):
+            return subprocess.run([sys.executable, '-I', '-c', agent.USER_FILES], text=True, check=True,
+                env={'HOME':str(self.root)}, input=json.dumps({'operation':action, 'relative':relative, **parameters}),
+                capture_output=True, timeout=5)
+
+        with patch.object(agent, 'safe_code_api_admin', side_effect=settings), \
+                patch.object(agent, 'user_files', side_effect=work_account) as run_as_work_user:
+            self.assertEqual(agent.safe_code_api_origin([], {'action':'origin_candidates', **hints}),
+                             {'candidates':[origin], 'pin':pin})
+            self.assertFalse(address_file.exists())
+            save = {'action':'set_default_origin', **hints, 'pin':pin, 'origin':origin}
+            with self.assertRaisesRegex(ValueError, '监听端口已变更'):
+                agent.safe_code_api_origin([], {**save, 'origin':'https://gateway.example:22'})
+            with self.assertRaises(subprocess.CalledProcessError):
+                agent.safe_code_api_origin([], {**save, 'pin':'0'*64})
+            self.assertFalse(address_file.exists())
+            self.assertEqual(agent.safe_code_api_origin([], save), {'origin':origin})
+            self.assertEqual(address_file.read_text(), origin)
+            address_file.write_text(manual)
+            calls = run_as_work_user.call_count
+            self.assertEqual(agent.safe_code_api_origin([], {'action':'origin_candidates', **hints}), {'origin':manual})
+            self.assertEqual(run_as_work_user.call_count, calls)
+            stale_once = True
+            self.assertEqual(agent.safe_code_api_origin([], save), {'origin':manual})
+            self.assertEqual(address_file.read_text(), manual)
+
     def test_install_missing_api_without_enabling_public_or_overwriting_an_existing_service(self):
         app = self.root/'desktop-api'
         unit = self.root/'safe-code-desktop-api.service'

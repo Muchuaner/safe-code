@@ -15,6 +15,7 @@ window.updates = [];
 window.activeKeys = [];
 window.concurrency = 1;
 window.usageLookups = 0;
+window.originMissing = false;
 window.addFixtureKey = () => {
   const key = {id: String(window.activeKeys.length + 1).padStart(64, '0'), note: '测试密钥',
     enabled: true, requests: 0, tokens: 0, rpm: 0, cost_nanos: 14616700000, unpriced_tokens: 10};
@@ -36,6 +37,10 @@ window.chrome = {webview: {postMessage({id, op, args}) {
   } else if (args.action === 'set_concurrency') {
     window.concurrency = args.concurrency;
     result = {concurrency: window.concurrency};
+  } else if (args.action === 'settings') {
+    result = {bind: '0.0.0.0', port: 45143, publicIp: null, origin: ''};
+  } else if (args.action === 'issue' && window.originMissing) {
+    error = '请先在「网关设置」中保存公网 HTTPS 地址。';
   } else if (args.action === 'issue') {
     window.issues.push(args);
     if (window.activeKeys.some(key => key.enabled) && args.activation_code !== 'fixture-code') {
@@ -118,6 +123,25 @@ def test_gateway_activation():
             expect(issue_dialog).to_be_visible()
             assert page.evaluate('issues') == [{'action': 'issue', 'note': '', 'rpm': 0, 'budget_cents': None}]
             issue_dialog.get_by_role('button', name='完成').click()
+
+            page.evaluate('window.originMissing = true')
+            create.click()
+            note = page.locator('#note')
+            note.fill('保留草稿')
+            code.fill('fixture-code')
+            save.click()
+            settings_link = page.locator('#editor-gateway-settings')
+            expect(page.locator('#editor-status')).to_contain_text('未检测到可用的公网 HTTPS 地址')
+            expect(settings_link).to_be_focused()
+            settings_link.click()
+            settings = page.locator('#settings-dialog')
+            expect(settings).to_be_visible()
+            expect(page.locator('#settings-origin')).to_have_value('')
+            settings.get_by_role('button', name='关闭', exact=True).last.click()
+            expect(settings).to_be_hidden()
+            expect(note).to_have_value('保留草稿')
+            editor.get_by_role('button', name='取消').click()
+            page.evaluate('window.originMissing = false')
 
             create.click()
             expect(field).to_be_visible()

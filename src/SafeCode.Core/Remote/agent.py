@@ -334,6 +334,25 @@ if operation=='install_claude':
         finally:link.unlink(missing_ok=True)
     finally:temporary.unlink(missing_ok=True)
     sys.exit(0)
+if operation=='gateway_origin':
+    import hashlib, ssl
+    with (target/'cert.pem').open() as cert_file:
+        cert = ssl.PEM_cert_to_DER_cert(cert_file.read(65536))
+    pin = hashlib.sha256(cert).hexdigest()
+    if 'origin' in request:
+        if pin != request['pin']:
+            raise ValueError('网关证书已变更，请重新检测公网地址。')
+        with tempfile.NamedTemporaryFile('w', dir=target, prefix='.public-origin-', delete=False) as f:
+            staged = pathlib.Path(f.name)
+            f.write(request['origin'])
+        try:
+            # Preserve both prior defaults and addresses saved manually by other clients.
+            os.link(staged, target/'public-origin')
+        except FileExistsError:
+            pass
+        finally:
+            staged.unlink(missing_ok=True)
+    print(json.dumps({'pin':pin}));sys.exit(0)
 if operation=='read':
     if not target.is_file():print(json.dumps(''));sys.exit(0)
     with target.open() as f:value=f.read(1048577)
@@ -965,15 +984,17 @@ API_DIRECTORY=Path('/opt/safe-code/desktop-api')
 API_UNIT=Path('/etc/systemd/system/safe-code-desktop-api.service')
 API_FILES={'install.sh','desktop_gateway.py','server.py','management.py','claude_usage.py',
            'pricing.py','configure_cloudcli.py','host_control_mcp.py','device_bridge.py','codex_bridge.zip'}
+API_STATE='.local/state/safe-code-desktop-api'
 
 def safe_code_api(options):
     action=options.get('action')
-    if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install'):
+    if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
+                      'origin_candidates','set_default_origin'):
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
     script=API_DIRECTORY/'server.py'
-    directory=Path(entry.pw_dir)/'.local/state/safe-code-desktop-api'
+    directory=Path(entry.pw_dir)/API_STATE
     command=['runuser','-u',entry.pw_name,'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin',
              'LANG=C.UTF-8','/usr/bin/python3','-B',str(script),'--state',str(directory)]
     if action=='install':
@@ -983,7 +1004,61 @@ def safe_code_api(options):
         raise RuntimeError('当前 VPS 尚未安装 Safe Code API 管理服务。')
     if action == 'set_port':
         return change_safe_code_api_port(command, options)
+    if action in ('origin_candidates','set_default_origin'):
+        return safe_code_api_origin(command, options)
     return safe_code_api_admin(command, options)
+
+def gateway_origin_candidates(settings, ssh_host, assigned_ips):
+    port = settings.get('port')
+    if type(port) is not int or not 1 <= port <= 65535:
+        return []
+    hints = [settings.get('publicIp'), ssh_host, settings.get('bind')]
+    if settings.get('bind') in ('0.0.0.0', '::') and isinstance(assigned_ips, list):
+        hints.extend(assigned_ips[:16])
+    origins = []
+    for host in hints:
+        if not isinstance(host, str) or not host or len(host) > 254:
+            continue
+        try:
+            ip = ipaddress.ip_address(host.removeprefix('[').removesuffix(']'))
+        except ValueError:
+            if host != ssh_host:
+                continue
+            try:
+                host = host.rstrip('.').encode('idna').decode().lower()
+            except UnicodeError:
+                continue
+            if ('.' not in host or not re.search(r'[a-z]', host.rsplit('.', 1)[-1])
+                or host.endswith(('.localhost', '.local', '.internal', '.localdomain'))
+                or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in host.split('.'))):
+                continue
+        else:
+            if not ip.is_global or ip.is_multicast or '%' in host:
+                continue
+            host = f'[{ip}]' if ip.version == 6 else str(ip)
+        origin = f'https://{host}' if port == 443 else f'https://{host}:{port}'
+        if origin not in origins:
+            origins.append(origin)
+        if len(origins) == 3:
+            break
+    return origins
+
+def safe_code_api_origin(command, options):
+    # The installed API already supports settings and reads this same origin file.
+    settings = safe_code_api_admin(command, {'action':'settings'})
+    if settings.get('origin'):
+        return {'origin':settings['origin']}
+    candidates = gateway_origin_candidates(settings, options.get('sshHost'), options.get('assignedIps'))
+    if options['action'] == 'origin_candidates':
+        if not candidates:
+            return {'candidates':[]}
+        fingerprint = json.loads(user_files('gateway_origin', API_STATE).stdout)
+        return {'candidates':candidates, 'pin':fingerprint['pin']}
+    origin, pin = options.get('origin'), options.get('pin')
+    if origin not in candidates or not isinstance(pin, str) or not re.fullmatch(r'[a-f0-9]{64}', pin):
+        raise ValueError('公网地址或监听端口已变更，请重新检测。')
+    user_files('gateway_origin', API_STATE, origin=origin, pin=pin)
+    return {'origin':safe_code_api_admin(command, {'action':'settings'})['origin']}
 
 def install_safe_code_api(entry, command, options):
     if options.get('accepted') is not True:

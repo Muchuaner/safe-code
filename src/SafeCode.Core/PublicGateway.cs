@@ -31,8 +31,21 @@ public sealed partial class SshSession
     public Task<JsonElement> ReadPublicGatewayAsync(bool runtime, CancellationToken ct) =>
         RequestGatewayAsync(new { action = "public_status", runtime }, ct, remember: true);
 
-    public Task<JsonElement> EnablePublicGatewayAsync(CancellationToken ct) =>
-        RequestGatewayAsync(new { action = "enable_public", accepted = true }, ct, remember: true);
+    public async Task<JsonElement> EnablePublicGatewayAsync(CancellationToken ct)
+    {
+        var status = await RequestGatewayAsync(new { action = "enable_public", accepted = true }, ct, remember: true);
+        if (status.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.True)
+            await TryConfigurePublicOriginAsync(ct);
+        return status;
+    }
+
+    public async Task<JsonElement> ManagePublicGatewayAsync(Dictionary<string, JsonElement> request, CancellationToken ct)
+    {
+        if (request.TryGetValue("action", out var action) && action.ValueKind == JsonValueKind.String &&
+            action.GetString() is "issue" or "settings")
+            await TryConfigurePublicOriginAsync(ct);
+        return await RequestGatewayAsync(request, ct);
+    }
 
     public async Task<JsonElement> InstallPublicGatewayAsync(CancellationToken ct)
     {

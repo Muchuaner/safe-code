@@ -498,6 +498,7 @@ function showEditor(key) {
     : '余额用完后暂停新请求，留空不限额。';
   renderActivationField();
   notice('editor-status', '');
+  byId('editor-gateway-settings').hidden = true;
   byId('key-editor').showModal();
   byId('note').focus();
 }
@@ -555,10 +556,15 @@ async function changeKey(task, statusId, button) {
   } catch (error) {
     notice(statusId, error.message, true);
     if (statusId === 'editor-status' && !editingKey) {
+      const missingOrigin = error.message.includes('请先在「网关设置」中保存公网 HTTPS 地址');
+      byId('editor-gateway-settings').hidden = !missingOrigin;
+      if (missingOrigin)
+        notice(statusId, '未检测到可用的公网 HTTPS 地址。请检查网关端口是否可达，或填写 FRP 等转发入口。', true);
       const activation = byId('activation-code');
       await refreshTask;
       await refresh(false);
-      if (!activation.disabled) activation.focus();
+      if (missingOrigin) byId('editor-gateway-settings').focus();
+      else if (!activation.disabled) activation.focus();
     }
   } finally {
     operationPending = false;
@@ -647,6 +653,7 @@ byId('concurrency-form').onsubmit = async event => {
   }
 };
 byId('gateway-settings').onclick = showSettings;
+byId('editor-gateway-settings').onclick = showSettings;
 function updateSettingsButtons() {
   const port = byId('settings-port');
   const origin = byId('settings-origin');
@@ -706,6 +713,7 @@ byId('clear-key-filter').onclick = () => {
 byId('create-key').onclick = () => showEditor();
 byId('key-form').onsubmit = event => {
   event.preventDefault();
+  byId('editor-gateway-settings').hidden = true;
   void changeKey(async () => {
     const options = {note: byId('note').value, rpm: byId('rpm').valueAsNumber};
     const budget = byId('budget');

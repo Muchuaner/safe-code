@@ -168,7 +168,7 @@ internal sealed class MacBackend : IDisposable
                     throw new InvalidOperationException("SSH 会话已变更，请重新打开网关管理。");
                 var request=args.Deserialize<Dictionary<string,JsonElement>>()!;
                 request.Remove("background");
-                return await gatewaySession.RequestGatewayAsync(request,ct);
+                return await gatewaySession.ManagePublicGatewayAsync(request,ct);
             case "claudeDesktop.status":return await claudeDesktop.RefreshAsync(ct);
             case "claudeDesktop.start":
                 if(!Flag("accepted"))throw new InvalidOperationException("请先确认通过 VPS 上原版 Claude Code 接入。");
