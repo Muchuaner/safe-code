@@ -335,24 +335,13 @@ if operation=='install_claude':
     finally:temporary.unlink(missing_ok=True)
     sys.exit(0)
 if operation=='gateway_origin':
-    import hashlib, ssl
+    import hashlib, re, ssl
+    key_id = request['keyId']
+    if not isinstance(key_id, str) or not re.fullmatch(r'[a-f0-9]{64}', key_id) or not (target/'keys'/key_id).is_file():
+        raise ValueError('这把 Key 在当前 VPS 上不存在或已撤销。')
     with (target/'cert.pem').open() as cert_file:
         cert = ssl.PEM_cert_to_DER_cert(cert_file.read(65536))
-    pin = hashlib.sha256(cert).hexdigest()
-    if 'origin' in request:
-        if pin != request['pin']:
-            raise ValueError('网关证书已变更，请重新检测公网地址。')
-        with tempfile.NamedTemporaryFile('w', dir=target, prefix='.public-origin-', delete=False) as f:
-            staged = pathlib.Path(f.name)
-            f.write(request['origin'])
-        try:
-            # Preserve both prior defaults and addresses saved manually by other clients.
-            os.link(staged, target/'public-origin')
-        except FileExistsError:
-            pass
-        finally:
-            staged.unlink(missing_ok=True)
-    print(json.dumps({'pin':pin}));sys.exit(0)
+    print(json.dumps({'pin':hashlib.sha256(cert).hexdigest()}));sys.exit(0)
 if operation=='read':
     if not target.is_file():print(json.dumps(''));sys.exit(0)
     with target.open() as f:value=f.read(1048577)
@@ -1040,14 +1029,15 @@ API_STATE='.local/state/safe-code-desktop-api'
 def safe_code_api(options):
     action=options.get('action')
     if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
-                      'origin_candidates','set_default_origin'):
+                      'ticket_endpoint'):
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
     script=API_DIRECTORY/'server.py'
     directory=Path(entry.pw_dir)/API_STATE
-    command=['runuser','-u',entry.pw_name,'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin',
-             'LANG=C.UTF-8','/usr/bin/python3','-B',str(script),'--state',str(directory)]
+    work_python=['runuser','-u',entry.pw_name,'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin',
+                 'LANG=C.UTF-8','/usr/bin/python3']
+    command=[*work_python,'-B',str(script),'--state',str(directory)]
     if action=='install':
         return install_safe_code_api(entry, command, options)
     if not script.is_file():
@@ -1055,61 +1045,48 @@ def safe_code_api(options):
         raise RuntimeError('当前 VPS 尚未安装 Safe Code API 管理服务。')
     if action == 'set_port':
         return change_safe_code_api_port(command, options)
-    if action in ('origin_candidates','set_default_origin'):
-        return safe_code_api_origin(command, options)
+    if action == 'refresh_subscription':
+        if not safe_code_api_admin(command, {'action':'public_status'}).get('enabled'):
+            raise ValueError('请先启用 Safe Code API 公网服务。')
+        source = Path(__file__).with_name('claude_usage.py').read_text()
+        output = run([*work_python, '-I', '-'], stdin=source, timeout=18)
+        return json.loads(output.stdout)
+    if action in ('issue', 'ticket_endpoint'):
+        origin = gateway_public_origin(safe_code_api_admin(command, {'action':'settings'}), options.get('hints'))
+        if action == 'ticket_endpoint':
+            certificate = json.loads(user_files('gateway_origin', API_STATE, keyId=options.get('keyId')).stdout)
+            return {'origin': origin, 'pin': certificate['pin']}
+        options = {key: value for key, value in options.items() if key != 'hints'}
+        options['origin'] = origin
     return safe_code_api_admin(command, options)
 
-def gateway_origin_candidates(settings, ssh_host, assigned_ips):
-    port = settings.get('port')
-    if type(port) is not int or not 1 <= port <= 65535:
-        return []
-    hints = [settings.get('publicIp'), ssh_host, settings.get('bind')]
-    if settings.get('bind') in ('0.0.0.0', '::') and isinstance(assigned_ips, list):
-        hints.extend(assigned_ips[:16])
-    origins = []
-    for host in hints:
-        if not isinstance(host, str) or not host or len(host) > 254:
+def gateway_public_origin(settings, hints):
+    if settings.get('origin'):
+        return settings['origin']
+    bind = ipaddress.ip_address(settings['bind'])
+    if bind.is_loopback:
+        raise ValueError('此 VPS 网关当前只监听本机回环地址。请通过 SSH 接入 Claude Desktop。')
+    port = settings['port']
+    hints = hints if isinstance(hints, dict) else {}
+    resolved = hints.get('resolved')
+    assigned = hints.get('assignedIps')
+    addresses = [settings.get('publicIp'), str(bind), hints.get('sshHost')]
+    if isinstance(resolved, list):
+        addresses.extend(resolved[:8])
+    if isinstance(assigned, list):
+        addresses.extend(assigned[:16])
+    addresses.append(hints.get('egressIp'))
+    for candidate in addresses:
+        if not isinstance(candidate, str) or '%' in candidate:
             continue
         try:
-            ip = ipaddress.ip_address(host.removeprefix('[').removesuffix(']'))
+            address = ipaddress.ip_address(candidate.removeprefix('[').removesuffix(']'))
         except ValueError:
-            if host != ssh_host:
-                continue
-            try:
-                host = host.rstrip('.').encode('idna').decode().lower()
-            except UnicodeError:
-                continue
-            if ('.' not in host or not re.search(r'[a-z]', host.rsplit('.', 1)[-1])
-                or host.endswith(('.localhost', '.local', '.internal', '.localdomain'))
-                or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in host.split('.'))):
-                continue
-        else:
-            if not ip.is_global or ip.is_multicast or '%' in host:
-                continue
-            host = f'[{ip}]' if ip.version == 6 else str(ip)
-        origin = f'https://{host}' if port == 443 else f'https://{host}:{port}'
-        if origin not in origins:
-            origins.append(origin)
-        if len(origins) == 3:
-            break
-    return origins
-
-def safe_code_api_origin(command, options):
-    # The installed API already supports settings and reads this same origin file.
-    settings = safe_code_api_admin(command, {'action':'settings'})
-    if settings.get('origin'):
-        return {'origin':settings['origin']}
-    candidates = gateway_origin_candidates(settings, options.get('sshHost'), options.get('assignedIps'))
-    if options['action'] == 'origin_candidates':
-        if not candidates:
-            return {'candidates':[]}
-        fingerprint = json.loads(user_files('gateway_origin', API_STATE).stdout)
-        return {'candidates':candidates, 'pin':fingerprint['pin']}
-    origin, pin = options.get('origin'), options.get('pin')
-    if origin not in candidates or not isinstance(pin, str) or not re.fullmatch(r'[a-f0-9]{64}', pin):
-        raise ValueError('公网地址或监听端口已变更，请重新检测。')
-    user_files('gateway_origin', API_STATE, origin=origin, pin=pin)
-    return {'origin':safe_code_api_admin(command, {'action':'settings'})['origin']}
+            continue
+        if address.version == bind.version and address.is_global and not address.is_multicast:
+            host = str(address) if address.version == 4 else f'[{address}]'
+            return f'https://{host}:{port}'
+    raise ValueError('未识别到 VPS 的公网 IP。请用 VPS 控制台显示的公网 IP 重新建立 SSH 连接后再创建密钥。')
 
 def install_safe_code_api(entry, command, options):
     if options.get('accepted') is not True:
@@ -1135,11 +1112,6 @@ def install_safe_code_api(entry, command, options):
             raise RuntimeError('请先在 Safe Code 的部署列表中安装 Claude Code，再安装 API 服务。')
         cloud_config=work_home/'.config/safe-code/cloudcli-gateway.json'
         bind='127.0.0.1' if cloud_config.exists() or cloud_config.is_symlink() else '0.0.0.0'
-        import socket
-        try:
-            with socket.socket() as listener:listener.bind((bind,45143))
-        except OSError as error:
-            raise RuntimeError('45143 端口无法监听，请检查是否已有服务占用。') from error
         with tempfile.TemporaryDirectory(prefix='desktop-api-install-',dir=STATE) as folder:
             for name,data in files.items():
                 (Path(folder)/name).write_bytes(base64.b64decode(data,validate=True))
@@ -1189,7 +1161,7 @@ def change_safe_code_api_port(command, options):
         current = safe_code_api_admin(command, {'action': 'settings'})
         previous = current['port']
         if previous != options.get('expectedPort'):
-            raise RuntimeError('监听端口已变更，请重新打开网关设置。')
+            raise RuntimeError('监听端口已变更，请重新读取网关状态。')
         if port == previous:
             return current
         if current['busy']:

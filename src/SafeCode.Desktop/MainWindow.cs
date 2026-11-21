@@ -389,7 +389,7 @@ public sealed class MainWindow : Window
                 await StopKeyDeviceAsync();
                 return disabledKey;
             case "safeCodeApi.refreshSubscription":
-                return await RequireGatewaySession().RequestGatewayAsync(new { action = "refresh_subscription" },lifetime.Token);
+                return await RequireGatewaySession().RefreshPublicGatewaySubscriptionAsync(lifetime.Token);
             case "safeCodeApi.publicStatus":
                 return await ReadGatewayStatusAsync(RequireGatewaySession());
             case "safeCodeApi.install":

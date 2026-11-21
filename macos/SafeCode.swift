@@ -501,13 +501,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             answer(id,["keys":[],"active":false,"waiting":0,"origin":"https://gateway.example.test"],in:view)
             return
         }
-        if smokeOutput != nil && action=="settings" {
-            answer(id,["bind":"192.0.2.1","port":45143],in:view)
+        if smokeOutput != nil && action=="refresh_subscription" {
+            answer(id,["state":"available","windows":["five_hour":["used":20]]],in:view)
             return
         }
         guard let context=gatewayContext else{answer(id,error:"SSH 会话已变更，请重新打开网关管理。",in:view);return}
         guard !gatewayMutationPending else{answer(id,error:"请等待当前网关操作完成。",in:view);return}
-        let modifies=["issue","update","revoke","delete","set_port","set_origin","set_concurrency"].contains(action)
+        let modifies=["issue","update","revoke","delete","set_port","set_origin","set_concurrency","refresh_ticket"].contains(action)
         if modifies {gatewayMutationPending=true}
         var options=args
         options["context"]=context
@@ -530,10 +530,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let check = """
         (() => {
           if (!window.safeCodeNativeReady || document.querySelector('#create-key').disabled) return false;
-          const panel = document.querySelector('#settings-dialog');
-          if (!panel.open) document.querySelector('#gateway-settings').click();
-          return panel.open && document.querySelector('#settings-address').value === '192.0.2.1'
-            && document.querySelector('#settings-port').value === '45143';
+          return !document.querySelector('#settings-dialog')
+            && document.querySelector('#gateway-claude-limits').dataset.state === 'available';
         })()
         """
         view.evaluateJavaScript(check){[weak self] value,_ in

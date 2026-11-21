@@ -26,8 +26,6 @@ let operationPending = false;
 let usageEpoch = 0;
 let keyRowsSignature;
 let keyPage = 0;
-let settings;
-let settingsEpoch = 0;
 const keysPerPage = 15;
 
 window.safeCodeNativeResponse = ({id, result, error}) => {
@@ -52,8 +50,13 @@ function rpc(op, args = {}) {
 }
 const manage = (action, options = {}) => rpc('safeCodeApi.manage', {action, ...options});
 const quotaCard = byId('gateway-claude-limits');
-bindClaudeUsageRefresh(quotaCard, () => manage('refresh_subscription'), value => {
-  if (snapshot) snapshot.subscription = value;
+let subscriptionQueried = false;
+let queriedSubscription;
+const querySubscription = bindClaudeUsageRefresh(quotaCard, () => {
+  subscriptionQueried = true;
+  return manage('refresh_subscription');
+}, value => {
+  queriedSubscription = value;
   renderClaudeSubscription(quotaCard, value);
 });
 const fmt = value => value == null ? '—' : number.format(value);
@@ -101,7 +104,7 @@ function action(text, handler, className) {
 }
 
 function renderOverview() {
-  renderClaudeSubscription(byId('gateway-claude-limits'), snapshot.subscription);
+  renderClaudeSubscription(quotaCard, queriedSubscription ?? snapshot.subscription);
   const {keys, waiting, stats} = snapshot;
   const current = keys.find(key => key.active);
   const running = activeCount(snapshot);
@@ -464,11 +467,13 @@ async function loadSnapshot(showProgress) {
       renderRequests();
     }
     byId('create-key').disabled = false;
+    byId('refresh-ticket').disabled = !snapshot.keys.some(key => key.enabled);
+    if (!subscriptionQueried) void querySubscription();
     notice('status', '');
     return true;
   } catch (error) {
-    renderClaudeSubscription(byId('gateway-claude-limits'), snapshot?.subscription
-      ? {...snapshot.subscription, state: 'stale'} : undefined);
+    const subscription = queriedSubscription ?? snapshot?.subscription;
+    renderClaudeSubscription(quotaCard, subscription ? {...subscription, state: 'stale'} : undefined);
     notice('status', error.message, true);
     return false;
   } finally {
@@ -498,46 +503,8 @@ function showEditor(key) {
     : '余额用完后暂停新请求，留空不限额。';
   renderActivationField();
   notice('editor-status', '');
-  byId('editor-gateway-settings').hidden = true;
   byId('key-editor').showModal();
   byId('note').focus();
-}
-function renderSettings(value) {
-  settings = value;
-  byId('settings-address-name').textContent = value.publicIp ? '公网 IP' : '监听 IP（服务器本地）';
-  byId('settings-address').value = value.publicIp || value.bind;
-  byId('settings-bind-field').hidden = !value.publicIp || value.publicIp === value.bind;
-  byId('settings-bind').value = value.bind;
-  byId('settings-port').value = value.port;
-  byId('settings-origin').value = value.origin || '';
-  const loopback = value.bind === '127.0.0.1' || value.bind === '::1';
-  byId('settings-origin-hint').textContent = value.origin
-    ? '创建密钥时使用此地址。外部地址或端口变更后，请重新签发密钥。'
-    : loopback
-      ? '网关只监听 VPS 本机，请填写为此网关配置的 HTTPS 转发入口。'
-      : '直连时请检查 VPS 防火墙和云安全组是否允许入站 TCP ' + value.port +
-        '。使用 FRP 等转发时，可填写实际的 HTTPS 入口。';
-  byId('settings-fields').hidden = false;
-  updateSettingsButtons();
-}
-async function showSettings() {
-  const dialog = byId('settings-dialog');
-  const epoch = ++settingsEpoch;
-  settings = undefined;
-  byId('settings-fields').hidden = true;
-  byId('save-settings').disabled = true;
-  byId('save-origin').disabled = true;
-  notice('settings-status', '正在读取网关设置…');
-  dialog.showModal();
-  try {
-    const value = await manage('settings');
-    if (dialog.open && epoch === settingsEpoch) {
-      renderSettings(value);
-      notice('settings-status', '');
-    }
-  } catch (error) {
-    if (dialog.open && epoch === settingsEpoch) notice('settings-status', error.message, true);
-  }
 }
 function showKeyRemoval(key, permanent) {
   keyRemoval = {key, permanent};
@@ -563,15 +530,10 @@ async function changeKey(task, statusId, button) {
   } catch (error) {
     notice(statusId, error.message, true);
     if (statusId === 'editor-status' && !editingKey) {
-      const missingOrigin = error.message.includes('请先在「网关设置」中保存公网 HTTPS 地址');
-      byId('editor-gateway-settings').hidden = !missingOrigin;
-      if (missingOrigin)
-        notice(statusId, '未检测到可用的公网 HTTPS 地址。请检查网关端口是否可达，或填写 FRP 等转发入口。', true);
       const activation = byId('activation-code');
       await refreshTask;
       await refresh(false);
-      if (missingOrigin) byId('editor-gateway-settings').focus();
-      else if (!activation.disabled) activation.focus();
+      if (!activation.disabled && error.message.includes('激活码')) activation.focus();
     }
   } finally {
     operationPending = false;
@@ -659,50 +621,6 @@ byId('concurrency-form').onsubmit = async event => {
     button.disabled = input.disabled = false;
   }
 };
-byId('gateway-settings').onclick = showSettings;
-byId('editor-gateway-settings').onclick = showSettings;
-function updateSettingsButtons() {
-  const port = byId('settings-port');
-  const origin = byId('settings-origin');
-  byId('save-settings').disabled = operationPending || !settings || !port.validity.valid || port.valueAsNumber === settings.port;
-  byId('save-origin').disabled = operationPending || !settings || !origin.validity.valid ||
-    !origin.value.startsWith('https://') || origin.value === settings.origin;
-}
-byId('settings-port').oninput = updateSettingsButtons;
-byId('settings-origin').oninput = updateSettingsButtons;
-async function saveSetting(input, button, action, args, progress, success) {
-  if (button.disabled) return;
-  operationPending = true;
-  byId('settings-port').disabled = byId('settings-origin').disabled = true;
-  updateSettingsButtons();
-  notice('settings-status', progress);
-  try {
-    await refreshTask;
-    const otherInput = input.id === 'settings-origin' ? byId('settings-port') : byId('settings-origin');
-    const pendingValue = otherInput.value;
-    const savedValue = input.id === 'settings-origin' ? String(settings.port) : (settings.origin || '');
-    renderSettings(await manage(action, args));
-    if (pendingValue !== savedValue) otherInput.value = pendingValue;
-    notice('settings-status', success);
-  } catch (error) {
-    notice('settings-status', error.message, true);
-  } finally {
-    operationPending = false;
-    byId('settings-port').disabled = byId('settings-origin').disabled = false;
-    updateSettingsButtons();
-  }
-}
-byId('save-origin').onclick = () => {
-  const input = byId('settings-origin');
-  return saveSetting(input, byId('save-origin'), 'set_origin', {origin: input.value},
-    '正在保存公网地址…', '公网地址已保存。');
-};
-byId('settings-form').onsubmit = event => {
-  event.preventDefault();
-  const input = byId('settings-port');
-  return saveSetting(input, byId('save-settings'), 'set_port', {port: input.valueAsNumber, expectedPort: settings?.port},
-    '正在保存并重启网关…', '已保存，网关正在新端口监听。');
-};
 function resetKeyPage() {
   keyPage = 0;
   renderKeys();
@@ -717,10 +635,40 @@ byId('clear-key-filter').onclick = () => {
   keyHistory = undefined;
   renderRequests();
 };
+function showTicket(result, updated = false) {
+  byId('issued-title').textContent = updated ? 'Key 已更新' : '密钥已创建';
+  byId('issued-help').textContent = updated
+    ? '请在使用这把 Key 的设备上选择「更换 Key」，粘贴下面的完整 Key。'
+    : '完整密钥仅在这里显示。请复制到新版 Safe Code 中使用。';
+  notice('issued-origin', result.origin ? '接入地址  ' + result.origin : '');
+  byId('ticket').value = result.ticket;
+  notice('copy-status', '');
+  byId('issued-dialog').showModal();
+}
+const ticketDialog = byId('refresh-ticket-dialog');
+const oldTicket = byId('old-ticket');
+byId('refresh-ticket').onclick = () => {
+  notice('refresh-ticket-status', '');
+  ticketDialog.showModal();
+  oldTicket.focus();
+};
+ticketDialog.addEventListener('close', () => { oldTicket.value = ''; });
+byId('refresh-ticket-form').onsubmit = event => {
+  event.preventDefault();
+  void changeKey(async () => {
+    const result = await manage('refresh_ticket', {ticket: oldTicket.value.trim()});
+    oldTicket.value = '';
+    if (!result.changed) {
+      notice('refresh-ticket-status', '这把 Key 已使用当前网关地址。');
+      return;
+    }
+    ticketDialog.close();
+    showTicket(result, true);
+  }, 'refresh-ticket-status', byId('save-ticket'));
+};
 byId('create-key').onclick = () => showEditor();
 byId('key-form').onsubmit = event => {
   event.preventDefault();
-  byId('editor-gateway-settings').hidden = true;
   void changeKey(async () => {
     const options = {note: byId('note').value, rpm: byId('rpm').valueAsNumber};
     const budget = byId('budget');
@@ -733,9 +681,7 @@ byId('key-form').onsubmit = event => {
       if (!activation.disabled) options.activation_code = activation.value;
       const result = await manage('issue', options);
       byId('key-editor').close();
-      byId('ticket').value = result.ticket;
-      notice('copy-status', '');
-      byId('issued-dialog').showModal();
+      showTicket(result);
     }
   }, 'editor-status', byId('save-key'));
 };

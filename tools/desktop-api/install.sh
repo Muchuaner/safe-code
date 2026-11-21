@@ -44,9 +44,16 @@ directory.mkdir(parents=True,exist_ok=True)
 p=directory/'config.new'
 config_path=directory/'config.json'
 config=json.loads(config_path.read_text()) if config_path.exists() else {}
-if initial == '1' and config and (config.get('bind'), config.get('port')) != (bind, int(port)):
-    raise ValueError('检测到保留的监听配置，请在 VPS 恢复原服务。')
+if initial == '1' and config:
+    saved_port = config.get('port')
+    if config.get('bind') != bind or type(saved_port) is not int or not 1024 <= saved_port <= 65535:
+        raise ValueError('检测到保留的监听配置，请在 VPS 恢复原服务。')
+    if saved_port != int(port) and config.get('autoPort') != saved_port:
+        raise ValueError('检测到保留的监听配置，请在 VPS 恢复原服务。')
+    port = saved_port
 config.update(bind=str(ipaddress.ip_address(bind)),port=int(port),node=node,library=app+'/components')
+if initial == '1':
+    config['autoPort'] = int(port)
 if public_ip:
     address=ipaddress.ip_address(public_ip)
     if not address.is_global or address.is_multicast:

@@ -13,6 +13,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using SafeCode.Core;
+using Ticket = SafeCode.Core.PublicGatewayTicket;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -29,7 +30,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     Func<byte[],byte[]> unprotect, string? profileDirectory=null,ClientServices? diagnostics=null,
     string? windowsPolicyPath=null,Func<CancellationToken,Task>? beforeMessages=null) : IDisposable
 {
-    internal sealed record Ticket(string Url,string Pin,string Key);
     internal sealed record DeviceBinding(string DeviceId,string DeviceProof,string Alias,int Port,string PublicKey);
     internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing);
     private sealed record Saved(Ticket Remote,string Local,int Port,string Profile,string Previous,JsonNode? Hybrid,bool CreatedMeta=false,
@@ -51,9 +51,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private string StatePath=>Path.Combine(dataDirectory,"desktop-key.state");
     private Relay? relay;
     private static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
-    // Shared with the gateway. Bundled keys deter casual inspection only.
-    private static readonly byte[] TicketEncryptionKey = Convert.FromHexString("f04223626f9a64f32aa618705067a6a04a5d852f8e5b551c944d0b9cd2d7f54d");
-    private static readonly byte[] TicketAuthKey = Convert.FromHexString("bf8145e375d11db0fdd2fb0d9734fdda504c5a480fc2eae4a567c1948aa86155");
     internal bool Running=>relay!=null;
     internal bool Configured=>File.Exists(StatePath);
     private string Library()
@@ -70,40 +67,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(File.Exists(Path.Combine(packaged,"_meta.json")))return packaged;
         if(File.Exists(Path.Combine(unpackaged,"_meta.json")))return unpackaged;
         return Directory.Exists(packaged)||Directory.Exists(package)&&!Directory.Exists(unpackaged)?packaged:unpackaged;
-    }
-    private static Ticket Parse(string text)
-    {
-        try
-        {
-            bool encrypted = text.StartsWith("sc2.", StringComparison.Ordinal);
-            if(text.Length>2048||(!encrypted&&!text.StartsWith("sc1.",StringComparison.Ordinal)))throw new FormatException();
-            string payload=text[4..].Replace('-','+').Replace('_','/');
-            byte[] decoded=Convert.FromBase64String(payload.PadRight((payload.Length+3)/4*4,'='));
-            var t=JsonSerializer.Deserialize<Ticket>(encrypted?DecryptTicket(decoded):decoded,Json);
-            if(t==null||!Uri.TryCreate(t.Url,UriKind.Absolute,out var u)||u.Scheme!="https"||u.UserInfo!=""||u.PathAndQuery!="/"||u.Fragment!=""||
-               !Regex.IsMatch(t.Key,@"\A[A-Za-z0-9_-]{43}\z")||!Regex.IsMatch(t.Pin,@"\A[0-9a-f]{64}\z"))throw new FormatException();
-            return t;
-        }
-        catch(Exception e) when(e is ArgumentException or FormatException or JsonException or CryptographicException){throw new InvalidDataException("请输入完整的 SafeCode 接入 Key。");}
-    }
-    private static byte[] DecryptTicket(ReadOnlySpan<byte> encoded)
-    {
-        const int ivSize = 16;
-        const int tagSize = 32;
-        const int versionSize = 4;
-        if (encoded.Length < ivSize * 2 + tagSize || (encoded.Length - tagSize) % ivSize != 0)
-            throw new FormatException();
-        var body = encoded[..^tagSize];
-        Span<byte> authenticated = stackalloc byte[versionSize + body.Length];
-        "sc2."u8.CopyTo(authenticated);
-        body.CopyTo(authenticated[versionSize..]);
-        Span<byte> tag = stackalloc byte[tagSize];
-        HMACSHA256.HashData(TicketAuthKey, authenticated, tag);
-        if (!CryptographicOperations.FixedTimeEquals(tag, encoded[^tagSize..]))
-            throw new FormatException();
-        using var aes = Aes.Create();
-        aes.Key = TicketEncryptionKey;
-        return aes.DecryptCbc(body[ivSize..], body[..ivSize]);
     }
     private static HttpClient Remote(Ticket t)
     {
@@ -142,7 +105,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var saved=Configured?Load():null;
             if(useSaved&&saved==null)throw new InvalidOperationException("没有保存的接入 Key。");
             if(saved!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」。");
-            var ticket=useSaved?saved!.Remote:Parse(code.Trim());
+            var ticket=useSaved?saved!.Remote:Ticket.Parse(code.Trim());
             using var client=Remote(ticket);
             using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(TimeSpan.FromSeconds(20));
@@ -564,7 +527,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var previous=Configured?Load():null;
             if(useSaved&&previous==null)throw new InvalidOperationException("没有保存的接入 Key，请输入新的 Key。");
             if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」切换已保存的接入。");
-            var t=verified?.Remote??(useSaved?previous!.Remote:Parse(code.Trim()));
+            var t=verified?.Remote??(useSaved?previous!.Remote:Ticket.Parse(code.Trim()));
             if(verified!=null&&(device==null||replace!=verified.Replace||useSaved!=verified.UseSaved||
                useSaved&&t!=previous!.Remote))
                 throw new InvalidOperationException("接入配置已变更，请重新验证设备。");

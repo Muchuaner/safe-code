@@ -2,12 +2,14 @@ from contextlib import ExitStack
 """Safe Code API management, queue and usage checks using disposable state."""
 import base64
 from concurrent.futures import ThreadPoolExecutor
+import errno
 import hashlib
 import hmac
 import http.client
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import socket
 import socketserver
@@ -25,6 +27,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'tools/desktop-api'), str(ROOT/'src/SafeCode.Core/Remote')]
+from claude_usage import UsageUnavailable, read_subscription
 from desktop_gateway import GatewayError
 from management import KeyRegistry, RequestQueue, send_admin
 from pricing import estimate
@@ -224,62 +227,110 @@ class SafeCodeApiTest(unittest.TestCase):
             self.assertEqual([call.args[1] for call in restarted.call_args_list], [new_port, 45143])
         self.assertEqual(json.loads(config_path.read_text()), original)
 
-    def test_public_origin_uses_the_gateway_port_and_valid_public_candidates(self):
-        settings = {'port':45143, 'publicIp':'198.18.0.5', 'bind':'0.0.0.0'}
-        self.assertEqual(agent.gateway_origin_candidates(
-            settings, 'Gate.Example.', ['10.1.2.3', '127.0.0.1', '192.0.2.42']),
-            ['https://gate.example:45143'])
-        settings = {'port':443, 'bind':'127.0.0.1'}
-        self.assertEqual(agent.gateway_origin_candidates(settings, 'localhost', []), [])
-        self.assertEqual(agent.gateway_origin_candidates(settings, 'user@gate.example', []), [])
-        self.assertEqual(agent.gateway_origin_candidates(settings, '127.0.0.1.', []), [])
-        self.assertEqual(agent.gateway_origin_candidates(settings, 'office.internal', []), [])
-        self.assertEqual(agent.gateway_origin_candidates(settings, 'gate.example', []), ['https://gate.example'])
+    def test_direct_origin_uses_current_port_and_preserves_custom_forwarding(self):
+        settings = {'port': 45144, 'publicIp': None, 'bind': '0.0.0.0'}
+        hints = {'sshHost': '8.8.4.4', 'assignedIps': ['10.1.2.3'], 'egressIp': '1.1.1.1'}
+        self.assertEqual(agent.gateway_public_origin(settings, hints), 'https://8.8.4.4:45144')
+        self.assertEqual(agent.gateway_public_origin(
+            settings, {**hints, 'sshHost': 'vps.example', 'resolved': ['8.8.4.4']}),
+            'https://8.8.4.4:45144')
+        self.assertEqual(agent.gateway_public_origin(
+            {**settings, 'bind': '127.0.0.1', 'origin': 'https://forward.example:5443'}, hints),
+            'https://forward.example:5443')
+        with self.assertRaisesRegex(ValueError, '回环'):
+            agent.gateway_public_origin({**settings, 'bind': '127.0.0.1'}, hints)
+        with self.assertRaisesRegex(ValueError, '未识别到'):
+            agent.gateway_public_origin(settings, {'sshHost': '192.0.2.1'})
 
-    def test_auto_public_origin_is_compatible_with_existing_api_and_preserves_manual_setting(self):
+    def test_upgrade_client_issues_and_refreshes_tickets_with_an_older_gateway(self):
+        app = self.root/'desktop-api'
+        app.mkdir()
+        (app/'server.py').touch()
         state = self.root/agent.API_STATE
-        state.mkdir(parents=True)
-        address_file = state/'public-origin'
+        (state/'keys').mkdir(parents=True)
+        key_id = 'c'*64
+        (state/'keys'/key_id).touch()
         pem = '-----BEGIN CERTIFICATE-----\nZml4dHVyZQ==\n-----END CERTIFICATE-----\n'
         (state/'cert.pem').write_text(pem)
         pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
-        hints = {'sshHost':'gateway.example', 'assignedIps':[]}
-        origin = 'https://gateway.example:45143'
-        manual = 'https://frp.example:44333'
-        stale_once = False
+        entry = SimpleNamespace(pw_uid=1000, pw_name='fixture', pw_dir=str(self.root))
+        origin = 'https://8.8.4.4:45144'
+        hints = {'sshHost':'8.8.4.4'}
 
-        def settings(command, request):
-            nonlocal stale_once
-            self.assertEqual(request, {'action':'settings'})
-            saved = address_file.read_text() if address_file.exists() and not stale_once else ''
-            stale_once = False
-            return {'origin':saved, 'bind':'0.0.0.0', 'port':45143}
+        def manage(command, request):
+            if request == {'action':'settings'}:
+                return {'origin':'', 'bind':'0.0.0.0', 'port':45144}
+            self.assertEqual(request, {'action':'issue', 'note':'fixture', 'origin':origin})
+            return {'ticket':'fixture'}
 
         def work_account(action, relative, **parameters):
             return subprocess.run([sys.executable, '-I', '-c', agent.USER_FILES], text=True, check=True,
                 env={'HOME':str(self.root)}, input=json.dumps({'operation':action, 'relative':relative, **parameters}),
                 capture_output=True, timeout=5)
 
-        with patch.object(agent, 'safe_code_api_admin', side_effect=settings), \
-                patch.object(agent, 'user_files', side_effect=work_account) as run_as_work_user:
-            self.assertEqual(agent.safe_code_api_origin([], {'action':'origin_candidates', **hints}),
-                             {'candidates':[origin], 'pin':pin})
-            self.assertFalse(address_file.exists())
-            save = {'action':'set_default_origin', **hints, 'pin':pin, 'origin':origin}
-            with self.assertRaisesRegex(ValueError, '监听端口已变更'):
-                agent.safe_code_api_origin([], {**save, 'origin':'https://gateway.example:22'})
+        with (patch.object(agent, 'API_DIRECTORY', app),
+              patch.object(agent, 'account', return_value={'username':'fixture'}),
+              patch.object(agent.pwd, 'getpwnam', return_value=entry),
+              patch.object(agent, 'safe_code_api_admin', side_effect=manage),
+              patch.object(agent, 'user_files', side_effect=work_account)):
+            issued = agent.safe_code_api({'action':'issue', 'hints':hints, 'note':'fixture'})
+            self.assertEqual(issued, {'ticket':'fixture'})
+            options = {'action':'ticket_endpoint', 'hints':hints, 'keyId':key_id}
+            self.assertEqual(agent.safe_code_api(options), {'origin':origin, 'pin':pin})
+            (state/'keys'/key_id).unlink()
             with self.assertRaises(subprocess.CalledProcessError):
-                agent.safe_code_api_origin([], {**save, 'pin':'0'*64})
-            self.assertFalse(address_file.exists())
-            self.assertEqual(agent.safe_code_api_origin([], save), {'origin':origin})
-            self.assertEqual(address_file.read_text(), origin)
-            address_file.write_text(manual)
-            calls = run_as_work_user.call_count
-            self.assertEqual(agent.safe_code_api_origin([], {'action':'origin_candidates', **hints}), {'origin':manual})
-            self.assertEqual(run_as_work_user.call_count, calls)
-            stale_once = True
-            self.assertEqual(agent.safe_code_api_origin([], save), {'origin':manual})
-            self.assertEqual(address_file.read_text(), manual)
+                agent.safe_code_api(options)
+        self.assertFalse((state/'public-origin').exists())
+
+    def test_gateway_chooses_and_saves_next_port_when_default_is_occupied(self):
+        current = {'bind': '0.0.0.0', 'port':45143}
+        (self.root/'config.json').write_text(json.dumps(current))
+        busy = OSError(errno.EADDRINUSE, 'occupied')
+        chosen = SimpleNamespace(server_port=45144)
+        with patch.object(server, 'PublicServer', side_effect=[busy, chosen]) as listen:
+            self.assertIs(server.open_public_server(self.root, current), chosen)
+            self.assertEqual([call.args[1]['port'] for call in listen.call_args_list], [45143, 45144])
+        saved = json.loads((self.root/'config.json').read_text())
+        self.assertEqual(saved, {'bind':'0.0.0.0', 'port':45144, 'autoPort':45144})
+        (self.root/'public-origin').write_text('https://forward.example')
+        with patch.object(server, 'PublicServer', side_effect=busy) as listen:
+            with self.assertRaises(OSError):
+                server.open_public_server(self.root, saved)
+            listen.assert_called_once()
+
+    def test_claude_usage_reads_interactive_slash_command_only(self):
+        cli = self.root/'.local/bin/claude'
+        cli.parent.mkdir(parents=True)
+        common = fr"""#!{sys.executable}
+import json, os, sys, tty
+if sys.argv[1:] == ['auth', 'status', '--json']:
+    print(json.dumps({{'loggedIn': True, 'authMethod': 'claude.ai'}}))
+    sys.exit(0)
+assert '--safe-mode' in sys.argv and '-p' not in sys.argv
+assert sys.stdin.isatty() and sys.stdout.isatty()
+tty.setraw(sys.stdin.fileno())
+print('Accessing workspace:', os.getcwd(), '\n❯ 1. Yes, I trust this folder', flush=True)
+assert sys.stdin.buffer.read(1) == b'\r'
+print('\n❯ Try asking a question', flush=True)
+assert sys.stdin.buffer.read(6) == b'/usage'
+"""
+        cli.write_text(common+r"""
+print('\n/usage  Show plan usage and limits', flush=True)
+assert sys.stdin.buffer.read(1) == b'\r'
+print('\nCurrent session\n\x1b[32m42% used\x1b[0m\nCurrent week (all models)\n81% remaining\n', flush=True)
+""")
+        cli.chmod(0o700)
+        with patch.dict(os.environ, {'HOME':str(self.root)}, clear=True):
+            self.assertEqual(read_subscription(timeout=3),
+                             {'five_hour': {'used':42.0}, 'seven_day': {'used':19.0}})
+            cli.write_text(common+r"""
+print('\nUsage unavailable', flush=True)
+if sys.stdin.buffer.read(1) == b'\r':
+    open(os.path.expanduser('~/unexpected-enter'), 'w').close()
+""")
+            with self.assertRaisesRegex(UsageUnavailable, '内置 /usage'):
+                read_subscription(timeout=1.5)
+        self.assertFalse((self.root/'unexpected-enter').exists())
 
     def test_install_missing_api_without_enabling_public_or_overwriting_an_existing_service(self):
         app = self.root/'desktop-api'
@@ -317,7 +368,6 @@ class SafeCodeApiTest(unittest.TestCase):
               patch.object(agent, 'secure_root_directory'),
               patch.object(agent.os, 'access', return_value=True),
               patch.object(agent.shutil, 'which', return_value='/usr/bin/node'),
-              patch('socket.socket'),
               patch.object(agent, 'run', side_effect=run) as runner,
               patch.object(agent, 'safe_code_api_admin', return_value={'enabled': False}) as admin):
             self.assertEqual(agent.safe_code_api({'action':'public_status'}), {'installed':False,'enabled':False})

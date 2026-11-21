@@ -41,9 +41,6 @@ main { width: min(100%, 1440px); margin: auto; padding: 23px 26px 28px; }
 .gateway-header { margin-bottom: 19px; }
 h1 { font-size: 24px; font-weight: 720; letter-spacing: -.025em; }
 h2 { font-size: 16px; font-weight: 670; }
-.settings-link { margin-top: 4px; padding: 3px 0; border: 0; background: transparent; color: var(--accent); font-size: 13px; }
-.settings-link:hover:not(:disabled) { background: transparent; text-decoration: underline; }
-.settings-fields { display: grid; gap: 12px; }
 .muted, small { color: var(--muted); font-size: 12px; }
 .actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 11px; }

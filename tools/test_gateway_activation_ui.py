@@ -12,6 +12,7 @@ CREATOR_URL = 'https://space.bilibili.com/49985881'
 NATIVE_FIXTURE = """
 window.issues = [];
 window.updates = [];
+window.ticketUpdates = [];
 window.activeKeys = [];
 window.concurrency = 1;
 window.usageLookups = 0;
@@ -37,10 +38,8 @@ window.chrome = {webview: {postMessage({id, op, args}) {
   } else if (args.action === 'set_concurrency') {
     window.concurrency = args.concurrency;
     result = {concurrency: window.concurrency};
-  } else if (args.action === 'settings') {
-    result = {bind: '0.0.0.0', port: 45143, publicIp: null, origin: ''};
   } else if (args.action === 'issue' && window.originMissing) {
-    error = '请先在「网关设置」中保存公网 HTTPS 地址。';
+    error = '未识别到 VPS 的公网 IP。请使用 VPS 公网 IP 重新建立 SSH 连接。';
   } else if (args.action === 'issue') {
     window.issues.push(args);
     if (window.activeKeys.some(key => key.enabled) && args.activation_code !== 'fixture-code') {
@@ -48,6 +47,9 @@ window.chrome = {webview: {postMessage({id, op, args}) {
     } else {
       result = {...window.addFixtureKey(), ticket: 'sc2.fixture'};
     }
+  } else if (args.action === 'refresh_ticket') {
+    window.ticketUpdates.push(args.ticket);
+    result = {changed:true, ticket:'sc2.updated-fixture'};
   } else if (args.action === 'update') {
     window.updates.push(args);
     result = {id: args.id};
@@ -94,11 +96,14 @@ def test_gateway_activation():
             issue_dialog = page.locator('#issued-dialog')
 
             quota = page.locator('#gateway-claude-limits')
-            assert page.evaluate('window.usageLookups') == 0
-            quota.get_by_role('button', name='查询 Claude 用量').click()
             expect(quota.locator('[data-limit="five_hour"]')).to_have_text('76.5%')
             expect(quota.locator('[data-limit="seven_day"]')).to_have_text('8%')
             assert page.evaluate('window.usageLookups') == 1
+            page.locator('#refresh').click()
+            expect(page.locator('#refresh')).to_be_enabled()
+            assert page.evaluate('window.usageLookups') == 1
+            quota.get_by_role('button', name='查询 Claude 用量').click()
+            page.wait_for_function('window.usageLookups === 2')
 
             slots = page.locator('#gateway-concurrency')
             expect(slots).to_have_text('处理槽位 1')
@@ -130,19 +135,24 @@ def test_gateway_activation():
             note.fill('保留草稿')
             code.fill('fixture-code')
             save.click()
-            settings_link = page.locator('#editor-gateway-settings')
-            expect(page.locator('#editor-status')).to_contain_text('未检测到可用的公网 HTTPS 地址')
-            expect(settings_link).to_be_focused()
-            settings_link.click()
-            settings = page.locator('#settings-dialog')
-            expect(settings).to_be_visible()
-            expect(page.locator('#settings-origin')).to_have_value('')
-            expect(page.locator('#settings-origin-hint')).to_contain_text('入站 TCP 45143')
-            settings.get_by_role('button', name='关闭', exact=True).last.click()
-            expect(settings).to_be_hidden()
+            expect(page.locator('#editor-status')).to_contain_text('未识别到 VPS 的公网 IP')
+            expect(page.locator('#settings-dialog, #editor-gateway-settings')).to_have_count(0)
             expect(note).to_have_value('保留草稿')
+            expect(save).to_be_enabled()
             editor.get_by_role('button', name='取消').click()
             page.evaluate('window.originMissing = false')
+
+            page.locator('#refresh-ticket').click()
+            old_ticket = page.locator('#old-ticket')
+            old_ticket.fill('sc1.old-fixture')
+            page.locator('#save-ticket').click()
+            expect(issue_dialog).to_be_visible()
+            expect(issue_dialog.locator('#issued-title')).to_have_text('Key 已更新')
+            expect(issue_dialog.locator('#ticket')).to_have_value('sc2.updated-fixture')
+            expect(old_ticket).to_have_value('')
+            assert page.evaluate('window.ticketUpdates') == ['sc1.old-fixture']
+            issue_dialog.get_by_role('button', name='完成').click()
+
 
             create.click()
             expect(field).to_be_visible()

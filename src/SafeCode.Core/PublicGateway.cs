@@ -1,7 +1,12 @@
 using Renci.SshNet.Common;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace SafeCode.Core;
 
@@ -13,6 +18,7 @@ public sealed partial class SshSession
     private bool gatewayAuthenticationFailed;
     private bool publicGatewayEnabled;
     private Task? gatewayHeartbeat;
+    private JsonObject? gatewaySubscription;
 
     public static bool CanResumePublicGateway(string directory, ConnectionSettings settings)
     {
@@ -28,23 +34,81 @@ public sealed partial class SshSession
         }
     }
 
-    public Task<JsonElement> ReadPublicGatewayAsync(bool runtime, CancellationToken ct) =>
-        RequestGatewayAsync(new { action = "public_status", runtime }, ct, remember: true);
-
-    public async Task<JsonElement> EnablePublicGatewayAsync(CancellationToken ct)
+    public async Task<JsonElement> ReadPublicGatewayAsync(bool runtime, CancellationToken ct)
     {
-        var status = await RequestGatewayAsync(new { action = "enable_public", accepted = true }, ct, remember: true);
-        if (status.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.True)
-            await TryConfigurePublicOriginAsync(ct);
-        return status;
+        var status = await RequestGatewayAsync(new { action = "public_status", runtime }, ct, remember: true);
+        return runtime && publicGatewayEnabled ? WithGatewaySubscription(status) : status;
     }
+
+    public async Task<JsonElement> RefreshPublicGatewaySubscriptionAsync(CancellationToken ct)
+    {
+        var result = await RequestGatewayAsync(new { action = "refresh_subscription" }, ct);
+        var value = JsonNode.Parse(result.GetRawText())!.AsObject();
+        if ((string?)value["state"] != "available" && gatewaySubscription?["sampled_at"] != null)
+        {
+            value["state"] = "stale";
+            value["windows"] = gatewaySubscription["windows"]?.DeepClone();
+            value["sampled_at"] = gatewaySubscription["sampled_at"]?.DeepClone();
+        }
+        gatewaySubscription = value;
+        return JsonSerializer.SerializeToElement(value);
+    }
+
+    private JsonElement WithGatewaySubscription(JsonElement result)
+    {
+        if (gatewaySubscription is not { } subscription) return result;
+        var value = JsonNode.Parse(result.GetRawText())!.AsObject();
+        value["subscription"] = subscription.DeepClone();
+        return JsonSerializer.SerializeToElement(value);
+    }
+
+    public Task<JsonElement> EnablePublicGatewayAsync(CancellationToken ct) =>
+        RequestGatewayAsync(new { action = "enable_public", accepted = true }, ct, remember: true);
 
     public async Task<JsonElement> ManagePublicGatewayAsync(Dictionary<string, JsonElement> request, CancellationToken ct)
     {
-        if (request.TryGetValue("action", out var action) && action.ValueKind == JsonValueKind.String &&
-            action.GetString() is "issue" or "settings")
-            await TryConfigurePublicOriginAsync(ct);
-        return await RequestGatewayAsync(request, ct);
+        string? action = request.GetValueOrDefault("action").ValueKind == JsonValueKind.String
+            ? request["action"].GetString() : null;
+        if (action == "refresh_subscription") return await RefreshPublicGatewaySubscriptionAsync(ct);
+        if (action is not ("issue" or "refresh_ticket"))
+        {
+            var result = await RequestGatewayAsync(request, ct);
+            return action == "list" ? WithGatewaySubscription(result) : result;
+        }
+
+        string sshHost = Host;
+        string[] resolved = [];
+        if (!IPAddress.TryParse(sshHost, out _) && Uri.CheckHostName(sshHost) == UriHostNameType.Dns)
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            budget.CancelAfter(TimeSpan.FromSeconds(2));
+            try
+            {
+                resolved = (await Dns.GetHostAddressesAsync(sshHost, budget.Token))
+                    .Select(address => address.ToString()).Take(8).ToArray();
+            }
+            catch (SocketException) { }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+        }
+        var hints = new { sshHost, resolved, assignedIps = Server?.AssignedIps, egressIp = Server?.ObservedEgressIp };
+        if (action == "refresh_ticket")
+        {
+            var saved = PublicGatewayTicket.Parse(request["ticket"].GetString()?.Trim() ?? "");
+            string keyId = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(saved.Key)));
+            var endpoint = await RequestGatewayAsync(new { action = "ticket_endpoint", keyId, hints }, ct);
+            var updated = saved with { Url = endpoint.GetProperty("origin").GetString()!, Pin = endpoint.GetProperty("pin").GetString()! };
+            bool changed = !new Uri(updated.Url).Equals(new Uri(saved.Url)) || updated.Pin != saved.Pin;
+            return JsonSerializer.SerializeToElement(new { ticket = changed ? updated.Encode() : null, origin = updated.Url, changed });
+        }
+        request["hints"] = JsonSerializer.SerializeToElement(hints);
+        var issued = await RequestGatewayAsync(request, ct);
+        string ticket = issued.GetProperty("ticket").GetString()!;
+        return JsonSerializer.SerializeToElement(new
+        {
+            id = issued.GetProperty("id"),
+            ticket,
+            origin = PublicGatewayTicket.Parse(ticket).Url
+        });
     }
 
     public async Task<JsonElement> InstallPublicGatewayAsync(CancellationToken ct)

@@ -1,6 +1,7 @@
 """Standalone TLS Messages API for the SafeCode desktop bridge, independent of SSH leases."""
 import argparse
 import base64
+import errno
 import fcntl
 import hashlib
 import hmac
@@ -465,7 +466,7 @@ class PublicServer(ThreadingHTTPServer):
                 return {'state': 'loading', 'windows': self.subscription['windows']}
             try:
                 try:
-                    windows = read_subscription()
+                    windows = read_subscription(timeout=6)
                 except (OSError, ValueError, AttributeError, TypeError):
                     windows = {}
                 if windows:
@@ -534,7 +535,7 @@ class PublicServer(ThreadingHTTPServer):
             if operation=='issue':
                 origin = self.public_origin or request.get('origin')
                 if not origin:
-                    raise ValueError('请先在「网关设置」中保存公网 HTTPS 地址。')
+                    raise ValueError('无法识别 VPS 的公网 IP，请从 Safe Code 的 SSH 会话创建密钥。')
                 ticket, key_id = make_key(self.root,origin)
                 self.registry.issue(key_id, note.strip(), rpm, activated=valid_activation_code(request.get('activation_code')), **billing)
                 return {'id':key_id,'ticket':ticket}
@@ -565,13 +566,35 @@ class PublicServer(ThreadingHTTPServer):
         except FileNotFoundError:
             return self.config.get('publicOrigin', '')
 
+def open_public_server(root, config):
+    port = config['port']
+    automatic = config.get('autoPort', 45143) == port and not ipaddress.ip_address(config['bind']).is_loopback
+    automatic = automatic and not config.get('publicOrigin') and not (root/PUBLIC_ORIGIN).exists()
+    candidates = [*range(port, min(port + 10, 65535) + 1), 0] if automatic else [port]
+    for candidate in candidates:
+        try:
+            server = PublicServer(root, {**config, 'port': candidate})
+        except OSError as error:
+            if error.errno != errno.EADDRINUSE or candidate == candidates[-1]:
+                raise
+            continue
+        actual_port = server.server_port
+        if actual_port != port:
+            try:
+                atomic_write(root/'config.json', json.dumps({**config, 'port': actual_port, 'autoPort': actual_port}))
+            except BaseException:
+                server.server_close()
+                raise
+        return server
+
+
 def configure_port(root, expected_port, port, *, check_available=True):
     if not 1024 <= port <= 65535:
         raise ValueError('监听端口必须是 1024 到 65535 之间的整数。')
     path = root/'config.json'
     config = json.loads(path.read_text())
     if config['port'] != expected_port:
-        raise ValueError('监听端口已变更，请重新打开网关设置。')
+        raise ValueError('监听端口已变更，请重新读取网关状态。')
     if check_available:
         try:
             with socket.socket() as probe:
@@ -690,7 +713,7 @@ if __name__=='__main__':
     else:
         with (args.state/'gateway.lock').open('a') as guard:
             fcntl.flock(guard,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            with PublicServer(args.state,json.loads((args.state/'config.json').read_text())) as server:
+            with open_public_server(args.state,json.loads((args.state/'config.json').read_text())) as server:
                 admin_socket=args.state/'admin.sock'
                 admin_socket.unlink(missing_ok=True)
                 with socketserver.UnixStreamServer(str(admin_socket),AdminHandler) as admin:

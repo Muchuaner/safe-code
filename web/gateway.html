@@ -13,13 +13,14 @@
 <body>
   <main>
     <header class="gateway-header">
-      <div><h1>网关总览</h1><button id="gateway-settings" class="settings-link" type="button" aria-haspopup="dialog">网关设置</button></div>
+      <h1>网关总览</h1>
       <div class="actions">
         <button id="refresh" type="button">刷新</button>
         <button id="gateway-concurrency" type="button" aria-haspopup="dialog" disabled>处理槽位</button>
         <div id="gateway-claude-limits" class="gateway-quota" role="group" aria-label="Claude 订阅用量">
           <span>Claude 用量</span><span hidden>5 小时剩余 <strong data-limit="five_hour"></strong></span><span hidden>7 天剩余 <strong data-limit="seven_day"></strong></span><a href="https://claude.ai/settings/usage" class="quota-link" hidden>官方用量页</a><button type="button" class="quota-refresh" aria-label="查询 Claude 用量" title="查询 Claude 用量"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8a8 8 0 1 0 0 8m0-12v4h-4"/></svg></button>
         </div>
+        <button id="refresh-ticket" type="button" aria-haspopup="dialog" disabled>更新旧 Key</button>
         <button id="create-key" class="primary" type="button" disabled>＋ 创建密钥</button>
       </div>
     </header>
@@ -172,21 +173,15 @@
     </form>
   </dialog>
 
-  <dialog id="settings-dialog" aria-labelledby="settings-title">
-    <form id="settings-form" novalidate>
-      <header class="dialog-heading"><h2 id="settings-title">网关设置</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
+  <dialog id="refresh-ticket-dialog" aria-labelledby="refresh-ticket-title">
+    <form id="refresh-ticket-form">
+      <header class="dialog-heading"><h2 id="refresh-ticket-title">更新旧 Key</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
       <div class="dialog-content">
-        <div id="settings-fields" class="settings-fields" hidden>
-          <label><span id="settings-address-name">监听 IP</span><input id="settings-address" type="text" readonly></label>
-          <label id="settings-bind-field" hidden>监听 IP<input id="settings-bind" type="text" readonly></label>
-          <label>监听端口<input id="settings-port" type="number" min="1024" max="65535" step="1" required></label>
-          <p class="muted">修改监听端口会重启网关。使用 FRP 时，需要同步修改它的目标端口。</p>
-          <label>公网 HTTPS 地址<input id="settings-origin" type="url" placeholder="https://域名:端口" maxlength="400"></label>
-          <p id="settings-origin-hint" class="muted">创建密钥时使用此地址。外部地址或端口变更后，请重新签发密钥。</p>
-        </div>
-        <p id="settings-status" class="notice" role="status"></p>
+        <p>网关地址、端口或证书变更后，粘贴原 Key 以更新接入地址。原有用量和额度会继续保留。</p>
+        <label>原接入 Key<input id="old-ticket" type="password" maxlength="2048" autocomplete="off" spellcheck="false" required></label>
+        <p id="refresh-ticket-status" class="notice" role="status" hidden></p>
       </div>
-      <footer class="dialog-footer"><button type="button" data-close>关闭</button><button id="save-origin" type="button" disabled>保存公网地址</button><button class="primary" id="save-settings" type="submit" disabled>保存监听端口</button></footer>
+      <footer class="dialog-footer"><button type="button" data-close>取消</button><button id="save-ticket" class="primary" type="submit">更新 Key</button></footer>
     </form>
   </dialog>
 
@@ -206,7 +201,6 @@
           <small id="activation-detail">创建更多密钥需要激活码，关注主播可以获得激活码。</small>
         </div>
         <p id="editor-status" class="notice" role="status" hidden></p>
-        <button id="editor-gateway-settings" class="settings-link" type="button" hidden>打开网关设置</button>
       </div>
       <footer class="dialog-footer"><button type="button" data-close>取消</button><button class="primary" id="save-key" type="submit">创建密钥</button></footer>
     </form>
@@ -215,8 +209,9 @@
   <dialog id="issued-dialog" aria-labelledby="issued-title">
     <header class="dialog-heading"><h2 id="issued-title">密钥已创建</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
     <div class="dialog-content">
-      <p>完整密钥仅在这里显示。请复制到支持 sc2 凭证的新版 Safe Code 中使用。</p>
-      <textarea id="ticket" rows="6" readonly aria-label="新建的 Safe Code API Key"></textarea>
+      <p id="issued-help">完整密钥仅在这里显示。请复制到新版 Safe Code 中使用。</p>
+      <p id="issued-origin" class="muted" hidden></p>
+      <textarea id="ticket" rows="6" readonly aria-label="Safe Code API Key"></textarea>
       <p id="copy-status" class="notice" role="status" hidden></p>
     </div>
     <footer class="dialog-footer"><button type="button" data-close>完成</button><button id="copy-key" class="primary" type="button">复制密钥</button></footer>

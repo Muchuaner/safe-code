@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using SafeCode.Core;
 using static SafeCode.Desktop.DesktopKeyAccess;
+using Ticket = SafeCode.Core.PublicGatewayTicket;
 
 namespace SafeCode.Desktop;
 

@@ -84,6 +84,9 @@ public sealed partial class SshSession : IDisposable
             await sftp.UploadFileAsync(agent, remoteDirectory + "/agent.py",cancellationToken); sftp.ChangePermissions(remoteDirectory + "/agent.py", 600);
             using var network = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.network.py")!;
             await sftp.UploadFileAsync(network, remoteDirectory + "/network.py",cancellationToken); sftp.ChangePermissions(remoteDirectory + "/network.py", 600);
+            using var usage = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.PublicApi.claude_usage.py")!;
+            await sftp.UploadFileAsync(usage, remoteDirectory + "/claude_usage.py", cancellationToken);
+            sftp.ChangePermissions(remoteDirectory + "/claude_usage.py", 600);
             WriteKnownHost();
             Log?.Invoke("部署模块已就绪，检查服务器环境…");
             Server = await RequestAsync<ServerInfo>("inspect", null, cancellationToken);

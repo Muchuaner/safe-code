@@ -144,7 +144,7 @@ internal sealed class MacBackend : IDisposable
                 return await KeyAccess().EnableAsync(Read("key"),ct,replace:Flag("replace"),useSaved:Flag("useSaved"));
             case "desktopKey.disable": return await KeyAccess().DisableAsync(ct);
             case "safeCodeApi.refreshSubscription":
-                return await RequireGatewaySession().RequestGatewayAsync(new { action = "refresh_subscription" },ct);
+                return await RequireGatewaySession().RefreshPublicGatewaySubscriptionAsync(ct);
             case "safeCodeApi.publicStatus":
                 return await ReadGatewayStatusAsync(RequireGatewaySession(),ct);
             case "safeCodeApi.install":
