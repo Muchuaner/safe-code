@@ -976,6 +976,7 @@ class CloudCliProgress:
         self.dispatched = False
         self.dispatch_ms = None
         self.forwarded_text = None
+        self.workspace_prompt_fingerprint = None
         self.turn_position = None
         self.edit_anchor = None
         self.session = None
@@ -1531,6 +1532,8 @@ class CloudCliBackend:
             db.execute('CREATE TABLE IF NOT EXISTS edit_turns (scope TEXT NOT NULL, session TEXT NOT NULL, '
                        'prefix TEXT NOT NULL, position INTEGER NOT NULL, anchor TEXT NOT NULL, '
                        'updated REAL NOT NULL, PRIMARY KEY (scope, session, prefix))')
+            db.execute('CREATE TABLE IF NOT EXISTS workspace_prompts (scope TEXT NOT NULL, session TEXT NOT NULL, '
+                       'position INTEGER NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (scope, session))')
 
     def verified_model_options(self):
         if not self.config.get('desktopQuestions'):
@@ -1714,12 +1717,30 @@ class CloudCliBackend:
                 'args': ['-I', '-B', CLOUDCLI_MCP_SCRIPT, '--client-id', self.config['hostControl']['clientId'],
                          '--workspace', workspace]}
 
+    @staticmethod
+    def ssh_workspace_instruction(target, system, workspace, command):
+        if workspace is None:
+            return (f'Use `{command}` to do project work on {target} (`{system}`). '
+                    'Use the folder specified by the user. Ask for its path if the task needs it and it is unknown.')
+        return (
+            f'The user is working in `{workspace}` on {target} (`{system}`).\n'
+            'Treat that folder as the project root for this session. When the user says '
+            '“here”, “this project”, or “my computer”, use this workspace.\n\n'
+            f'For project work, use `{command}` to connect to the target device. '
+            'Start each remote command in the project root and resolve relative paths there. '
+            'Use the same connection to read, search, edit, run Git, build, and test. '
+            "Read the project's existing instructions there when starting work. "
+            'Save project changes and generated files in that workspace.\n\n'
+            'The VPS runs CloudCLI and keeps the conversation state. When a task requires project access, '
+            'start with the appropriate action over SSH. If an operation fails, diagnose the actual error '
+            'and continue if it can be resolved within the existing permissions. '
+            'Ask the user only when their input or approval is needed.'
+        )
+
     def host_instruction(self, project, workspace):
         if self.device:
             system = 'Windows' if self.device['platform'] == 'windows' else 'macOS'
-            directory = f'Working directory: {workspace}. ' if workspace else ''
-            return (f"Target computer: {self.device['hostname']} ({system}). {directory}"
-                    f"Connect using `{self.device['command']}` and execute commands on the target device.")
+            return self.ssh_workspace_instruction(self.device['hostname'], system, workspace, self.device['command'])
         host = self.config['hostControl']
         if host is None:
             return ''
@@ -1730,7 +1751,7 @@ class CloudCliBackend:
         client = host['clientId']
         allow_ssh_shell = host.get('allowSshShell', False)
         ssh_config = home/'.ssh/safe-code-host'/client/'config'
-        tool_instruction = 'Use the SafeCode host tools for files on the selected computer. '
+        command = None
         try:
             if not ssh_config.is_file() or ssh_config.is_symlink() or not Path(CLOUDCLI_MCP_SCRIPT).is_file():
                 raise ValueError()
@@ -1746,8 +1767,6 @@ class CloudCliBackend:
                     if not alias or info.st_uid != os.geteuid() or info.st_mode & 0o077:
                         raise ValueError()
                     command = shlex.join(['ssh', '-F', str(ssh_config), alias[1]])
-                    tool_instruction = (f'To perform the task on the target computer, connect with `{command}`. '
-                                        'Execute the commands over SSH in the stated working directory on the Mac. ')
             if project == self.config['projectPath']:
                 with (home/'.claude.json').open('r') as stream:
                     config = json.load(stream)
@@ -1760,8 +1779,11 @@ class CloudCliBackend:
         except (OSError, ValueError, AttributeError, KeyError, TypeError):
             raise CloudCliError('SafeCode local host control is unavailable for the CloudCLI project', 409) from None
         target = host['deviceName'] or 'the selected computer'
+        if command is not None:
+            return self.ssh_workspace_instruction(target, 'macOS', workspace, command)
         return (f'Target computer: {target}. Working directory: {workspace}. '
-                f'{tool_instruction}The VPS filesystem is a different machine.')
+                'Use the SafeCode host tools for files on the selected computer. '
+                'The VPS filesystem is a different machine.')
 
     def call(self, payload, progress):
         try:
@@ -1900,7 +1922,7 @@ class CloudCliBackend:
                        header={'Authorization': 'Bearer '+self.question_token()}, timeout=timeout,
                        suppress_origin=True, http_no_proxy=['127.0.0.1'])
 
-    def call_chat(self, payload, progress, attachments, plan_mode, edit=None):
+    def call_chat(self, payload, progress, attachments, plan_mode, edit=None, *, title_text):
         connect, websocket_error = cloudcli_websocket()
         session = payload.get('sessionId')
         try:
@@ -1921,7 +1943,7 @@ class CloudCliBackend:
                         if error.status != 409:
                             raise
                     fields = {'provider': 'claude', 'projectPath': payload['projectPath'],
-                              'initialMessage': payload['message']}
+                              'initialMessage': title_text}
                     created = self.web_request('POST', '/api/providers/sessions', json.dumps(fields).encode())
                     session = created.get('data', {}).get('sessionId')
                     if not isinstance(session, str) or not CLOUDCLI_SESSION_ID.fullmatch(session):
@@ -2085,6 +2107,9 @@ class CloudCliBackend:
             if namespace.rpartition(':')[2]:
                 self.save_turn_state(db, namespace, session, previous_history, progress, anchor)
                 db.execute('UPDATE requests SET reply=NULL WHERE scope=? AND identity<>?', (namespace, identity))
+            if progress.workspace_prompt_fingerprint is not None:
+                db.execute('INSERT OR REPLACE INTO workspace_prompts VALUES (?, ?, ?, ?)',
+                           (namespace, session, progress.turn_position, progress.workspace_prompt_fingerprint))
             db.execute('UPDATE requests SET reply=? WHERE identity=?', (json.dumps(result, ensure_ascii=False), identity))
         model = self.model(data['model'])
         manager.count_usage({'id': result['id'], 'model': model, 'usage': usage}, result['id'])
@@ -2097,6 +2122,8 @@ class CloudCliBackend:
                    (namespace, session, progress.model, anchor, now))
         if progress.edit_anchor is not None:
             db.execute('DELETE FROM edit_turns WHERE scope=? AND session=? AND position>=?',
+                       (namespace, session, progress.turn_position))
+            db.execute('DELETE FROM workspace_prompts WHERE scope=? AND session=? AND position>=?',
                        (namespace, session, progress.turn_position))
         if anchor is not None:
             db.execute('INSERT OR REPLACE INTO edit_turns VALUES (?, ?, ?, ?, ?, ?)',
@@ -2139,6 +2166,7 @@ class CloudCliBackend:
             db.execute('DELETE FROM sessions WHERE scope=? AND session=?', (namespace, session))
             db.execute('DELETE FROM edit_turns WHERE scope=? AND session=?', (namespace, session))
             db.execute('DELETE FROM session_state WHERE scope=? AND session=?', (namespace, session))
+            db.execute('DELETE FROM workspace_prompts WHERE scope=? AND session=?', (namespace, session))
 
     @contextmanager
     def conversation_slot(self, conversation):
@@ -2257,6 +2285,7 @@ class CloudCliBackend:
                                 or (tool_choice.get('type') == 'tool' and tool_choice.get('name') == name)):
                             native_tools.add(name)
             position = len(messages)-1
+            workspace_prompt_fingerprint = None
             with closing(sqlite3.connect(self.path)) as db, db:
                 with db:
                     db.execute('DELETE FROM requests WHERE created<?', (now-30*86400,))
@@ -2264,6 +2293,9 @@ class CloudCliBackend:
                     db.execute('DELETE FROM session_projects WHERE updated<?', (now-30*86400,))
                     db.execute('DELETE FROM session_state WHERE updated<?', (now-30*86400,))
                     db.execute('DELETE FROM edit_turns WHERE updated<?', (now-30*86400,))
+                    db.execute('DELETE FROM workspace_prompts WHERE NOT EXISTS '
+                               '(SELECT 1 FROM sessions WHERE sessions.scope=workspace_prompts.scope '
+                               'AND sessions.session=workspace_prompts.session)')
                 prior = db.execute('SELECT reply FROM requests WHERE identity=?', (identity,)).fetchone()
                 if prior is not None:
                     if prior[0] is None:
@@ -2303,8 +2335,14 @@ class CloudCliBackend:
                 payload['projectPath'] = project
                 host_instruction = self.host_instruction(project, workspace)
                 if host_instruction:
-                    # CloudCLI derives its initial sidebar label from the first words.
-                    payload['message'] = task+'\n\nSafeCode workspace context: '+host_instruction
+                    fingerprint = hashlib.sha256(host_instruction.encode()).hexdigest()
+                    known = db.execute('SELECT 1 FROM workspace_prompts '
+                                       'WHERE scope=? AND session=? AND position<? AND fingerprint=?',
+                                       (namespace, payload.get('sessionId'), position, fingerprint)).fetchone()
+                    if known is None:
+                        # Keep the user's opening words available for the CloudCLI title.
+                        payload['message'] = task+'\n\nSafeCode workspace context:\n'+host_instruction
+                        workspace_prompt_fingerprint = fingerprint
                 self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
                 # cause an automatic second dispatch of this scoped task.
@@ -2313,9 +2351,10 @@ class CloudCliBackend:
                 manager.started += 1
             progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model, tool_approvals)
             progress.forwarded_text = payload['message']
+            progress.workspace_prompt_fingerprint = workspace_prompt_fingerprint
             progress.turn_position = position
             progress.edit_anchor = edit[0] if edit is not None else None
-            events = (self.call_chat(payload, progress, attachments, plan_mode, edit) if chat_mode
+            events = (self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=task) if chat_mode
                       else self.call(payload, progress))
             try:
                 return self.advance(manager, data, messages, stream, namespace, identity, events, progress,

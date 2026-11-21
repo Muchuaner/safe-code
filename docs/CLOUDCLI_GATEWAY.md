@@ -1,6 +1,6 @@
 # Claude Desktop 经 CloudCLI 访问 Mac
 
-CloudCLI 模式把 Claude Desktop 当作聊天界面。SafeCode 收到 Messages 请求后，从最后一条用户消息提取任务，加入简短的设备和工作目录说明，再以 CloudCLI Key 调用同一台 VPS 上的 `POST /api/agent`。CloudCLI 自己启动 Claude Code，构建原生系统提示并加载项目工具。SafeCode 针对每个网关客户端保存 CloudCLI 会话关联，后续消息继续同一会话。
+CloudCLI 模式把 Claude Desktop 当作聊天界面。SafeCode 收到 Messages 请求后，从最后一条用户消息提取任务，再以 CloudCLI Key 调用同一台 VPS 上的 `POST /api/agent`。CloudCLI 自己启动 Claude Code，构建原生系统提示并加载项目工具。对于已绑定的本机目录，SafeCode 在会话首轮附加设备、项目根目录和现有执行通道的说明。续聊使用同一 CloudCLI 会话和原有上下文。已有会话升级后会在下一轮补发一次。若编辑历史删掉了携带说明的消息，网关会在替换消息中补回当前说明。
 
 Claude Desktop 的系统提示、客户端工具定义、模型输出预算、全量历史和授权资料不随这条请求转发。SafeCode 在本地处理 Desktop 的网关连通性探测、起名和分支名建议。探测只验证 Desktop 到 SafeCode 的连通性。CloudCLI 用首条消息的开头生成会话标题，因此 SafeCode 将实际任务放在设备说明之前。短任务的标题仍可能带上部分设备说明。
 

@@ -775,7 +775,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 messages = [*payload['messages'], {'role': 'assistant', 'content': response['content']},
                             {'role': 'user', 'content': 'Follow up'}]
                 self.assertEqual(self.request(conversation('unused', messages=messages))[0], 200)
-                self.assertIn(desktop, self.cloud.requests[-1][2]['message'])
+                self.assertEqual(self.cloud.requests[-1][2]['message'], 'Follow up')
 
     def test_ssh_prompt_uses_the_private_bridge_alias_for_an_authorized_project(self):
         workspace = '/Users/example/Desktop'
@@ -792,12 +792,36 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.start_gateway()
         (self.home/'.claude.json').write_text('{}')
         payload = conversation('Identify this machine.', system=desktop_environment(workspace))
-        self.assertEqual(self.request(payload)[0], 200)
+        status, reply = self.request(payload)
+        self.assertEqual(status, 200)
         prompt = self.cloud.requests[-1][2]['message']
         self.assertIn(f'`ssh -F {ssh_config} desk-mac`', prompt)
-        self.assertIn('Working directory: '+workspace, prompt)
+        self.assertIn(f'The user is working in `{workspace}` on Example Mac (`macOS`).', prompt)
+        self.assertIn('Start each remote command in the project root', prompt)
         self.assertNotIn('host tools', prompt)
         self.assertTrue(prompt.startswith('Identify this machine.\n\nSafeCode workspace context:'))
+        self.start_gateway()
+        history = [*payload['messages'], {'role': 'assistant', 'content': reply['content']},
+                   {'role': 'user', 'content': 'Continue in the same folder.'}]
+        status, reply = self.request(conversation('unused', messages=history, system=payload['system']))
+        self.assertEqual(status, 200)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], 'Continue in the same folder.')
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
+        # A conversation saved before the marker existed receives the new prompt once.
+        with closing(sqlite3.connect(self.manager.cloudcli.path)) as db, db:
+            db.execute('DROP TABLE workspace_prompts')
+        self.start_gateway()
+        history += [{'role': 'assistant', 'content': reply['content']}, {'role': 'user', 'content': 'Resume after upgrade.'}]
+        status, reply = self.request(conversation('unused', messages=history, system=payload['system']))
+        self.assertEqual(status, 200)
+        resumed = self.cloud.requests[-1][2]
+        self.assertEqual(resumed['sessionId'], CLOUD_SESSION)
+        self.assertIn(f'`ssh -F {ssh_config} desk-mac`', resumed['message'])
+        history += [{'role': 'assistant', 'content': reply['content']}, {'role': 'user', 'content': 'Another follow-up.'}]
+        self.assertEqual(self.request(conversation('unused', messages=history, system=payload['system']))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], 'Another follow-up.')
+
         self.session = str(uuid.uuid4())
         child = workspace+'/Notes'
         backend = self.manager.cloudcli
@@ -810,14 +834,16 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(self.request(conversation('Example.', system=desktop_environment(child)))[0], 200)
         self.assertFalse(settings.exists())
         self.assertIn('ssh -F', self.cloud.requests[-1][2]['message'])
+        self.assertNotIn('sessionId', self.cloud.requests[-1][2])
         self.session = str(uuid.uuid4())
         outside = conversation('Example.', system=desktop_environment('/Users/example/Other'))
         self.assertEqual(self.request(outside)[0], 200)
         self.assertNotIn('ssh -F', self.cloud.requests[-1][2]['message'])
         self.session = str(uuid.uuid4())
         ssh_config.write_text('# Safe Code host bridge '+CLIENT_ID+'\nHost desk-mac other\n')
+        attempts = len(self.cloud.requests)
         self.assertEqual(self.request(payload)[0], 409)
-        self.assertEqual(len(self.cloud.requests), 3)
+        self.assertEqual(len(self.cloud.requests), attempts)
         self.assertNoNativeFallback()
 
     def test_public_cloudcli_backend_rejects_unrestricted_direct_listeners(self):
@@ -1184,6 +1210,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
     def test_attachments_use_cloudcli_upload_and_the_same_conversation(self):
         self.enable_cloudcli_web_fixture()
+        self.manager.cloudcli.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
+                                       'alias': 'desk-mac', 'command': 'ssh desk-mac'}
         actions = []
         events = [{'kind': 'text', 'role': 'assistant', 'content': 'Fixture attachments received.', 'sessionId': CLOUD_SESSION},
                   {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION}]
@@ -1194,7 +1222,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
                                               'data': base64.b64encode(screenshot).decode()}},
                    {'type': 'document', 'title': 'Report.pdf', 'source': {'type': 'base64', 'media_type': 'application/pdf',
                                                                         'data': base64.b64encode(pdf).decode()}}]
-        payload = conversation('unused', messages=[{'role': 'user', 'content': content}])
+        payload = conversation('unused', messages=[{'role': 'user', 'content': content}],
+                               system=desktop_environment('/Users/example/Work'))
         with patch.object(gateway, 'cloudcli_websocket', return_value=(
                 lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
             status, reply = self.request(payload)
@@ -1202,13 +1231,16 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertIn('Fixture attachments received.', reply['content'][0]['text'])
             self.assertEqual(self.request(payload), (200, reply))
             self.assertEqual(len(self.cloud.created_sessions), 1)
-            self.assertEqual(self.cloud.registered_projects, [str(self.project)])
+            session = self.cloud.created_sessions[0]
+            self.assertEqual(session['initialMessage'], 'Inspect these fixtures.')
+            self.assertEqual(self.cloud.registered_projects, [session['projectPath']])
             self.assertEqual(self.cloud.uploads, [('attachment-1.png', 'image/png', screenshot),
                                                   ('Report.pdf', 'application/pdf', pdf)])
             self.assertEqual(len(actions), 1)
             command = actions[0]
-            self.assertEqual((command['type'], command['sessionId'], command['content']),
-                             ('chat.send', CLOUD_SESSION, 'Inspect these fixtures.'))
+            self.assertEqual((command['type'], command['sessionId']), ('chat.send', CLOUD_SESSION))
+            self.assertTrue(command['content'].startswith('Inspect these fixtures.\n\nSafeCode workspace context:'))
+            self.assertIn('/Users/example/Work', command['content'])
             self.assertEqual([a['path'] for a in command['options']['attachments']],
                              ['/example/assets/0-attachment-1.png', '/example/assets/1-Report.pdf'])
             self.assertFalse(self.cloud.requests)
@@ -1216,6 +1248,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                          {'role': 'user', 'content': 'Continue in the same conversation.'}]
             self.assertEqual(self.request(conversation('unused', messages=follow_up))[0], 200)
             self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+            self.assertEqual(self.cloud.requests[-1][2]['message'], 'Continue in the same conversation.')
             content[-1]['source'] = {'type': 'url', 'url': 'https://example.com/report.pdf'}
             self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 400)
             self.assertEqual(len(actions), 1)
@@ -1357,8 +1390,10 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
     def test_edit_only_rewinds_to_a_verified_anchor_in_the_same_conversation(self):
         self.enable_cloudcli_web_fixture()
+        self.manager.cloudcli.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
+                                       'alias': 'desk-mac', 'command': 'ssh desk-mac'}
         self.cloud.track_history = True
-        first = conversation('The original first question')
+        first = conversation('The original first question', system=desktop_environment('/Users/example/Work'))
         status, reply = self.request(first)
         self.assertEqual(status, 200)
         prefix = [*first['messages'], {'role': 'assistant', 'content': reply['content']}]
@@ -1398,6 +1433,21 @@ class CloudCLIGatewayTests(unittest.TestCase):
                   {'role': 'user', 'content': 'Continue from the replacement.'}]
         self.assertEqual(self.request(conversation('unused', messages=latest))[0], 200)
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], 'Continue from the replacement.')
+
+        first_anchor = self.cloud.history[0]['transcriptAnchorId']
+        events[0]['anchorId'] = first_anchor
+
+        def replace_first(action):
+            actions.append(action)
+            self.cloud.history[:] = [cloud_user(action['content'])]
+
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *a, **kw: ChatSocketFixture(replace_first, events), OSError)):
+            self.assertEqual(self.request(conversation('Replace the first question'))[0], 200)
+        self.assertEqual(actions[-1]['anchorId'], first_anchor)
+        self.assertIn('SafeCode workspace context:', actions[-1]['content'])
+        self.assertIn('/Users/example/Work', actions[-1]['content'])
 
     def test_desktop_one_time_permission_confirms_the_original_remote_operation(self):
         self.config['desktopToolApprovals'] = True
