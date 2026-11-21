@@ -397,7 +397,10 @@ function appDialog(message,options={}){
     $('#app-message-details').hidden=!options.details;$('#app-message-details').open=false;$('#app-message-details').ontoggle=()=>{$('#app-message-details summary').textContent=$('#app-message-details').open?'收起服务器指纹':'查看服务器指纹';};$('#app-message-detail-text').textContent=options.details||'';
     const yes=$('#app-message-confirm'),no=$('#app-message-cancel');yes.textContent=options.confirm||'知道了';no.textContent=options.cancel||'取消';no.hidden=!options.cancel;
     yes.onclick=()=>dialog.close('confirm');no.onclick=()=>dialog.close('cancel');dialog.querySelector('[data-dialog-dismiss]').onclick=()=>dialog.close('cancel');
-    dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.returnValue='';dialog.showModal();(options.cancel?no:yes).focus();
+    dialog.addEventListener('close',()=>{
+      if(options.clearOnClose)$('#app-message-body').textContent='';
+      resolve(dialog.returnValue==='confirm');
+    },{once:true});dialog.returnValue='';dialog.showModal();(options.cancel?no:yes).focus();
   }));appDialogQueue=next.catch(()=>{});return next;
 }
 function showAppMessage(message,options={}){return appDialog(String(message),options);}

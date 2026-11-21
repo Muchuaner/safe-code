@@ -374,8 +374,9 @@ class PublicServer(ThreadingHTTPServer):
     def __init__(self, root, config):
         cloudcli = load_cloudcli_config()
         if cloudcli and not ipaddress.ip_address(config['bind']).is_loopback and (
-                cloudcli.get('hostControl') or not cloudcli.get('desktopToolApprovals')):
-            raise ValueError('Direct CloudCLI gateways require Desktop tool approvals and no shared workstation.')
+                cloudcli.get('hostControl') or
+                cloudcli.get('desktopQuestions') and not cloudcli.get('desktopToolApprovals')):
+            raise ValueError('Direct CloudCLI gateways cannot use a shared workstation or disable configured Desktop tool approvals.')
         self.root, self.config = root, {**config, 'cloudcli': cloudcli}
         self.frp_port = config.get('deviceFrpPort')
         if self.frp_port is not None and (type(self.frp_port) is not int or not 1024 <= self.frp_port <= 65535):

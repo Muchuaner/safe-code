@@ -202,7 +202,7 @@
 .claude-desktop-dialog>.titlebar{flex-shrink:0}
 .claude-desktop-dialog .config-body{display:flex;flex-direction:column;min-height:0;max-height:none;padding:0;overflow:hidden}
 .claude-desktop-content{min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:23px 25px}
-.claude-desktop-dialog.public-api-only .claude-desktop-content>:not(#safe-code-api-intro,#safe-code-api-progress,#safe-code-api-deploy-claude,#safe-code-cloudcli-config){display:none!important}
+.claude-desktop-dialog.public-api-only .claude-desktop-content>:not(#safe-code-api-intro,#safe-code-api-progress,#safe-code-cloudcli-config){display:none!important}
 #safe-code-cloudcli-config:not([hidden]){display:grid;gap:8px;margin-top:10px}
 #safe-code-cloudcli-config label{display:grid;gap:4px;font-size:12px}
 #safe-code-cloudcli-config .text-button{justify-self:start}
@@ -358,3 +358,5 @@ html.native-dialog-window dialog.native-dialog-front{
 .gateway-quota strong[data-low="true"]{color:#9f3839}
 .gateway-quota:is([data-state="stale"],[data-state="unavailable"],[data-state="unreachable"],[data-state="rate_limited"]){background:#f6f8f5;color:#63736b}
 .gateway-quota:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+#app-message-body{white-space:pre-line;overflow-wrap:anywhere}

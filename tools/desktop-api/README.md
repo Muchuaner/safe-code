@@ -2,11 +2,11 @@
 
 Safe Code 的 Claude Desktop 网关通过同一台 VPS 上的 CloudCLI 处理对话。CloudCLI 负责调用 Claude Code。Safe Code 只传送当前任务、会话信息及已授权的设备和目录说明。
 
-在 Safe Code 通过 SSH 登录 VPS 后，打开主窗口底部的「公网网关」。首次部署时，先安装并打开 CloudCLI，建立网页登录账户，再在 CloudCLI 设置中创建 API Key。在 Safe Code 的网关面板填写这份 CloudCLI API Key 和网页登录资料，点击「安装 API 服务」或「升级 CloudCLI 网关」。Safe Code 用不含任务的请求验证 CloudCLI 连接，验证成功后才启动网关。使用公网 IP 与当前网关端口签发 Safe Code Key，无需域名。
+在 Safe Code 通过 SSH 登录 VPS 后，打开「公网网关」，选择安装或升级。Safe Code 会检查同一台 VPS 上的 CloudCLI，需要时自动安装。CloudCLI 尚无网页账户时，Safe Code 通过 CloudCLI 的首次注册接口生成账户和密码、创建后端 API Key，并弹窗显示账号和密码。已有网关配置会直接复用。已有网页账户但还没配置网关时，在面板粘贴 CloudCLI 设置中生成的 API Key 即可。验证连接不发送模型任务。使用公网 IP 与当前网关端口签发 Safe Code Key，无需域名。
 
 首次安装的网关仍需明确同意「保证自用」才能启用公网。升级时会保留原监听端口、TLS 证书、Safe Code Key、用量及公网启用状态。旧版本的原生网关需要从新版 Safe Code 升级后才能用新版 Key 接入。两种 Key 的用途不同，CloudCLI API Key 只用于同一台 VPS 上的后端连接，Safe Code Key 才填写到设备的「API 接入」。
 
-公网直连的 CloudCLI 网关使用 Desktop 工具审批。带有固定工作站配置的网关继续通过原有回环监听和受信任的 HTTPS 入口运行。可查看 [CloudCLI 工作区与设备控制配置](../../docs/CLOUDCLI_GATEWAY.md)。
+自动创建账户的网关支持 Desktop 工具审批。只配置 CloudCLI API Key 时，对话走 CloudCLI Agent API，附件、计划确认和交互式工具审批需要 CloudCLI 的网页授权。公网 Key 仅供自用。带有固定工作站配置的网关继续通过原有回环监听和受信任的 HTTPS 入口运行。可查看 [CloudCLI 工作区与设备控制配置](../../docs/CLOUDCLI_GATEWAY.md)。
 
 用量分析可切换近 1 小时、24 小时和 7 天，查看请求与 Token 吞吐、处理和排队耗时分布、请求结果以及错误与限流趋势。并发与排队显示实时状态，模型用量显示历史累计值。图表使用网关已有的请求日志，明细保留 30 天，列表可查看最近 30 条。请求日志只保存模型、密钥 ID 等统计字段。
 

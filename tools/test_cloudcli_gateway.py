@@ -821,8 +821,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertNoNativeFallback()
 
     def test_public_cloudcli_backend_rejects_unrestricted_direct_listeners(self):
-        with patch.object(public_gateway, 'load_cloudcli_config', return_value=self.config):
-            with self.assertRaisesRegex(ValueError, 'require Desktop tool approvals'):
+        with patch.object(public_gateway, 'load_cloudcli_config', return_value={**self.config,'hostControl':{'clientId':CLIENT_ID}}):
+            with self.assertRaisesRegex(ValueError, 'shared workstation'):
                 public_gateway.PublicServer(self.working_state, {'bind': '0.0.0.0', 'port': 0})
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
@@ -834,29 +834,58 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
 
-    def test_direct_deployment_preserves_listener_and_stores_only_verified_cloudcli_settings(self):
+    def test_existing_cloudcli_account_accepts_only_agent_key(self):
         self.config_path.unlink()
-        self.use_patch(patch.object(setup_cloudcli, 'cloudcli_websocket'))
-        # Self-hosted production uses port 3001; use an isolated loopback fixture here.
+        self.use_patch(patch.object(setup_cloudcli, 'cloudcli_needs_setup', return_value=False))
         verify = self.use_patch(patch.object(setup_cloudcli, 'verify_cloudcli_agent',
             side_effect=lambda config: gateway.verify_cloudcli_agent({**config,'port':self.config['port']})))
-        login = self.use_patch(patch.object(setup_cloudcli, 'cloudcli_web_login',
-            side_effect=lambda port, credentials: gateway.cloudcli_web_login(self.config['port'], credentials)))
+        login = self.use_patch(patch.object(setup_cloudcli, 'cloudcli_web_login'))
         state = self.working_state/'config.json'
         listener = {'bind': '0.0.0.0', 'port': 45144}
         state.write_text(json.dumps(listener))
-        with self.assertRaisesRegex(ValueError, '创建网页账户'):
-            setup_cloudcli.prepare_public_gateway(self.home, self.working_state, {})
+        self.assertEqual(setup_cloudcli.prepare_public_gateway(self.home, self.working_state, {}),
+                         {'cloudcliKeyRequired':True})
         self.assertFalse(self.config_path.exists())
-        options = {'apiKey':API_KEY, 'username':'fixture', 'password':'fixture-password'}
-        result = setup_cloudcli.prepare_public_gateway(self.home, self.working_state, options)
+        result = setup_cloudcli.prepare_public_gateway(self.home, self.working_state, {'apiKey':API_KEY})
         self.assertEqual(result['bind'], listener['bind'])
+        self.assertIsNone(result['cloudcliAccount'])
         self.assertEqual(hashlib.sha256(self.config_path.read_bytes()).hexdigest(), result['created'])
         self.assertEqual(self.config_path.stat().st_mode & 0o777, 0o600)
-        self.assertTrue(gateway.load_cloudcli_config()['desktopToolApprovals'])
+        self.assertFalse(gateway.load_cloudcli_config()['desktopToolApprovals'])
         self.assertEqual(json.loads(state.read_text()), listener)
         verify.assert_called_once()
-        login.assert_called_once()
+        login.assert_not_called()
+        self.assertFalse(self.cloud.requests)
+        self.assertNoNativeFallback()
+
+    def test_first_cloudcli_setup_registers_once_and_recovers_pending_credentials(self):
+        self.config_path.unlink()
+        needs_setup = self.use_patch(patch.object(setup_cloudcli, 'cloudcli_needs_setup', side_effect=[True, False]))
+        self.use_patch(patch.object(setup_cloudcli, 'cloudcli_websocket'))
+        gate = self.use_patch(patch.object(setup_cloudcli, 'verify_cloudcli_agent',
+            side_effect=[gateway.GatewayError('fixture failure'), None]))
+        login = self.use_patch(patch.object(setup_cloudcli, 'cloudcli_web_login', return_value='fixture.web.token'))
+        seen = []
+
+        def auth(path, payload, token=None):
+            seen.append(path)
+            if path == '/api/auth/register':
+                return {'success': True, 'user': {'username':payload['username']}, 'token':'fixture.web.token'}
+            self.assertEqual(token, 'fixture.web.token')
+            return {'success':True, 'apiKey':{'apiKey':API_KEY}}
+
+        with patch.object(setup_cloudcli, 'cloudcli_auth_request', side_effect=auth):
+            with self.assertRaisesRegex(gateway.GatewayError, 'fixture failure'):
+                setup_cloudcli.prepare_public_gateway(self.home, self.working_state, {})
+            self.assertFalse(self.config_path.exists())
+            result = setup_cloudcli.prepare_public_gateway(self.home, self.working_state, {})
+        self.assertEqual(seen, ['/api/auth/register','/api/settings/api-keys'])
+        self.assertEqual(needs_setup.call_count, 2)
+        self.assertEqual(gate.call_count, 2)
+        login.assert_called_once_with(3001,result['cloudcliAccount'])
+        self.assertGreaterEqual(len(result['cloudcliAccount']['password']), 24)
+        self.assertTrue(gateway.load_cloudcli_config()['desktopToolApprovals'])
+        self.assertEqual(gateway.load_cloudcli_config()['apiKey'], API_KEY)
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
 

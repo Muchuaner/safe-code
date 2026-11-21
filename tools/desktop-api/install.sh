@@ -6,7 +6,7 @@ bind=${2:?specify the listener IP address}
 port=${3:-45143}
 public_ip=${4:-}
 home=$(getent passwd "$user" | cut -d: -f6)
-[[ -n "$home" && "$user" =~ ^[a-z_][a-z0-9_-]*$ && "$user" != root && -x "$home/.local/bin/claude" ]]
+[[ -n "$home" && "$user" =~ ^[a-z_][a-z0-9_-]*$ && "$user" != root ]]
 app=/opt/safe-code/desktop-api
 state="$home/.local/state/safe-code-desktop-api"
 dir=$(cd "$(dirname "$0")" && pwd)

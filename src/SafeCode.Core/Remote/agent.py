@@ -1155,33 +1155,68 @@ def install_safe_code_api(entry, command, options, work_python):
             # Stage code under a root-owned directory and send credentials only over stdin.
             credentials = options.get('cloudcli') or {}
             if not isinstance(credentials,dict):
-                raise ValueError('CloudCLI 登录资料格式无效。')
-            for field in ('apiKey','password'):
-                if isinstance(credentials.get(field),str) and credentials[field]:
-                    REDACTIONS.append(credentials[field])
-            if credentials and run([*work_python,'-I','-c','import websocket'],check=False,timeout=5).returncode:
-                apt(['python3-websocket'])
+                raise ValueError('CloudCLI API Key 格式无效。')
+            key = credentials.get('apiKey')
+            if key is not None and not isinstance(key,str):
+                raise ValueError('CloudCLI API Key 格式无效。')
+            credentials = {'apiKey': key} if key else {}
+            if key:
+                REDACTIONS.append(key)
             with tempfile.TemporaryDirectory(prefix='safe-code-cloudcli-') as preflight:
                 path = Path(preflight)
                 path.chmod(0o755)
                 for name in ('configure_cloudcli.py','desktop_gateway.py','host_control_mcp.py'):
                     shutil.copyfile(Path(folder)/name, path/name)
                     (path/name).chmod(0o644)
-                checked = json.loads(run([*work_python,'-B',str(path/'configure_cloudcli.py'),
-                    '--prepare-public-gateway',str(work_home/API_STATE)],stdin=json.dumps(credentials),timeout=28).stdout)
+                configure = [*work_python,'-B',str(path/'configure_cloudcli.py')]
+                config_path = work_home/'.config/safe-code/cloudcli-gateway.json'
+                if not config_path.is_file():
+                    probe = run([*configure,'--check-cloudcli'],check=False,timeout=8)
+                    if probe.returncode:
+                        if active('safe-code-cloudcli'):
+                            raise RuntimeError('CloudCLI 已运行，但本机授权接口不可用，请检查服务。')
+                        if Path('/etc/systemd/system/safe-code-cloudcli.service').is_file():
+                            run(['systemctl','start','safe-code-cloudcli'],timeout=30)
+                        else:
+                            log('正在安装 CloudCLI…')
+                            setup_cloud({})
+                        for _ in range(6):
+                            probe = run([*configure,'--check-cloudcli'],check=False,timeout=8)
+                            if not probe.returncode:
+                                break
+                            time.sleep(1)
+                        if probe.returncode:
+                            raise RuntimeError('CloudCLI 已启动，但本机授权接口尚未就绪。')
+                    pending = config_path.with_name('cloudcli-gateway-onboarding.json')
+                    if (not credentials and (json.loads(probe.stdout)['needsSetup'] or pending.is_file())
+                        and run([*work_python,'-I','-c','import websocket'],check=False,timeout=5).returncode):
+                        apt(['python3-websocket'])
+                checked = json.loads(run([*configure,'--prepare-public-gateway',str(work_home/API_STATE)],
+                    stdin=json.dumps(credentials),timeout=40).stdout)
                 if checked.get('error'):
                     raise ValueError(checked['error'])
+                if checked.get('cloudcliKeyRequired'):
+                    return {'cloudcliKeyRequired':True}
                 bind = checked['bind']
                 created = checked.get('created')
+                generated = checked.get('cloudcliAccount')
                 def rollback_config():
                     if created:
-                        run([*work_python,'-B',str(path/'configure_cloudcli.py'),
-                             '--rollback-public-gateway',created],timeout=8)
+                        run([*configure,'--rollback-public-gateway',created],timeout=8)
+                def installed(state):
+                    if generated:
+                        REDACTIONS.append(generated['password'])
+                        try:
+                            run([*configure,'--finish-public-gateway'],check=False,timeout=8)
+                        except (OSError,subprocess.TimeoutExpired):
+                            pass
+                        state['cloudcliAccount'] = generated
+                    return state
                 if upgrading:
                     if existing.get('enabled') and safe_code_api_admin(command, {'action':'settings'}).get('busy'):
                         rollback_config()
                         raise RuntimeError('网关还有请求正在处理，请等网关空闲后再升级。')
-                    return upgrade_safe_code_api(command, Path(folder), rollback_config)
+                    return installed(upgrade_safe_code_api(command, Path(folder), rollback_config))
                 try:
                     run(['/bin/bash',str(Path(folder)/'install.sh'),entry.pw_name,bind,'45143'],
                         env={**os.environ,'SAFECODE_INITIAL_API_INSTALL':'1'},timeout=60)
@@ -1189,7 +1224,7 @@ def install_safe_code_api(entry, command, options, work_python):
                     while time.monotonic()<deadline:
                         try:
                             state = safe_code_api_admin(command,status,timeout=2)
-                            if state.get('backend')=='cloudcli':return state
+                            if state.get('backend')=='cloudcli':return installed(state)
                         except (RuntimeError,subprocess.TimeoutExpired):
                             pass
                         time.sleep(.25)

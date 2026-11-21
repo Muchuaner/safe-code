@@ -15,7 +15,12 @@ with sync_playwright() as p:
    if(m.op==='host.enable')window.hostEnabled=m.args.riskAccepted===true;
    if(m.op==='claudeDesktop.start')window.desktopFixture={active:true,managed:true,configured:true,installed:true,endpoint:'http://127.0.0.1:18899'};
    if(m.op==='claudeDesktop.stop')window.desktopFixture={active:false,managed:false,configured:false,installed:true};
-   if(m.op==='safeCodeApi.install')window.publicGatewayFixture={enabled:window.publicGatewayFixture?.enabled||false,backend:'cloudcli',cloudcliConfigured:true};
+   const needsKey=m.op==='safeCodeApi.install'&&window.cloudInstalled&&!window.publicGatewayFixture?.cloudcliConfigured&&!m.args.cloudcli;
+   const generatesAccount=m.op==='safeCodeApi.install'&&!window.cloudInstalled&&window.publicGatewayFixture?.cloudcliConfigured===false;
+   if(m.op==='safeCodeApi.install'&&!needsKey){
+     window.cloudInstalled=true;
+     window.publicGatewayFixture={enabled:window.publicGatewayFixture?.enabled||false,backend:'cloudcli',cloudcliConfigured:true};
+   }
    if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true,backend:'cloudcli',cloudcliConfigured:true};
    if(m.op==='cloud.install')window.cloudInstalled=true;
    const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:
@@ -26,6 +31,8 @@ with sync_playwright() as p:
      m.op==='login.restoreSaved'?{host:'192.0.2.42',username:'fixture',password:'fixture-only',port:22}:
      ['host.status','host.enable'].includes(m.op)?{enabled:window.hostEnabled,state:window.hostEnabled?'connected':'disabled',alias:'mac',command:'',message:'未启用'}:
      m.op==='bridge.status'?{running:false}:
+     needsKey?{cloudcliKeyRequired:true}:
+     generatesAccount?{...window.publicGatewayFixture,cloudcliAccount:{username:'generated-fixture',password:'generated-fixture-password'}}:
      ['safeCodeApi.publicStatus','safeCodeApi.install','safeCodeApi.enablePublic'].includes(m.op)?
        window.publicGatewayFixture||{enabled:true,backend:'cloudcli',active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
      m.op==='window.gateway.open'?true:
@@ -112,7 +119,7 @@ with sync_playwright() as p:
  page.locator('#claude-desktop-manage').click()
  expect(page.locator('#claude-desktop-dialog')).to_be_visible()
  expect(page.locator('#safe-code-api-enable')).to_have_text('安装 API 服务')
- expect(page.locator('#safe-code-api-progress')).to_contain_text('配置 CloudCLI')
+ expect(page.locator('#safe-code-api-progress')).to_contain_text('自动检查并准备 CloudCLI')
  expect(page.locator('#safe-code-api-manage')).to_be_disabled()
  page.locator('#safe-code-api-enable').click()
  page.locator('#app-message-cancel').click()
@@ -158,28 +165,29 @@ with sync_playwright() as p:
   badge.click()
   expect(newbie.locator('#claude-desktop-title')).to_have_text('Safe Code API · 公网网关')
   enable=newbie.locator('#safe-code-api-enable')
-  if not cloud_installed:
-   expect(newbie.locator('#safe-code-api-progress')).to_contain_text('安装 CloudCLI')
-   newbie.locator('#safe-code-api-deploy-claude').click()
-   newbie.wait_for_function("calls.some(message=>message.op==='cloud.install')")
-   newbie.locator('#operation-log-dialog .close').click()
-   badge.click()
-  expect(newbie.locator('#safe-code-cloudcli-config')).to_be_visible()
-  enable.click()
-  expect(newbie.locator('#safe-code-api-progress')).to_contain_text('请填写 CloudCLI API Key')
-  newbie.locator('#safe-code-cloudcli-api-key').fill('fixture-cloudcli-key')
-  newbie.locator('#safe-code-cloudcli-username').fill('fixture')
-  newbie.locator('#safe-code-cloudcli-password').fill('fixture-password')
+  expect(newbie.locator('#safe-code-cloudcli-config')).to_be_hidden()
   enable.click()
   expect(newbie.locator('#app-message-confirm')).to_have_text('升级网关' if cloud_installed else '安装 API 服务')
   newbie.locator('#app-message-confirm').click()
-  if not cloud_installed:
+  if cloud_installed:
+   expect(newbie.locator('#safe-code-cloudcli-config')).to_be_visible()
+   expect(newbie.locator('#safe-code-cloudcli-config input')).to_have_count(1)
+   newbie.locator('#safe-code-cloudcli-api-key').fill('fixture-cloudcli-key')
+   enable.click()
+   newbie.locator('#app-message-confirm').click()
+   newbie.wait_for_function("calls.filter(message=>message.op==='safeCodeApi.install').length===2")
+   assert newbie.evaluate("calls.filter(message=>message.op==='safeCodeApi.install').at(-1).args.cloudcli")=={'apiKey':'fixture-cloudcli-key'}
+  else:
+   expect(newbie.locator('#app-message-title')).to_have_text('CloudCLI 账户已创建')
+   expect(newbie.locator('#app-message-body')).to_contain_text('generated-fixture-password')
+   newbie.locator('#app-message-confirm').click()
+   expect(newbie.locator('#app-message-body')).to_be_empty()
+   assert newbie.evaluate("calls.find(message=>message.op==='safeCodeApi.install').args")=={'accepted':True}
    expect(enable).to_have_text('公网启用')
    enable.click()
    expect(newbie.locator('#app-message-confirm')).to_have_text('保证自用')
    newbie.locator('#app-message-confirm').click()
   expect(enable).to_have_text('公网已启用')
-  assert newbie.evaluate("calls.find(message=>message.op==='safeCodeApi.install').args.cloudcli.apiKey")=='fixture-cloudcli-key'
   expect(newbie.locator('#safe-code-cloudcli-api-key')).to_have_value('')
   newbie.locator('#safe-code-api-manage').click()
   newbie.wait_for_function("calls.some(message=>message.op==='window.gateway.open')")

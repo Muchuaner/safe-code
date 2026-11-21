@@ -6,11 +6,13 @@ from contextlib import contextmanager
 import fcntl
 import getpass
 import hashlib
+from http.client import HTTPConnection, HTTPException
 import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import sys
 import tempfile
@@ -98,21 +100,79 @@ def select_host(home, requested):
     return active[0]
 
 
+def cloudcli_auth_request(path, payload=None, token=None):
+    headers = {'Content-Type': 'application/json'}
+    if token:
+        headers['Authorization'] = 'Bearer '+token
+    connection = HTTPConnection('127.0.0.1', 3001, timeout=6)
+    try:
+        connection.request('GET' if payload is None else 'POST', path,
+                           None if payload is None else json.dumps(payload), headers)
+        with connection.getresponse() as response:
+            value = json.loads(response.read(32768))
+            if response.status != 200 or not isinstance(value, dict):
+                raise ValueError()
+            return value
+    except (OSError, HTTPException, ValueError):
+        raise ValueError('CloudCLI 未能完成账户授权，请检查服务状态后重试。') from None
+    finally:
+        connection.close()
+
+
+def cloudcli_needs_setup():
+    status = cloudcli_auth_request('/api/auth/status')
+    if type(status.get('needsSetup')) is not bool:
+        raise ValueError('CloudCLI 未返回有效的首次配置状态。')
+    return status['needsSetup']
+
+
+def provision_cloudcli_key(pending_path, needs_setup):
+    original, record = read_object(pending_path, allow_missing=True)
+    if original is None:
+        record = {'username': 'safecode-'+secrets.token_hex(4),
+                  'password': secrets.token_urlsafe(24)}
+        atomic_settings(pending_path, record, None)
+        original, _ = read_object(pending_path)
+    credentials = {name: record[name] for name in ('username', 'password')}
+    if needs_setup:
+        login = cloudcli_auth_request('/api/auth/register', credentials)
+        token = login.get('token')
+        if (login.get('success') is not True or not isinstance(token, str)
+                or login.get('user', {}).get('username') != credentials['username']):
+            raise ValueError('CloudCLI 未确认新账户，请重试网关安装。')
+    else:
+        token = cloudcli_web_login(3001, credentials)
+    key = record.get('apiKey')
+    if not key:
+        created = cloudcli_auth_request('/api/settings/api-keys', {'keyName': 'Safe Code Gateway'}, token)
+        key = created.get('apiKey', {}).get('apiKey')
+        if not isinstance(key, str) or not key:
+            raise ValueError('CloudCLI 未返回新建的 API Key，请重试网关安装。')
+        atomic_settings(pending_path, {**credentials, 'apiKey': key}, original)
+    return key, credentials
+
+
 def prepare_public_gateway(home, state, options):
-    """Configure a fresh direct gateway using the operator's existing CloudCLI account."""
+    """Reuse an existing backend, or authorize a new one through CloudCLI's loopback API."""
     config_path = home/CLOUDCLI_CONFIG
+    pending_path = config_path.with_name('cloudcli-gateway-onboarding.json')
     _, listener = read_object(state/'config.json', allow_missing=True)
     created = None
+    generated = None
     with setup_lock(config_path.parent):
         config = load_cloudcli_config(home)
-        trusted_ingress = config and (config['hostControl'] or not config['desktopToolApprovals'])
+        trusted_ingress = config and (config['hostControl'] or (
+            config['desktopQuestions'] and not config['desktopToolApprovals']))
         bind = listener.get('bind', '127.0.0.1' if trusted_ingress else '0.0.0.0')
         direct = not ipaddress.ip_address(bind).is_loopback
         if config is None:
-            key = options.get('apiKey', '')
-            username, password = options.get('username', ''), options.get('password', '')
-            if not key or not username or not password:
-                raise ValueError('请先安装并打开 CloudCLI，创建网页账户和 CloudCLI API Key，再填写网关配置。')
+            key = options.get('apiKey')
+            if not key:
+                needs_setup = cloudcli_needs_setup()
+                if not needs_setup and not pending_path.exists():
+                    return {'cloudcliKeyRequired': True}
+                cloudcli_websocket()
+                key, generated = provision_cloudcli_key(pending_path, needs_setup)
             project = home/'.local/share/safe-code/cloudcli-workspace'
             if not project.resolve().is_relative_to(home):
                 raise ValueError('CloudCLI 项目目录必须位于 VPS 工作账户的主目录内。')
@@ -120,26 +180,24 @@ def prepare_public_gateway(home, state, options):
             config = {
                 'apiKey': key, 'projectPath': str(project), 'port': 3001,
                 'models': ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
-                'desktopQuestions': {'username': username, 'password': password},
-                'desktopToolApprovals': True,
             }
+            if generated:
+                config.update(desktopQuestions=generated, desktopToolApprovals=True)
             try:
                 config = cloudcli_config(config)
             except ValueError:
-                raise ValueError('CloudCLI API Key 或网页登录资料格式无效。') from None
+                raise ValueError('CloudCLI API Key 格式无效。') from None
             verify_cloudcli_agent(config)
-            cloudcli_web_login(config['port'], config['desktopQuestions'])
-            cloudcli_websocket()
             atomic_settings(config_path, config, None)
             created = hashlib.sha256(config_path.read_bytes()).hexdigest()
         else:
-            if direct and (config['hostControl'] or not config['desktopToolApprovals']):
+            if direct and trusted_ingress:
                 raise ValueError('公网直连需要启用 Desktop 工具审批，且不能绑定共享的工作站。已有工作站配置可沿用回环监听及 HTTPS 入口。')
             verify_cloudcli_agent(config)
-            if direct:
+            if direct and config['desktopToolApprovals']:
                 cloudcli_web_login(config['port'], config['desktopQuestions'])
                 cloudcli_websocket()
-    return {'bind': bind, 'created': created}
+    return {'bind': bind, 'created': created, 'cloudcliAccount': generated}
 
 
 @contextmanager
@@ -339,7 +397,16 @@ def main():
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 3 and sys.argv[1] == '--rollback-public-gateway' and os.getuid():
+    if len(sys.argv) == 2 and sys.argv[1] == '--check-cloudcli' and os.getuid():
+        try:
+            print(json.dumps({'needsSetup': cloudcli_needs_setup()}))
+        except ValueError:
+            sys.exit(1)
+    elif len(sys.argv) == 2 and sys.argv[1] == '--finish-public-gateway' and os.getuid():
+        config_path = Path.home()/CLOUDCLI_CONFIG
+        with setup_lock(config_path.parent):
+            config_path.with_name('cloudcli-gateway-onboarding.json').unlink(missing_ok=True)
+    elif len(sys.argv) == 3 and sys.argv[1] == '--rollback-public-gateway' and os.getuid():
         config_path = Path.home()/CLOUDCLI_CONFIG
         with setup_lock(config_path.parent):
             original, _ = read_object(config_path, allow_missing=True)

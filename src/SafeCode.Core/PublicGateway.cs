@@ -153,8 +153,13 @@ public sealed partial class SshSession
             files.Add(resource[prefix..],
                 Convert.ToBase64String(buffer.ToArray()));
         }
-        return await RequestGatewayAsync(new { action = "install", accepted = true, files, cloudcli }, ct,
-            timeout: TimeSpan.FromSeconds(225));
+        var result = await RequestGatewayAsync(new { action = "install", accepted = true, files, cloudcli }, ct,
+            timeout: TimeSpan.FromMinutes(12));
+        if (Server is { } server
+            && (result.TryGetProperty("backend", out var backend) && backend.GetString() == "cloudcli"
+                || result.TryGetProperty("cloudcliKeyRequired", out var keyRequired) && keyRequired.ValueKind == JsonValueKind.True))
+            server.CloudReady = true;
+        return result;
     }
 
     private void RememberPublicGateway(JsonElement result)

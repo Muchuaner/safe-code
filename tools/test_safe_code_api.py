@@ -361,8 +361,10 @@ if sys.stdin.buffer.read(1) == b'\r':
         def run(args, **kwargs):
             if args[0] == 'systemctl':
                 return SimpleNamespace(stdout='fixture\n' if 'User' in args else 'not-found\n')
+            if '--check-cloudcli' in args:
+                return SimpleNamespace(returncode=0,stdout=json.dumps({'needsSetup':False}))
             if '--prepare-public-gateway' in args:
-                preflight = {'bind':expected_bind} if cloud_config.exists() else {'error':'请先配置 CloudCLI'}
+                preflight = {'bind':expected_bind} if cloud_config.exists() else {'cloudcliKeyRequired':True}
                 return SimpleNamespace(stdout=json.dumps(preflight))
             if args[0] == '/bin/bash':
                 self.assertEqual(args[2:], ['fixture', expected_bind, '45143'])
@@ -401,8 +403,7 @@ if sys.stdin.buffer.read(1) == b'\r':
             self.assertTrue(any(call.args[0][1:3]==['disable','--now'] for call in runner.call_args_list))
             start_fails = False
             cloud_config.unlink()
-            with self.assertRaisesRegex(ValueError, '请先配置 CloudCLI'):
-                agent.safe_code_api(install)
+            self.assertEqual(agent.safe_code_api(install), {'cloudcliKeyRequired':True})
             self.assertFalse(app.exists())
             cloud_config.touch()
             self.assertEqual(agent.safe_code_api(install), {'enabled':False, 'backend':'cloudcli'})
