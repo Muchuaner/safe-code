@@ -19,9 +19,9 @@ with sync_playwright() as p:
    const generatesAccount=m.op==='safeCodeApi.install'&&!window.cloudInstalled&&window.publicGatewayFixture?.cloudcliConfigured===false;
    if(m.op==='safeCodeApi.install'&&!needsKey){
      window.cloudInstalled=true;
-     window.publicGatewayFixture={enabled:window.publicGatewayFixture?.enabled||false,backend:'cloudcli',gatewayRevision:2,cloudcliConfigured:true};
+     window.publicGatewayFixture={enabled:window.publicGatewayFixture?.enabled||false,backend:'cloudcli',gatewayRevision:3,cloudcliConfigured:true};
    }
-   if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true,backend:'cloudcli',gatewayRevision:2,cloudcliConfigured:true};
+   if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true,backend:'cloudcli',gatewayRevision:3,cloudcliConfigured:true};
    if(m.op==='cloud.install')window.cloudInstalled=true;
    const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:
      m.op==='desktopKey.status'?{configured:false,running:false}:
@@ -34,7 +34,7 @@ with sync_playwright() as p:
      needsKey?{cloudcliKeyRequired:true}:
      generatesAccount?{...window.publicGatewayFixture,cloudcliAccount:{username:'generated-fixture',password:'generated-fixture-password'}}:
      ['safeCodeApi.publicStatus','safeCodeApi.install','safeCodeApi.enablePublic'].includes(m.op)?
-       window.publicGatewayFixture||{enabled:true,backend:'cloudcli',gatewayRevision:2,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
+       window.publicGatewayFixture||{enabled:true,backend:'cloudcli',gatewayRevision:3,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
      m.op==='window.gateway.open'?true:
      m.op==='connect'?{server:{statuses:{account:true,claude:window.claudeInstalled},cloudReady:window.cloudInstalled,assignedIps:[],osVersion:'24.04'}}:
      m.op==='cloud.install'?{statuses:{account:true},cloudReady:true,assignedIps:[],osVersion:'24.04'}:

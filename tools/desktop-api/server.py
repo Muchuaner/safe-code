@@ -32,7 +32,7 @@ from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegi
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 2
+GATEWAY_REVISION = 3
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中确认「保证自用」并启用公网。'
 # A shared promotional code, checked only at the gateway.
 ACTIVATION_CODE_SHA256 = bytes.fromhex('89debb851e3fc69c8e163a3b6462a3493e93d38ae8cf0132e419bd9e0b32d2b9')
