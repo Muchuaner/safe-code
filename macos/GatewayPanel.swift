@@ -1,23 +1,45 @@
 import AppKit
 
 @MainActor
-final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     typealias Reply = (Result<Any, Error>) -> Void
     typealias Manage = (String, [String: Any], @escaping Reply) -> Void
 
     private let manage: Manage
     private let table = NSTableView()
+    private let scroller = NSScrollView()
     private let notice = NSTextField(wrappingLabelWithString: "正在读取网关…")
-    private let tabs = NSSegmentedControl(labels: ["密钥管理", "用量分析", "请求记录"], trackingMode: .selectOne, target: nil, action: nil)
-    private let search = NSSearchField()
-    private let filter = NSPopUpButton()
-    private let sort = NSPopUpButton()
-    private let periods = NSPopUpButton()
-    private let analyticsMode = NSPopUpButton()
-    private let keyActions = NSPopUpButton()
+    private var tabs: [GatewayButton] = []
+    private var selectedTab = 0
+    private var renderedTab = -1
+    private var renderedRows: [[String: Any]] = []
+    private let search = NSTextField()
+    private let filter = GatewaySelect()
+    private let sort = GatewaySelect()
+    private let requestFilter = GatewaySelect()
+    private var clearKeyFilter: GatewayButton!
+    private let requestCaption = NSTextField(labelWithString: "")
+    private var searchBox: NSView!
+    private let empty = NSTextField(labelWithString: "")
     private let totals = NSStackView()
-    private let trend = GatewayTrendView()
+    private var analysis: GatewayAnalysis!
+    private var listToolbar: NSView!
+    private var listFrame: NSView!
+    private var metricTitles: [NSTextField] = []
     private var totalLabels: [NSTextField] = []
+    private var metricDetails: [NSTextField] = []
+    private let queueNow = NSTextField(labelWithString: "")
+    private let queueWaiting = NSTextField(labelWithString: "")
+    private let queueCapacity = NSProgressIndicator()
+    private var queue: NSView!
+    private var tableHeight: NSLayoutConstraint!
+    private var keyPage = 0
+    private let keyCount = NSTextField(labelWithString: "")
+    private let pageNumber = NSTextField(labelWithString: "")
+    private var previousPage: GatewayButton!
+    private var nextPage: GatewayButton!
+    private var pagination: NSView!
+    private static let keysPerPage = 15
     private var toolbarButtons: [NSButton] = []
     private var quotaButton: NSButton!
     private var snapshot: [String: Any] = [:]
@@ -40,100 +62,186 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
 
     override func loadView() {
         view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = GatewayStyle.paper.cgColor
+
+        scroller.drawsBackground = false
+        scroller.hasVerticalScroller = true
+        scroller.autohidesScrollers = true
+        scroller.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scroller)
+        let page = GatewayPageView()
+        scroller.documentView = page
+        page.translatesAutoresizingMaskIntoConstraints = false
         let root = NSStackView()
         root.orientation = .vertical
         root.alignment = .leading
-        root.spacing = 14
+        root.spacing = 10
         root.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(root)
+        page.addSubview(root)
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 22),
-            root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -22),
-            root.topAnchor.constraint(equalTo: view.topAnchor, constant: 18),
-            root.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -18)
+            scroller.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scroller.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scroller.topAnchor.constraint(equalTo: view.topAnchor),
+            scroller.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            page.leadingAnchor.constraint(equalTo: scroller.contentView.leadingAnchor),
+            page.topAnchor.constraint(equalTo: scroller.contentView.topAnchor),
+            page.widthAnchor.constraint(equalTo: scroller.contentView.widthAnchor),
+            root.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 26),
+            root.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -26),
+            root.topAnchor.constraint(equalTo: page.topAnchor, constant: 23),
+            root.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -28)
         ])
 
-        let heading = NSTextField(labelWithString: "网关总览")
-        heading.font = .systemFont(ofSize: 22, weight: .semibold)
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let heading = GatewayStyle.label("网关总览", size: SafeCodeType.large, weight: .semibold)
+        heading.setContentCompressionResistancePriority(.required, for: .horizontal)
         let refresh = button("刷新", #selector(refresh(_:)))
         let slots = button("处理槽位", #selector(editSlots))
-        quotaButton = button("Claude 用量", #selector(queryQuota))
-        quotaButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "查询用量")
-        quotaButton.imagePosition = .imageTrailing
+        quotaButton = button("Claude 用量", #selector(queryQuota), kind: .quota)
+        quotaButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        quotaButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
         quotaButton.setAccessibilityLabel("查询 Claude 用量")
         let update = button("更新旧 Key", #selector(updateTicket))
-        let create = button("创建密钥", #selector(createKey))
+        let create = button("＋ 创建密钥", #selector(createKey), kind: .primary)
         toolbarButtons = [refresh, slots, update, create]
-        let toolbar = NSStackView(views: [heading, spacer, refresh, slots, quotaButton, update, create])
-        toolbar.alignment = .centerY
-        toolbar.spacing = 8
-        for item in toolbarButtons + [quotaButton!] { item.heightAnchor.constraint(equalToConstant: 28).isActive = true }
+        let toolbar = row([heading, NSView(), refresh, slots, quotaButton, update, create])
         append(toolbar, to: root)
+        root.setCustomSpacing(19, after: toolbar)
 
+        totals.alignment = .top
         totals.distribution = .fillEqually
-        totals.spacing = 16
-        for title in ["启用密钥", "累计请求", "累计 Token", "累计估算费用", "执行中 / 排队"] {
-            let label = NSTextField(labelWithString: title)
-            label.textColor = .secondaryLabelColor
-            let value = NSTextField(labelWithString: "—")
-            value.font = .monospacedDigitSystemFont(ofSize: 21, weight: .semibold)
-            let stack = NSStackView(views: [label, value])
+        totals.spacing = 11
+        let titles = ["启用密钥", "累计请求", "累计 Token", "累计估算费用", "执行中 / 排队"]
+        for (index, title) in titles.enumerated() {
+            let label = GatewayStyle.label(title, color: GatewayStyle.muted, size: SafeCodeType.small, weight: .medium)
+            let value = GatewayStyle.label("—", size: SafeCodeType.large, weight: .bold)
+            value.font = .monospacedDigitSystemFont(ofSize: SafeCodeType.large, weight: .bold)
+            let detail = GatewayStyle.label("—", color: GatewayStyle.muted, size: SafeCodeType.small)
+            let stack = NSStackView(views: [label, value, detail])
             stack.orientation = .vertical
             stack.alignment = .leading
-            stack.spacing = 5
-            totals.addArrangedSubview(stack)
+            stack.spacing = 4
+            let card = GatewayStyle.surface(stack, inset: NSEdgeInsets(top: 13, left: 15, bottom: 12, right: 15),
+                                            fill: index == titles.count-1 ? GatewayStyle.wash : GatewayStyle.surface)
+            totals.addArrangedSubview(card)
+            metricTitles.append(label)
             totalLabels.append(value)
+            metricDetails.append(detail)
         }
         append(totals, to: root)
-        notice.textColor = .secondaryLabelColor
+
+        queueNow.font = .systemFont(ofSize: SafeCodeType.small, weight: .semibold)
+        queueNow.textColor = GatewayStyle.ink
+        queueWaiting.font = .systemFont(ofSize: SafeCodeType.small)
+        queueWaiting.textColor = GatewayStyle.muted
+        queueCapacity.isIndeterminate = false
+        queueCapacity.style = .bar
+        queueCapacity.controlSize = .small
+        queueCapacity.widthAnchor.constraint(equalToConstant: 132).isActive = true
+        queue = GatewayStyle.surface(row([queueNow, NSView(), queueCapacity, queueWaiting], spacing: 12),
+              inset: NSEdgeInsets(top: 9, left: 14, bottom: 9, right: 14), radius: 8)
+        queue.isHidden = true
+        append(queue, to: root)
+
+        notice.font = .systemFont(ofSize: SafeCodeType.small)
+        notice.textColor = GatewayStyle.muted
         append(notice, to: root)
 
-        tabs.selectedSegment = 0
-        tabs.target = self
-        tabs.action = #selector(changeTab)
-        root.addArrangedSubview(tabs)
+        tabs = ["密钥管理", "用量分析", "请求记录"].enumerated().map { index, title in
+            let tab = button(title, #selector(changeTab(_:)), kind: .tab)
+            tab.tag = index
+            return tab
+        }
+        let tabStrip = NSStackView(views: [row(tabs + [NSView()], spacing: 19), GatewayStyle.rule()])
+        tabStrip.orientation = .vertical
+        tabStrip.spacing = 0
+        tabStrip.alignment = .width
+        append(tabStrip, to: root)
 
         search.placeholderString = "搜索备注或密钥 ID"
+        search.setAccessibilityLabel("搜索备注或密钥 ID")
+        search.font = .systemFont(ofSize: SafeCodeType.medium)
         search.delegate = self
-        search.sendsSearchStringImmediately = true
-        search.widthAnchor.constraint(greaterThanOrEqualToConstant: 190).isActive = true
+        search.isBezeled = false
+        search.drawsBackground = false
+        searchBox = GatewayStyle.surface(search, inset: NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10),
+                                             radius: 7)
+        searchBox.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        searchBox.widthAnchor.constraint(equalToConstant: 260).isActive = true
         filter.addItems(withTitles: ["全部状态", "已启用", "已撤销"])
-        sort.addItems(withTitles: ["新建在前", "最近使用", "请求最多"])
-        periods.addItems(withTitles: ["近 1 小时", "近 24 小时", "近 7 天"])
-        periods.selectItem(at: 1)
-        analyticsMode.addItems(withTitles: ["请求趋势", "按模型", "请求结果", "处理耗时"])
-        keyActions.addItems(withTitles: ["密钥操作", "编辑", "用量详情", "查看请求", "撤销", "删除"])
-        for (control, action) in [(filter,#selector(updateRows)), (sort,#selector(updateRows)),
-                                  (analyticsMode,#selector(updateRows)), (periods,#selector(changePeriod)),
-                                  (keyActions,#selector(useKeyAction))] {
+        sort.addItems(withTitles: ["新建在前", "最近使用", "请求数最多", "Token 最多"])
+        requestFilter.addItems(withTitles: ["全部结果", "成功", "失败", "受限", "已取消"])
+        for (control, title, action) in [(filter,"密钥状态",#selector(resetKeyPage)), (sort,"密钥排序",#selector(resetKeyPage)),
+                                  (requestFilter,"请求结果",#selector(updateRows))] {
             control.target = self
             control.action = action
+            control.font = .systemFont(ofSize: SafeCodeType.medium)
+            control.setAccessibilityLabel(title)
+            control.heightAnchor.constraint(equalToConstant: 34).isActive = true
         }
-        let filters = NSStackView(views: [search, filter, sort, keyActions, periods, analyticsMode])
-        filters.spacing = 8
-        root.addArrangedSubview(filters)
-        append(trend, to: root)
-        trend.heightAnchor.constraint(equalToConstant: 90).isActive = true
+        clearKeyFilter = button("显示所有密钥", #selector(clearHistory))
+        requestCaption.font = .systemFont(ofSize: SafeCodeType.small)
+        requestCaption.textColor = GatewayStyle.muted
+        listToolbar = row([searchBox, filter, sort, requestFilter, clearKeyFilter, NSView(), requestCaption])
+        append(listToolbar, to: root)
+        analysis = GatewayAnalysis(changePeriod: { [weak self] in self?.loadSnapshot(background: false) },
+                                   showRequests: { [weak self] in self?.selectTab(2) })
+        append(analysis, to: root)
 
         table.dataSource = self
         table.delegate = self
-        table.usesAlternatingRowBackgroundColors = true
-        table.style = .inset
-        table.rowHeight = 28
+        table.style = .plain
+        table.backgroundColor = GatewayStyle.surface
+        table.wantsLayer = true
+        table.layer?.backgroundColor = GatewayStyle.surface.cgColor
+        table.selectionHighlightStyle = .none
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.allowsColumnReordering = false
+        table.rowHeight = 60
+        table.intercellSpacing = .zero
         table.target = self
         table.doubleAction = #selector(usageSelectedKey)
+        table.headerView = NSTableHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 36))
         let scroll = NSScrollView()
         scroll.documentView = table
+        scroll.backgroundColor = GatewayStyle.surface
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
-        scroll.borderType = .lineBorder
-        scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
-        append(scroll, to: root)
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+        scroll.autohidesScrollers = true
+        tableHeight = scroll.heightAnchor.constraint(equalToConstant: 38)
+        tableHeight.isActive = true
+        empty.font = .systemFont(ofSize: SafeCodeType.medium)
+        empty.textColor = GatewayStyle.muted
+        empty.alignment = .center
+        empty.heightAnchor.constraint(equalToConstant: 62).isActive = true
+        let contents = NSStackView(views: [scroll, empty])
+        contents.orientation = .vertical
+        contents.alignment = .width
+        contents.spacing = 0
+        listFrame = GatewayStyle.surface(contents)
+        append(listFrame, to: root)
+
+        keyCount.font = .systemFont(ofSize: SafeCodeType.small)
+        keyCount.textColor = GatewayStyle.muted
+        pageNumber.font = keyCount.font
+        pageNumber.textColor = GatewayStyle.muted
+        previousPage = button("‹", #selector(pageKeys(_:)))
+        previousPage.tag = -1
+        previousPage.setAccessibilityLabel("上一页")
+        nextPage = button("›", #selector(pageKeys(_:)))
+        nextPage.tag = 1
+        nextPage.setAccessibilityLabel("下一页")
+        pagination = row([keyCount, NSView(), previousPage, pageNumber, nextPage])
+        append(pagination, to: root)
         updateRows()
         updateButtons()
+    }
+
+    private func row(_ views: [NSView], spacing: CGFloat = 8) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.alignment = .centerY
+        stack.spacing = spacing
+        return stack
     }
 
     func start() {
@@ -152,11 +260,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         timer = nil
     }
 
-    private func button(_ title: String, _ action: Selector) -> NSButton {
-        let view = NSButton(title: title, target: self, action: action)
-        view.bezelStyle = .rounded
-        view.controlSize = .regular
-        return view
+    private func button(_ title: String, _ action: Selector, kind: GatewayButton.Kind = .standard) -> GatewayButton {
+        GatewayButton(title, kind: kind, target: self, action: action)
     }
 
     private func append(_ child: NSView, to parent: NSStackView) {
@@ -169,20 +274,24 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     private func loadSnapshot(background: Bool) {
         guard !fetching, !busy, !checkingQuota || snapshot.isEmpty else { return }
         fetching = true
-        if !background { notice.stringValue = "正在读取网关…" }
+        if !background && snapshot.isEmpty { showNotice("正在读取网关…") }
         var args: [String: Any] = ["details": true, "background": background]
-        if tabs.selectedSegment == 1 { args["analytics"] = ["1h", "24h", "7d"][periods.indexOfSelectedItem] }
+        if selectedTab == 1 { args["analytics"] = analysis.period }
         manage("list", args) { [weak self] result in
             guard let self else { return }
             self.fetching = false
             switch result {
             case .success(let response):
                 self.snapshot = response as? [String: Any] ?? [:]
-                self.notice.stringValue = self.keyHistory.map { "请求记录 · " + self.keyName($0) } ?? ""
+                if !background { self.notice.stringValue = "" }
+                self.notice.isHidden = self.notice.stringValue.isEmpty
                 self.updateTotals()
                 self.updateRows()
+                if self.selectedTab == 1, args["analytics"] as? String != self.analysis.period {
+                    self.loadSnapshot(background: false)
+                }
             case .failure(let error):
-                self.notice.stringValue = error.localizedDescription
+                self.showNotice(error.localizedDescription)
             }
             self.updateButtons()
         }
@@ -201,17 +310,18 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
                 let value = result as? [String: Any] ?? [:]
                 let windows = value["windows"] as? [String: [String: Any]] ?? [:]
                 let labels = [("five_hour", "5 小时"), ("seven_day", "7 天")].compactMap { name, label -> String? in
-                    guard let used = windows[name]?["used"] as? Double else { return nil }
-                    return label + " " + String(format: "%.1f%%", max(0, min(100, 100-used)))
+                    guard let used = (windows[name]?["used"] as? NSNumber)?.doubleValue else { return nil }
+                    let remaining = max(0, min(100, 100-used))
+                    return label + "剩余 " + Display.percent(remaining)
                 }
                 self.quotaAvailable = value["state"] as? String == "available"
-                self.quotaButton.title = labels.isEmpty ? "Claude 用量" : labels.joined(separator: " · ")
+                self.quotaButton.title = (["Claude 用量"] + labels).joined(separator: "  ")
                 self.quotaButton.toolTip = value["reason"] as? String ?? self.quotaButton.title
-                if !self.quotaAvailable { self.notice.stringValue = self.quotaButton.toolTip ?? "用量暂不可用" }
+                if !self.quotaAvailable { self.showNotice(self.quotaButton.toolTip ?? "用量暂不可用") }
             case .failure(let error):
                 self.quotaButton.title = "Claude 用量"
                 self.quotaButton.toolTip = error.localizedDescription
-                self.notice.stringValue = error.localizedDescription
+                self.showNotice(error.localizedDescription)
             }
             self.updateButtons()
         }
@@ -219,101 +329,152 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
 
     private var keys: [[String: Any]] { snapshot["keys"] as? [[String: Any]] ?? [] }
     private var selectedKey: [String: Any]? {
-        guard tabs.selectedSegment == 0, visibleRows.indices.contains(table.selectedRow) else { return nil }
+        guard selectedTab == 0, visibleRows.indices.contains(table.selectedRow) else { return nil }
         return visibleRows[table.selectedRow]
+    }
+
+    private func showNotice(_ message: String) {
+        notice.stringValue = message
+        notice.isHidden = message.isEmpty
     }
 
     private func updateButtons() {
         toolbarButtons.first?.isEnabled = !busy
         for item in toolbarButtons.dropFirst() { item.isEnabled = !busy && !snapshot.isEmpty }
         quotaButton.isEnabled = !busy && !checkingQuota
-        keyActions.isEnabled = !busy && selectedKey != nil
     }
 
     private func updateTotals() {
+        let stats = snapshot["stats"] as? [String: Any]
+        let active = Display.number(snapshot["active_count"])
+        let waiting = Display.number(snapshot["waiting"])
+        let limit = snapshot["concurrency_text"] as? String ?? String(Display.number(snapshot["concurrency"]))
+        let slotLabel = limit == "0" ? "不限" : limit
+        let recent = stats != nil
+        metricTitles[1].stringValue = recent ? "近 24 小时请求" : "累计请求"
+        metricTitles[2].stringValue = recent ? "近 24 小时 Token" : "累计 Token"
         let cards = [
             Display.integer(Int64(keys.filter { $0["enabled"] as? Bool == true }.count)),
-            Display.integer(keys.reduce(0) { $0 + Display.number($1["requests"]) }),
-            Display.integer(keys.reduce(0) { $0 + Display.number($1["tokens"]) }),
+            Display.integer(stats.map { Display.number($0["requests"]) } ?? keys.reduce(0) { $0 + Display.number($1["requests"]) }),
+            Display.integer(stats.map { Display.number($0["tokens"]) } ?? keys.reduce(0) { $0 + Display.number($1["tokens"]) }),
             Display.usd(Display.number((snapshot["billing"] as? [String: Any])?["cost_nanos"])),
-            "\(Display.number(snapshot["active_count"])) / \(Display.number(snapshot["waiting"]))"
+            "\(active) / \(waiting)"
+        ]
+        let details = [
+            "共 \(keys.count) 把密钥",
+            stats.map { "失败 \(Display.number($0["failures"])) · 受限 \(Display.number($0["limited"]))" } ?? "消息请求总计",
+            stats.map { "近 1 分钟 \(Display.number($0["rpm"])) RPM · \(Display.number($0["tpm"])) TPM" } ?? "输入、输出及缓存",
+            "按官方 API 标准价",
+            stats?["average_ms"].map { "近 24 小时平均处理 " + Display.duration($0) } ?? "并发上限 " + slotLabel
         ]
         for (label, value) in zip(totalLabels, cards) { label.stringValue = value }
-        toolbarButtons[1].title = "处理槽位 " + (Display.number(snapshot["concurrency"]) == 0 ? "不限" : String(Display.number(snapshot["concurrency"])))
+        for (label, value) in zip(metricDetails, details) { label.stringValue = value; label.toolTip = value }
+        toolbarButtons[1].title = "处理槽位 " + slotLabel
+        queue.isHidden = false
+        let queueLabel = active == 0 ? "网关空闲" : "正在处理 \(active) 个请求"
+        let message = NSMutableAttributedString(string:"●  " + queueLabel,
+            attributes:[.font:NSFont.systemFont(ofSize:SafeCodeType.small,weight:.semibold),.foregroundColor:GatewayStyle.ink])
+        message.addAttribute(.foregroundColor,value:active == 0 ? GatewayStyle.grayLine : GatewayStyle.accent,
+                             range:NSRange(location:0,length:1))
+        queueNow.attributedStringValue = message
+        queueWaiting.stringValue = "并发 \(active)" + (limit == "0" ? "（不限）" : "/" + slotLabel) + " · 排队 \(waiting)"
+        queueCapacity.isHidden = limit == "0"
+        queueCapacity.maxValue = max(1, Double(limit) ?? 1)
+        queueCapacity.doubleValue = Double(active)
     }
 
-    @objc private func changeTab() {
+    @objc private func changeTab(_ sender: NSButton) {
+        selectTab(sender.tag)
+    }
+
+    func selectTab(_ index: Int) {
+        guard selectedTab != index else { return }
+        selectedTab = index
         keyHistory = nil
         updateRows()
-        loadSnapshot(background: false)
+        scrollToTop()
+        if selectedTab == 1 { loadSnapshot(background: false) }
     }
 
-    @objc private func changePeriod() { loadSnapshot(background: false) }
+    private func scrollToTop() {
+        scroller.contentView.scroll(to: .zero)
+        scroller.reflectScrolledClipView(scroller.contentView)
+    }
 
-    func controlTextDidChange(_ obj: Notification) { updateRows() }
+    @objc private func clearHistory() {
+        keyHistory = nil
+        updateRows()
+    }
+
+    @objc private func resetKeyPage() {
+        keyPage = 0
+        updateRows()
+    }
+
+    @objc private func pageKeys(_ sender: NSButton) {
+        keyPage += sender.tag
+        updateRows()
+    }
+
+    func controlTextDidChange(_ obj: Notification) { resetKeyPage() }
 
     @objc private func updateRows() {
-        let keyID = selectedKey?["id"] as? String
-        let section = tabs.selectedSegment
-        search.isHidden = section != 0
+        let section = selectedTab
+        searchBox.isHidden = section != 0
         filter.isHidden = section != 0
         sort.isHidden = section != 0
-        keyActions.isHidden = section != 0
-        periods.isHidden = section != 1
-        analyticsMode.isHidden = section != 1
-        trend.isHidden = section != 1 || analyticsMode.indexOfSelectedItem != 0
+        for tab in tabs { tab.state = tab.tag == section ? .on : .off; tab.needsDisplay = true }
+        requestFilter.isHidden = section != 2
+        requestCaption.isHidden = section != 2
+        clearKeyFilter.isHidden = section != 2 || keyHistory == nil
+        pagination.isHidden = true
+        listToolbar.isHidden = section == 1
+        listFrame.isHidden = section == 1
+        analysis.isHidden = section != 1
+        if section == 1 {
+            analysis.render(snapshot)
+            return
+        }
         if section == 0 {
-            columns([("note","备注 / 密钥 ID",220),("status","状态",78),("rpm","限频",84),("requests","请求",80),
-                     ("tokens","Token",99),("cost","已用 / 余额",135),("last","最近使用",145)])
+            columns([("note","备注 / 密钥 ID",121),("status","状态",66),("rpm","限频",66),("requests","请求",56),
+                     ("tokens","Token",86),("cost","已用 / 余额",92),("last","最近使用",104),("actions","操作",161)])
             let keyword = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            visibleRows = keys.filter { key in
+            var matching = keys.filter { key in
                 let active = key["enabled"] as? Bool == true
                 let statusMatches = filter.indexOfSelectedItem == 0 || active == (filter.indexOfSelectedItem == 1)
                 return statusMatches && (keyword.isEmpty || keyName(key).localizedCaseInsensitiveContains(keyword)
                     || (key["id"] as? String ?? "").localizedCaseInsensitiveContains(keyword))
             }
-            if sort.indexOfSelectedItem > 0 {
-                let field = sort.indexOfSelectedItem == 1 ? "last_used" : "requests"
-                visibleRows.sort { Display.number($0[field]) > Display.number($1[field]) }
-            }
-        } else if section == 1 {
-            let analytics = snapshot["analytics"] as? [String: Any] ?? [:]
-            switch analyticsMode.indexOfSelectedItem {
-            case 1:
-                columns([("model","模型",185),("requests","请求",92),("tokens","Token",115),("failures","失败",84),("cost_nanos","估算费用",130)])
-                visibleRows = snapshot["models"] as? [[String: Any]] ?? []
-            case 2:
-                columns([("outcome","结果",155),("status","HTTP",82),("requests","次数",110)])
-                visibleRows = analytics["outcomes"] as? [[String: Any]] ?? []
-            case 3:
-                columns([("metric","指标",170),("samples","样本",80),("average_ms","平均耗时",100),("p95_ms","P95",100)])
-                let latency = analytics["latency"] as? [String: [String: Any]] ?? [:]
-                visibleRows = [("wait_ms","排队"),("duration_ms","处理")].compactMap { id, label in
-                    guard var metrics = latency[id] else { return nil }
-                    metrics["metric"] = label
-                    return metrics
-                }
-            default:
-                columns([("at","时间",160),("requests","请求",87),("tokens","Token",115),("failed","失败",85),("limited","限流",85),("canceled","取消",85)])
-                let start = Display.number(analytics["start"])
-                let step = Display.number(analytics["step"])
-                visibleRows = (analytics["timeline"] as? [[String: Any]] ?? []).map { row in
-                    var row = row
-                    row["at"] = start + Display.number(row["bucket"])*step
-                    return row
-                }
-                trend.counts = Dictionary(uniqueKeysWithValues: visibleRows.map { (Int(Display.number($0["bucket"])), Display.number($0["requests"])) })
-                trend.bucketCount = Int(Display.number(analytics["count"]))
-            }
+            let field = ["created","last_used","requests","tokens"][sort.indexOfSelectedItem]
+            matching.sort { Display.number($0[field]) > Display.number($1[field]) }
+            let pages = max(1, (matching.count + Self.keysPerPage-1)/Self.keysPerPage)
+            keyPage = min(max(0, keyPage), pages-1)
+            visibleRows = Array(matching.dropFirst(keyPage*Self.keysPerPage).prefix(Self.keysPerPage))
+            pagination.isHidden = matching.isEmpty
+            keyCount.stringValue = "共 \(matching.count) 把密钥"
+            pageNumber.stringValue = "\(keyPage+1) / \(pages)"
+            previousPage.isEnabled = keyPage > 0
+            nextPage.isEnabled = keyPage+1 < pages
         } else {
             columns([("at","时间",153),("key_id","密钥 ID",136),("model","模型",170),("outcome","结果",90),
-                     ("status","HTTP",55),("wait_ms","排队",76),("duration_ms","处理",76),("tokens","Token",94)])
-            visibleRows = (keyHistory?["recent"] ?? snapshot["recent"]) as? [[String: Any]] ?? []
+                     ("status","HTTP",64),("wait_ms","等待",76),("duration_ms","处理耗时",89),("tokens","Token",94)])
+            let outcomes = ["", "success", "failed", "limited", "canceled"]
+            let outcome = outcomes[requestFilter.indexOfSelectedItem]
+            let recent = (keyHistory?["recent"] ?? snapshot["recent"]) as? [[String: Any]] ?? []
+            visibleRows = outcome.isEmpty ? recent : recent.filter { $0["outcome"] as? String == outcome }
+            requestCaption.stringValue = keyHistory.map { "仅查看 · " + keyName($0) } ?? "最近 30 条 · 新采集的请求"
         }
-        table.reloadData()
-        if let keyID, let index = visibleRows.firstIndex(where: { $0["id"] as? String == keyID }) {
-            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        let itemHeight: CGFloat = section == 0 ? 57 : 40
+        table.rowHeight = itemHeight
+        tableHeight.constant = 37 + CGFloat(min(visibleRows.count, 12))*itemHeight
+        if renderedTab != section || !(renderedRows as NSArray).isEqual(to: visibleRows) {
+            renderedTab = section
+            renderedRows = visibleRows
+            table.reloadData()
         }
+        empty.isHidden = snapshot.isEmpty || !visibleRows.isEmpty
+        empty.stringValue = section == 0 ? (keys.isEmpty ? "还没有密钥。点击右上角创建第一把。" : "没有符合筛选条件的密钥。")
+              : section == 2 ? "没有符合筛选条件的请求。" : "这个时段暂无记录。"
         updateButtons()
     }
 
@@ -324,41 +485,127 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         for column in table.tableColumns { table.removeTableColumn(column) }
         for (id,title,width) in specs {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-            column.title = title
+            column.headerCell = GatewayColumnHeader(textCell: title)
             column.width = width
             column.minWidth = min(width, 60)
             table.addTableColumn(column)
         }
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) { updateButtons() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        GatewayTableRow()
+    }
     func numberOfRows(in tableView: NSTableView) -> Int { visibleRows.count }
 
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row index: Int) -> NSView? {
         guard visibleRows.indices.contains(index), let id = column?.identifier.rawValue else { return nil }
         let row = visibleRows[index]
+        if id == "actions" { return actions(for: row) }
         let value: String
         switch id {
-        case "note": value = keyName(row)
-        case "status" where tabs.selectedSegment == 0: value = row["enabled"] as? Bool == true ? "已启用" : "已撤销"
-        case "rpm": value = Display.number(row[id]) > 0 ? "\(Display.number(row[id])) / 分" : "不限"
+        case "note": value = (row["note"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "未填写备注"
+        case "status" where selectedTab == 0: value = row["enabled"] as? Bool == true ? "已启用" : "已撤销"
+        case "rpm": value = Display.number(row[id]) > 0 ? "\(Display.number(row[id])) / 分" : "不限频"
         case "cost":
             let used = Display.number(row["cost_nanos"])
-            let remaining = (row["budget_nanos"] as? NSNumber).map { Display.usd(max(0, $0.int64Value-used)) } ?? "不限额"
-            value = Display.usd(used) + " / " + remaining
+            value = Display.usd(used)
         case "at", "last": value = Display.date(row[id == "last" ? "last_used" : id])
         case "key_id": value = String((row[id] as? String ?? "").prefix(12))
         case "cost_nanos": value = Display.usd(Display.number(row[id]))
         case "outcome": value = ["success":"成功","failed":"失败","limited":"限流","canceled":"取消"][row[id] as? String ?? ""] ?? "—"
         case "wait_ms", "duration_ms", "average_ms", "p95_ms":
-            value = (row[id] as? NSNumber).map { String(format: "%.0f ms", $0.doubleValue) } ?? "—"
+            value = Display.duration(row[id] ?? NSNull())
         default: value = row[id] as? String ?? (row[id] as? NSNumber).map { Display.integer($0.int64Value) } ?? "—"
         }
-        let cell = NSTextField(labelWithString: value)
-        cell.lineBreakMode = .byTruncatingTail
-        cell.toolTip = id == "note" ? row["id"] as? String : value
-        cell.isSelectable = true
-        return cell
+        let numeric = ["rpm","requests","tokens","cost","wait_ms","duration_ms","cost_nanos","average_ms","p95_ms"].contains(id)
+        let label = GatewayStyle.label(value, size: SafeCodeType.medium, weight: id == "note" ? .semibold : .regular)
+        label.toolTip = value
+        if id == "last" { label.font = .systemFont(ofSize: SafeCodeType.small) }
+        label.alignment = numeric ? .right : .left
+        label.isSelectable = true
+        let items: [NSView]
+        if id == "note" {
+            let identifier = row["id"] as? String ?? ""
+            let detail = GatewayStyle.label(String(identifier.prefix(12)) + "…", color: GatewayStyle.muted, size: SafeCodeType.small)
+            detail.font = .monospacedSystemFont(ofSize: SafeCodeType.small, weight: .regular)
+            detail.toolTip = identifier
+            detail.isSelectable = true
+            items = [label, detail]
+        } else if id == "cost" {
+            let remaining = (row["budget_nanos"] as? NSNumber).map { $0.int64Value - Display.number(row["cost_nanos"]) }
+            let detail = GatewayStyle.label(remaining.map { "余 " + Display.usd($0) } ?? "不限额",
+                                            color: remaining.map { $0 <= 0 } == true ? GatewayStyle.danger : GatewayStyle.muted,
+                                            size: SafeCodeType.small)
+            detail.alignment = .right
+            items = [label, detail]
+        } else if ["status","outcome"].contains(id) && (selectedTab == 0 || id == "outcome") {
+            let good = value == "已启用" || value == "成功"
+            let bad = value == "已撤销" || value == "失败"
+            label.textColor = good ? GatewayStyle.accent : bad ? GatewayStyle.danger : GatewayStyle.muted
+            label.font = .systemFont(ofSize: SafeCodeType.small, weight: .semibold)
+            let badge = GatewayStyle.surface(label, inset: NSEdgeInsets(top: 3, left: 7, bottom: 3, right: 7), radius: 5,
+                fill: good ? GatewayStyle.wash : bad ? GatewayStyle.dangerWash : GatewayStyle.header, border: false)
+            return cell(self.row([badge, NSView()], spacing: 0), inset: 7)
+        } else {
+            items = [label]
+        }
+        let columnContent = NSStackView(views: items)
+        columnContent.orientation = .vertical
+        columnContent.alignment = numeric ? .trailing : .leading
+        columnContent.spacing = 3
+        return cell(columnContent)
+    }
+
+    private func cell(_ content: NSView, inset: CGFloat = 12) -> NSView {
+        let wrapper = NSView()
+        wrapper.addSubview(content)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor, constant: inset),
+            content.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor, constant: -inset),
+            content.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor)
+        ])
+        return wrapper
+    }
+
+    private func actions(for key: [String: Any]) -> NSView {
+        let detail = rowAction("用量详情", #selector(keyDetails(_:)), key: key)
+        var buttons: [NSView] = [detail]
+        if key["enabled"] as? Bool == true {
+            buttons += [rowAction("编辑", #selector(editRowKey(_:)), key: key),
+                        rowAction("撤销", #selector(removeRowKey(_:)), key: key, danger: true)]
+        } else if snapshot["can_delete_revoked_keys"] as? Bool == true {
+            buttons.append(rowAction("彻底删除", #selector(removeRowKey(_:)), key: key, danger: true))
+        }
+        return cell(row(buttons + [NSView()], spacing: 3))
+    }
+
+    private func rowAction(_ title: String, _ action: Selector, key: [String: Any], danger: Bool = false) -> GatewayButton {
+        let control = button(title, action, kind: danger ? .dangerLink : .link)
+        control.identifier = (key["id"] as? String).map(NSUserInterfaceItemIdentifier.init(rawValue:))
+        control.isEnabled = !busy
+        return control
+    }
+
+    private func key(for sender: NSButton) -> [String: Any]? {
+        keys.first { ($0["id"] as? String) == sender.identifier?.rawValue }
+    }
+
+    @objc private func keyDetails(_ sender: NSButton) {
+        if let key = key(for: sender) { showUsage(key) }
+    }
+
+    @objc private func editRowKey(_ sender: NSButton) {
+        if !busy, let key = key(for: sender) { editKey(key) }
+    }
+
+    @objc private func removeRowKey(_ sender: NSButton) {
+        guard !busy, let key = key(for: sender), let id = key["id"] as? String else { return }
+        if key["enabled"] as? Bool == true {
+            confirm("撤销密钥", "使用该 Key 的设备将无法继续请求。") { self.mutate("revoke", ["id":id]) }
+        } else if snapshot["can_delete_revoked_keys"] as? Bool == true {
+            confirm("删除已撤销密钥", "删除后无法恢复此密钥的用量记录。") { self.mutate("delete", ["id":id]) }
+        }
     }
 
     private func keyName(_ key: [String: Any]) -> String {
@@ -366,47 +613,39 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         return note.isEmpty ? String((key["id"] as? String ?? "").prefix(12)) : note
     }
 
-    @objc private func useKeyAction() {
-        let action = keyActions.indexOfSelectedItem
-        keyActions.selectItem(at: 0)
-        guard let key = selectedKey, let id = key["id"] as? String else { return }
-        switch action {
-        case 1: editKey(key)
-        case 2: usageSelectedKey()
-        case 3:
-            manage("usage", ["id":id]) { [weak self] response in
-                guard let self else { return }
-                if case .success(let value) = response {
-                    self.keyHistory = key
-                    self.keyHistory?["recent"] = (value as? [String: Any])?["recent"]
-                    self.tabs.selectedSegment = 2
-                    self.notice.stringValue = "请求记录 · " + self.keyName(key)
-                    self.updateRows()
-                } else if case .failure(let error) = response { self.notice.stringValue = error.localizedDescription }
-            }
-        case 4 where key["enabled"] as? Bool == true:
-            confirm("撤销密钥", "使用该 Key 的设备将无法继续请求。") { self.mutate("revoke", ["id":id]) }
-        case 5 where key["enabled"] as? Bool == false:
-            confirm("删除已撤销密钥", "删除后无法恢复此密钥的用量记录。") { self.mutate("delete", ["id":id]) }
-        case 4: notice.stringValue = "此密钥已撤销。"
-        case 5: notice.stringValue = "请先撤销该密钥。"
-        default: break
-        }
+    @objc private func usageSelectedKey() {
+        if let key = selectedKey { showUsage(key) }
     }
 
-    @objc private func usageSelectedKey() {
-        guard let key = selectedKey, let id = key["id"] as? String else { return }
+    private func showUsage(_ key: [String: Any]) {
+        guard let id = key["id"] as? String else { return }
         manage("usage", ["id": id]) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let data):
-                let models = (data as? [String: Any])?["models"] as? [[String: Any]] ?? []
+                let usage = data as? [String: Any] ?? [:]
+                let models = usage["models"] as? [[String: Any]] ?? []
                 let lines = models.map { model in
                     "\(model["model"] as? String ?? "—") · \(Display.number(model["requests"])) 次 · \(Display.number(model["failures"])) 次失败\n" +
                     "输入 \(Display.integer(Display.number(model["input"]))) · 输出 \(Display.integer(Display.number(model["output"]))) · 缓存读取 \(Display.integer(Display.number(model["cache_read"]))) · 缓存写入 \(Display.integer(Display.number(model["cache_write"])))"
                 }
-                self.alert("用量 · "+self.keyName(key), lines.isEmpty ? "此密钥暂无用量。" : lines.joined(separator: "\n\n"))
-            case .failure(let error): self.notice.stringValue = error.localizedDescription
+                guard let window = self.view.window, window.attachedSheet == nil else { return }
+                let dialog = NSAlert()
+                dialog.messageText = "用量详情 · " + self.keyName(key)
+                dialog.informativeText = lines.isEmpty ? "此密钥暂无用量。" : lines.joined(separator: "\n\n")
+                dialog.addButton(withTitle: "关闭")
+                dialog.addButton(withTitle: "查看此密钥的请求")
+                dialog.beginSheetModal(for: window) { response in
+                    if response == .alertSecondButtonReturn {
+                        self.keyHistory = key
+                        self.keyHistory?["recent"] = usage["recent"]
+                        self.selectedTab = 2
+                        self.requestFilter.selectItem(at: 0)
+                        self.updateRows()
+                        self.scrollToTop()
+                    }
+                }
+            case .failure(let error): self.showNotice(error.localizedDescription)
             }
         }
     }
@@ -428,7 +667,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             let cents = Decimal(string:rawBudget,locale:Locale(identifier:"en_US_POSIX")).map { $0*100 }
             guard let maxRate, (0...600).contains(maxRate), rawBudget.isEmpty ||
                     (cents.map { let n=NSDecimalNumber(decimal:$0); return $0>=0 && $0<=100_000_000 && Decimal(n.intValue)==$0 } == true) else {
-                self.notice.stringValue = "请输入有效限频与累计额度，金额最多保留两位小数。"
+                self.showNotice("请输入有效限频与累计额度，金额最多保留两位小数。")
                 return
             }
             var args: [String: Any] = ["note":note.stringValue.trimmingCharacters(in:.whitespacesAndNewlines),
@@ -445,7 +684,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         form("处理槽位", [("并发数",value)]) {
             let text=value.stringValue.trimmingCharacters(in:.whitespaces)
             guard !text.isEmpty, text.allSatisfy({$0 >= "0" && $0 <= "9"}) else {
-                self.notice.stringValue = "处理槽位必须是非负整数。"
+                self.showNotice("处理槽位必须是非负整数。")
                 return
             }
             self.mutate("set_concurrency", ["concurrency":text])
@@ -472,7 +711,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             case .success(let value):
                 if let ticket = (value as? [String: Any])?["ticket"] as? String { self.showTicket(ticket) }
                 self.loadSnapshot(background: false)
-            case .failure(let error): self.notice.stringValue = error.localizedDescription
+            case .failure(let error): self.showNotice(error.localizedDescription)
             }
         }
     }
@@ -498,6 +737,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
 
     private func field(_ value: String, placeholder: String) -> NSTextField {
         let field = NSTextField(string: value)
+        field.font = .systemFont(ofSize: SafeCodeType.medium)
         field.placeholderString = placeholder
         return field
     }
@@ -506,24 +746,19 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         guard let window = view.window else { return }
         let dialog = NSAlert()
         dialog.messageText = title
-        let grid = NSGridView(views: fields.map { [NSTextField(labelWithString:$0.0),$0.1] })
+        let grid = NSGridView(views: fields.map { [GatewayStyle.label($0.0),$0.1] })
         grid.columnSpacing = 12
         grid.rowSpacing = 9
-        for (_,field) in fields { field.widthAnchor.constraint(equalToConstant:240).isActive = true }
+        for (_,field) in fields {
+            field.font = .systemFont(ofSize: SafeCodeType.medium)
+            field.widthAnchor.constraint(equalToConstant:240).isActive = true
+        }
         grid.frame.size = grid.fittingSize
         dialog.accessoryView = grid
         dialog.addButton(withTitle:"保存")
         dialog.addButton(withTitle:"取消")
         dialog.beginSheetModal(for:window) { result in if result == .alertFirstButtonReturn { save() } }
         fields.first?.1.selectText(nil)
-    }
-
-    private func alert(_ title: String, _ message: String) {
-        guard let window = view.window else { return }
-        let dialog = NSAlert()
-        dialog.messageText = title
-        dialog.informativeText = message
-        dialog.beginSheetModal(for:window)
     }
 
     private func confirm(_ title: String, _ message: String, action: @escaping () -> Void) {
@@ -537,30 +772,19 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     }
 }
 
-private enum Display {
+enum Display {
     static func number(_ value: Any?) -> Int64 { (value as? NSNumber)?.int64Value ?? 0 }
     static func integer(_ value: Int64) -> String { value.formatted() }
     static func usd(_ nanos: Int64) -> String { "$"+String(format:"%.4f",Double(nanos)/1_000_000_000) }
+    static func percent(_ value: Double) -> String {
+        (value/100).formatted(.percent.precision(.fractionLength(0...1)))
+    }
+    static func duration(_ value: Any) -> String {
+        guard let value = value as? NSNumber else { return "—" }
+        return value.doubleValue < 1000 ? String(format: "%.0f ms", value.doubleValue) : String(format: "%.1f s", value.doubleValue/1000)
+    }
     static func date(_ value: Any?) -> String {
         guard let value = value as? NSNumber else { return "—" }
-        return Date(timeIntervalSince1970:value.doubleValue).formatted(date:.numeric,time:.shortened)
-    }
-}
-
-private final class GatewayTrendView: NSView {
-    var counts: [Int:Int64] = [:] { didSet { needsDisplay = true } }
-    var bucketCount = 0 { didSet { needsDisplay = true } }
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard bucketCount > 0 else { return }
-        let peak = max(1, counts.values.max() ?? 0)
-        let step = bounds.width/CGFloat(bucketCount)
-        NSColor.controlAccentColor.setFill()
-        for index in 0..<bucketCount {
-            let amount = counts[index] ?? 0
-            let height = (bounds.height-10)*CGFloat(amount)/CGFloat(peak)
-            NSBezierPath(roundedRect:NSRect(x:CGFloat(index)*step+2,y:4,width:max(1,step-4),height:max(1,height)),
-                         xRadius:2,yRadius:2).fill()
-        }
+        return Date(timeIntervalSince1970:value.doubleValue).formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute())
     }
 }

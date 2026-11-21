@@ -33,7 +33,7 @@ function createGatewayLineChart(container) {
     const x = index => left + index * (right - left) / Math.max(1, labels.length - 1);
     const y = value => bottom - (bottom - top) * value / maximum;
     plot = {left, right};
-    context.font = '11px system-ui, sans-serif';
+    context.font = colors.getPropertyValue('--type-small').trim() + ' system-ui, sans-serif';
     context.fillStyle = '#586d64';
     context.strokeStyle = '#e6ece8';
     context.lineWidth = 1;

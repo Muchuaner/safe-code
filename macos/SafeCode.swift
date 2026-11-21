@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var resources: URL { Bundle.main.resourceURL! }
     private var index: URL { resources.appendingPathComponent("Web/web/index.html") }
     private var smokeOutput: URL?
+    private var captureSmokeScreenshots: Bool { ProcessInfo.processInfo.arguments.contains("--smoke-screenshots") }
     private var servicesWindow: NSWindow?
     private var servicesWeb: WKWebView?
     private var gatewayWindow: NSWindow?
@@ -165,23 +166,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let controller=NSViewController();controller.view=NSView(frame:NSRect(x:0,y:0,width:276,height:196))
         let main=NSStackView();main.orientation = .vertical;main.spacing=10;main.alignment = .leading;main.translatesAutoresizingMaskIntoConstraints=false
         controller.view.addSubview(main);NSLayoutConstraint.activate([main.leadingAnchor.constraint(equalTo:controller.view.leadingAnchor,constant:16),main.trailingAnchor.constraint(equalTo:controller.view.trailingAnchor,constant:-16),main.topAnchor.constraint(equalTo:controller.view.topAnchor,constant:14)])
-        let heading=NSTextField(labelWithString:"Safe Code");heading.font = .systemFont(ofSize:14,weight:.semibold);main.addArrangedSubview(heading)
-        stateText=NSTextField(labelWithString:"未挂载目录");stateText.font = .systemFont(ofSize:11);stateText.textColor = .secondaryLabelColor;main.addArrangedSubview(stateText)
-        durationText=NSTextField(labelWithString:"0 个目录  ·  0:00:00");durationText.font = .monospacedDigitSystemFont(ofSize:11,weight:.regular);main.addArrangedSubview(durationText)
+        let heading=NSTextField(labelWithString:"Safe Code");heading.font = .systemFont(ofSize:SafeCodeType.medium,weight:.semibold);main.addArrangedSubview(heading)
+        stateText=NSTextField(labelWithString:"未挂载目录");stateText.font = .systemFont(ofSize:SafeCodeType.small);stateText.textColor = .secondaryLabelColor;main.addArrangedSubview(stateText)
+        durationText=NSTextField(labelWithString:"0 个目录  ·  0:00:00");durationText.font = .monospacedDigitSystemFont(ofSize:SafeCodeType.small,weight:.regular);main.addArrangedSubview(durationText)
         let metrics=NSStackView();metrics.orientation = .horizontal;metrics.distribution = .fillEqually;metrics.spacing=12
-        for title in ["发送","接收","读写"] {let column=NSStackView();column.orientation = .vertical;column.alignment = .leading;column.spacing=3;let label=NSTextField(labelWithString:title);label.font = .systemFont(ofSize:10);label.textColor = .secondaryLabelColor;let value=NSTextField(labelWithString:title=="读写" ? "0 次":"0 B");value.font = .monospacedDigitSystemFont(ofSize:12,weight:.medium);values.append(value);column.addArrangedSubview(label);column.addArrangedSubview(value);metrics.addArrangedSubview(column)}
+        for title in ["发送","接收","读写"] {let column=NSStackView();column.orientation = .vertical;column.alignment = .leading;column.spacing=3;let label=NSTextField(labelWithString:title);label.font = .systemFont(ofSize:SafeCodeType.small);label.textColor = .secondaryLabelColor;let value=NSTextField(labelWithString:title=="读写" ? "0 次":"0 B");value.font = .monospacedDigitSystemFont(ofSize:SafeCodeType.small,weight:.medium);values.append(value);column.addArrangedSubview(label);column.addArrangedSubview(value);metrics.addArrangedSubview(column)}
         main.addArrangedSubview(metrics);metrics.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
         balanceButton=NSButton(title:"查询 Key 余额",target:self,action:#selector(refreshKeyBalance))
         balanceButton.bezelStyle = .rounded
         balanceButton.controlSize = .small
+        balanceButton.font = .systemFont(ofSize:SafeCodeType.small)
         balanceButton.isHidden=true
-        balanceText.font = .systemFont(ofSize:11)
+        balanceText.font = .systemFont(ofSize:SafeCodeType.small)
         balanceText.isHidden=true
         main.addArrangedSubview(balanceButton)
         main.addArrangedSubview(balanceText)
         balanceText.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
         let buttons=NSStackView();buttons.orientation = .horizontal;buttons.spacing=7;buttons.distribution = .fillEqually
-        for (title,selector) in [("主界面",#selector(showMain)),("重连",#selector(reconnect)),("安全退出",#selector(quit))] {let b=NSButton(title:title,target:self,action:selector);b.bezelStyle = .rounded;b.controlSize = .small;buttons.addArrangedSubview(b)}
+        for (title,selector) in [("主界面",#selector(showMain)),("重连",#selector(reconnect)),("安全退出",#selector(quit))] {let b=NSButton(title:title,target:self,action:selector);b.bezelStyle = .rounded;b.controlSize = .small;b.font = .systemFont(ofSize:SafeCodeType.small);buttons.addArrangedSubview(b)}
         main.addArrangedSubview(buttons);buttons.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
         popover.contentViewController=controller;popover.behavior = .transient;popover.contentSize=NSSize(width:276,height:196)
     }
@@ -291,14 +293,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case "window.smoke.closeDialog" where smokeOutput != nil:
             dialogWindows.last?.window.performClose(nil)
             answer(id,true)
+        case "window.smoke.gatewayTab" where smokeOutput != nil:
+            if let index=args["index"] as? Int,(0...2).contains(index) {gatewayPanel?.selectTab(index)}
+            answer(id,true)
+        case "window.smoke.screenshot" where captureSmokeScreenshots && smokeOutput != nil:
+            saveSmokeScreenshot(args["name"] as? String ?? "", replyID:id)
         case "window.smoke.gateway" where smokeOutput != nil:
             inspectGatewayWindow(id,args:args)
-        case "window.fitKeyDialog":
-            if let active=dialogWindows.last,active.id=="desktop-key-dialog",
+        case "window.fitDialog":
+            if let active=dialogWindows.last,active.id==args["id"] as? String,
+               ["desktop-key-dialog","claude-desktop-dialog"].contains(active.id),
                let height=args["height"] as? Double,height.isFinite {
                 let current=active.window.contentRect(forFrameRect:active.window.frame)
                 let screenHeight=active.window.screen?.visibleFrame.height ?? 720
-                let fitted=max(120,min(height,screenHeight-70))
+                let fitted=max(active.window.contentMinSize.height,min(height,screenHeight-70))
                 if abs(current.height-fitted)>1 {
                     active.window.setContentSize(NSSize(width:current.width,height:fitted))
                 }
@@ -381,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             let size=NSSize(width:min(spec.size.width,visible.width),height:min(spec.size.height,visible.height-40))
             let panel=NSWindow(contentRect:NSRect(origin:.zero,size:size),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
             panel.title=spec.title
-            panel.contentMinSize=NSSize(width:min(size.width,320),height:min(size.height,spec.id=="desktop-key-dialog" ? 120:220))
+            panel.contentMinSize=NSSize(width:min(size.width,320),height:min(size.height,["desktop-key-dialog","claude-desktop-dialog"].contains(spec.id) ? 120:220))
             panel.isReleasedWhenClosed=false
             panel.delegate=self
             let frame=panel.frame
@@ -476,10 +484,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func presentGateway(context:String?) {
         let visible=dialogHost.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1100,height:730)
         let width=min(1100,visible.width-24)
-        let size=NSSize(width:width,height:min(670,visible.height-46,width * 0.72))
+        let size=NSSize(width:width,height:min(670,visible.height-36,width * 0.72))
         let panel=NSWindow(contentRect:NSRect(origin:.zero,size:size),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         panel.title="Safe Code API · 网关管理"
-        panel.contentMinSize=NSSize(width:min(740,size.width),height:min(400,size.height))
+        panel.contentMinSize=NSSize(width:min(805,size.width),height:min(400,size.height))
         panel.isReleasedWhenClosed=false
         panel.delegate=self
         let content=GatewayPanel { [weak self] action,args,reply in
@@ -492,14 +500,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         gatewayWindow=panel
         panel.setFrameOrigin(NSPoint(x:visible.midX-panel.frame.width/2,y:visible.midY-panel.frame.height/2))
         panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(nil)
         content.start()
     }
     private func manageGateway(_ action:String,_ args:[String:Any],reply:@escaping GatewayPanel.Reply) {
         if smokeOutput != nil {
             switch action {
-            case "list": reply(.success(["keys":[["id":String(repeating:"a",count:64),"note":"示例密钥","enabled":true]],
-              "active_count":0,"waiting":0,"origin":"https://gateway.example.test"]))
-            case "refresh_subscription": reply(.success(["state":"available","windows":["five_hour":["used":20]]]))
+            case "list":
+                let key: [String: Any] = ["id":String(repeating:"a",count:64),"note":"工作笔记本","enabled":true,"rpm":0,
+                    "requests":42,"tokens":243810,"cost_nanos":104_300_000,"last_used":1795225500]
+                let event: [String: Any] = ["key_id":key["id"] ?? "", "model":"claude-example", "at":1795225500,
+                    "outcome":"success", "status":200, "wait_ms":82, "duration_ms":1600, "tokens":18]
+                let model: [String: Any] = ["model":"claude-example", "requests":42, "failures":2, "tokens":243810, "cost_nanos":104_300_000]
+                var fixture: [String: Any] = ["keys":[key],"active_count":0,"waiting":0,"concurrency":0,"concurrency_text":"0",
+                    "billing":["cost_nanos":104_300_000],"origin":"https://gateway.example.test","recent":[event],"models":[model]]
+                if let period=args["analytics"] as? String {
+                    let step=["1h":300,"24h":3600,"7d":86400][period] ?? 300
+                    let count=["1h":12,"24h":24,"7d":7][period] ?? 12
+                    let timeline=(0..<count).map { index in
+                        ["bucket":index,"requests":(index*3+1)%7,"tokens":(index*1783+1500)%9200,
+                         "failed":index==3 ? 2:0,"limited":index==5 ? 1:0]
+                    }
+                    let measure: [String: Any] = ["samples":42,"average_ms":1600,"p95_ms":2250,"histogram":[0,0,3,37,2,0,0]]
+                    fixture["analytics"]=["period":period,"count":count,"step":step,"start":1795225500-count*step,"timeline":timeline,
+                        "latency":["duration_ms":measure,"wait_ms":measure],"latency_limits":[250,500,1000,2500,5000,10000],
+                        "outcomes":[["outcome":"success","status":200,"requests":39],["outcome":"failed","status":502,"requests":2],
+                                    ["outcome":"limited","status":429,"requests":1]]]
+                }
+                reply(.success(fixture))
+            case "refresh_subscription": reply(.success(["state":"available","windows":["five_hour":["used":20],"seven_day":["used":36]]]))
             default: reply(.failure(AppError.message("未提供该预览操作。")))
             }
             return
@@ -674,6 +703,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         guard webView===web,smokeOutput != nil,!didRunSmoke else{return};didRunSmoke=true
         DispatchQueue.main.asyncAfter(deadline:.now()+0.5){[weak self] in self?.runSmoke()}
     }
+    private func saveSmokeScreenshot(_ name: String, replyID: String) {
+        guard let output=smokeOutput,["homepage","desktop-access","gateway","gateway-analysis","gateway-requests"].contains(name) else {
+            answer(replyID,error:"Invalid smoke screenshot name");return
+        }
+        let target=output.deletingLastPathComponent().appendingPathComponent(name+".png")
+        let save: (NSBitmapImageRep?) -> Void = { [weak self] bitmap in
+            guard let self,let data=bitmap?.representation(using:.png,properties:[:]) else {
+                self?.answer(replyID,error:"No screenshot pixels");return
+            }
+            do {try data.write(to:target);self.answer(replyID,true)}
+            catch {self.answer(replyID,error:error.localizedDescription)}
+        }
+        if name.hasPrefix("gateway"),let window=gatewayWindow,let content=window.contentView {
+            let original = window.frame
+            defer {window.setFrame(original,display:true)}
+            window.setContentSize(NSSize(width:1100,height:name=="gateway-analysis" ? 1040:670))
+            content.layoutSubtreeIfNeeded()
+            let bitmap=content.bitmapImageRepForCachingDisplay(in:content.bounds)
+            if let bitmap {content.cacheDisplay(in:content.bounds,to:bitmap)}
+            save(bitmap)
+        } else {
+            web.takeSnapshot(with:nil) { image,_ in
+                save(image?.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            }
+        }
+    }
     private func runSmoke() {
         let script="""
         if(!window.safeCodeNativeReady)throw Error('Native bridge did not load');
@@ -732,10 +787,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           await rpc('window.smoke.closeDialog');
           await waitPanel('',0);
         }
-        document.querySelector('#claude-desktop-dialog').showModal();
+        if(capture) {
+          showScreen('workspace');switchMode('maintenance');
+          document.querySelector('#server-ingress').textContent='192.0.2.42';
+          document.querySelector('#server-address').textContent='198.51.100.27';
+          const username=document.querySelector('#server-user');
+          username.textContent='demo';
+          document.querySelector('.server-metadata').replaceChildren(username,document.createTextNode(' / Ubuntu 24.04 / SSH'));
+          document.querySelector('#resource-cpu').textContent='2.6 %';
+          document.querySelector('#resource-memory').textContent='1.2 / 1.9 G';
+          document.querySelector('#resource-disk').textContent='18.3 / 29.4 G';
+          document.querySelector('#update-login-password').hidden=false;
+          document.querySelector('#host-state').textContent='已连接';
+          document.querySelector('#claude-desktop-state').textContent='已接入';
+          document.querySelector('#claude-gateway-status').textContent='Claude网关已启用';
+          document.querySelector('#claude-gateway-status').classList.remove('inactive');
+          await waitFor(()=>innerWidth===740,'home window width');
+          if(getComputedStyle(document.querySelector('.window'),'::after').content!=='none')throw Error('Duplicate macOS border shown');
+          if(getComputedStyle(document.querySelector('#public-gateway-footer')).display!=='none')throw Error('Extra gateway footer shown');
+          document.querySelector('.maintenance-panel').scrollTop=10000;
+          await rpc('window.smoke.screenshot',{name:'homepage'});
+        }
+        const desktopDialog=document.querySelector('#claude-desktop-dialog');
+        if(capture){
+          document.querySelector('#claude-desktop-key-note').textContent='本机只保存回环通道凭据。已有的 Claude Desktop 配置会保留，启用前需先停用当前接入。';
+          document.querySelector('#claude-desktop-progress').textContent='请先停用 API Key 接入，再启用 SSH 接入。';
+          const status=document.querySelector('#safe-code-api-progress');
+          status.textContent='正在读取公网状态…';status.hidden=false;
+          document.querySelector('#claude-desktop-install').hidden=true;
+          document.querySelector('#claude-desktop-open').hidden=false;
+        }
+        desktopDialog.showModal();
         await waitPanel('claude-desktop-dialog',1);
+        await waitFor(async()=>{
+          const state=await rpc('window.smoke.dialog');
+          return Math.abs(state.contentHeight-Math.max(120,Math.ceil(document.querySelector('#claude-desktop-form').getBoundingClientRect().height)))<=1;
+        },'Claude Desktop window content height');
+        if(capture)await rpc('window.smoke.screenshot',{name:'desktop-access'});
         await rpc('window.gateway.open');
         await waitFor(async()=>{const state=await rpc('window.smoke.gateway');return state.ready&&state.visible;},'gateway window');
+        if(capture){
+          await rpc('window.smoke.screenshot',{name:'gateway'});
+          await rpc('window.smoke.gatewayTab',{index:1});
+          await rpc('window.smoke.screenshot',{name:'gateway-analysis'});
+          await rpc('window.smoke.gatewayTab',{index:2});
+          await rpc('window.smoke.screenshot',{name:'gateway-requests'});
+          await rpc('window.smoke.gatewayTab',{index:0});
+        }
         const gateway=await rpc('window.smoke.gateway',{move:true});
         if(!gateway.native||!gateway.landscape||!gateway.moved||!gateway.parentUnmoved)throw Error('Gateway window is not independently movable');
         if(!await rpc('window.smoke.gateway',{close:true}))throw Error('Gateway window did not close');
@@ -749,7 +847,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         if(document.body.innerText.includes('客户端核心模块加载失败'))throw Error('Startup fallback displayed');
         return {success:true,nativeBridge:true,readOnlyStartup:true,unauthenticatedRejected:denied,nativeDialogWindows:all.length+2,nestedNativeDialogs:true,gatewayWindow:true,windowsAdapterDisabled:true,platform:window.__safeCodePlatform};
         """
-        web.callAsyncJavaScript(script,arguments:[:],in:nil,in:.page){[weak self] result in
+        web.callAsyncJavaScript(script,arguments:["capture":captureSmokeScreenshots],in:nil,in:.page){[weak self] result in
             guard let self=self,let output=self.smokeOutput else{return}
             switch result {
             case .success(let value):

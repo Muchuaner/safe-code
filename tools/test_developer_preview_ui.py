@@ -24,6 +24,7 @@ with sync_playwright() as p:
         let result=null;
         if(message.op==='services.preferences')result={enabled:false,diagnosticsEnabled:false,confirmed:true};
         if(message.op==='notice.state')result={accepted:false};
+        if(message.op==='desktopKey.status')result={configured:false,running:false};
         if(message.op==='connect')result={failure:'fixture refused connection'};
         queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
       }}};

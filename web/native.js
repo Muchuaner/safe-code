@@ -108,17 +108,20 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         const title=dialog.querySelector(':scope>.titlebar .app-name');
         if(title)observer.observe(title,{childList:true,characterData:true,subtree:true});
       }
-      const keyForm=$('#desktop-key-form');
-      const fitKeyDialog=()=>{
-        if(!keyForm.closest('.native-dialog-front'))return;
-        const height=Math.ceil(keyForm.getBoundingClientRect().height);
-        if(height>0)native('window.fitKeyDialog',{height}).catch(()=>{});
+      const fittedForms=['desktop-key-form','claude-desktop-form'].map(id=>document.getElementById(id));
+      const fitDialog=({target:form})=>{
+        const dialog=form.closest('.native-dialog-front');
+        if(!dialog)return;
+        const height=Math.ceil(form.getBoundingClientRect().height);
+        if(height>0)native('window.fitDialog',{id:dialog.id,height}).catch(()=>{});
       };
-      new ResizeObserver(fitKeyDialog).observe(keyForm);
+      const formObserver=new ResizeObserver(entries=>entries.forEach(fitDialog));
+      fittedForms.forEach(form=>formObserver.observe(form));
       window.safeCodePresentNativeDialog=id=>{
         for(const dialog of dialogs)dialog.classList.toggle('native-dialog-front',dialog.id===id);
         document.documentElement.classList.toggle('native-dialog-window',!!id);
-        if(id==='desktop-key-dialog')fitKeyDialog();
+        const form=fittedForms.find(form=>form.closest('dialog').id===id);
+        if(form)fitDialog({target:form});
       };
       window.safeCodeCloseNativeDialog=id=>{
         const dialog=stack.at(-1);
@@ -161,7 +164,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     };
     window.safeCodeNativeLogs=lines=>{for(const entry of lines)window.safeCodeNativeLog(entry.step,entry.line);};
     document.documentElement.classList.add('native-client');
-    const nativeStyle=document.createElement('style');nativeStyle.textContent=`html,body{overflow:hidden!important;height:100%!important;margin:0!important;padding:0!important;scrollbar-width:none!important;-ms-overflow-style:none!important}*::-webkit-scrollbar,html::-webkit-scrollbar,body::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}*{scrollbar-width:none!important;-ms-overflow-style:none!important}body{padding:0;display:block;background:white;min-height:100vh}.window,.window.wide,.window.maximized{width:100%;height:100vh;max-width:none;border:0;border-radius:0;box-shadow:none;transition:none;overflow:hidden!important}.window::after{content:"";position:fixed;inset:0;border:1px solid #b7c3bb;pointer-events:none;z-index:1000}.screen{height:calc(100% - 43px);overflow:hidden!important}.header-controls{width:112px}.maintenance-panel .advanced-actions>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%}.connection-message{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.native-log-note{white-space:normal;line-height:1.6;color:#99a599;font-size:9px}`;document.head.append(nativeStyle);
+    const nativeStyle=document.createElement('style');nativeStyle.textContent=`html,body{overflow:hidden!important;height:100%!important;margin:0!important;padding:0!important;scrollbar-width:none!important;-ms-overflow-style:none!important}*::-webkit-scrollbar,html::-webkit-scrollbar,body::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}*{scrollbar-width:none!important;-ms-overflow-style:none!important}body{padding:0;display:block;background:white;min-height:100vh}.window,.window.wide,.window.maximized{width:100%;height:100vh;max-width:none;border:0;border-radius:0;box-shadow:none;transition:none;overflow:hidden!important}html:not(.macos-client) .window::after{content:"";position:fixed;inset:0;border:1px solid #b7c3bb;pointer-events:none;z-index:1000}.screen{height:calc(100% - 43px);overflow:hidden!important}.header-controls{width:112px}.maintenance-panel .advanced-actions>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%}.connection-message{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.native-log-note{white-space:normal;line-height:1.6;color:#68786d;font-size:var(--type-small)}`;document.head.append(nativeStyle);
     $('#minimize').onclick=()=>native('window.minimize');
     $('#maximize').onclick=()=>native('window.maximize');
     $('#close').onclick=()=>native('window.close');$('#exit').onclick=()=>native('window.close');
@@ -750,13 +753,14 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         const limit=String(status.concurrency_text??status.concurrency);
         badge.textContent='公网网关 · 并发 '+status.active+(limit==='0'?'（不限）':'/'+limit)+' · 排队 '+status.waiting;
       }
+      if(isMac){renderClaudeDesktop();return;}
       if(reachable)publicGatewaySubscription=status.subscription;
       quota.hidden=!publicGatewayEnabled;
       renderClaudeSubscription(quota,!reachable&&publicGatewaySubscription
         ?{...publicGatewaySubscription,state:'stale'}:publicGatewaySubscription);
       renderClaudeDesktop();
     }
-    bindClaudeUsageRefresh($('#footer-claude-limits'), async()=>{
+    if(!isMac)bindClaudeUsageRefresh($('#footer-claude-limits'), async()=>{
       const attempt=connectionAttempt;
       const value=await native('safeCodeApi.refreshSubscription');
       if(attempt!==connectionAttempt)throw new Error('服务器连接已变更，请重新查询。');
