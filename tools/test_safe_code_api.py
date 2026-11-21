@@ -583,7 +583,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                     finally:
                         conn.close()
 
-                self.assertEqual(manage('public_status'), {'enabled': False, 'backend':'cloudcli'})
+                self.assertEqual(manage('public_status'), {'enabled': False, 'backend':'cloudcli', 'gatewayRevision':server.GATEWAY_REVISION})
                 for operation in ('list', 'settings', 'issue', 'enable_public'):
                     self.assertEqual(admin_request(operation), {'error': server.PUBLIC_DISABLED_MESSAGE})
                 self.assertEqual(admin_request('enable_public', accepted='true'), {'error': server.PUBLIC_DISABLED_MESSAGE})
@@ -598,7 +598,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 with self.assertRaisesRegex(ValueError, '启用公网'):
                     server.issue(self.root, 'https://fixture.example', self.root/'unissued.key')
                 self.assertFalse((self.root/'unissued.key').exists())
-                self.assertEqual(manage('enable_public', accepted=True), {'enabled': True, 'backend':'cloudcli'})
+                self.assertEqual(manage('enable_public', accepted=True), {'enabled': True, 'backend':'cloudcli', 'gatewayRevision':server.GATEWAY_REVISION})
                 runtime = manage('public_status', runtime=True)
                 self.assertEqual((runtime['enabled'], runtime['active'], runtime['waiting']), (True, 0, 0))
                 self.assertEqual(runtime['subscription'], {'state': 'unavailable', 'windows': {}})
@@ -636,7 +636,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                     legacy = next(key for key in summary['keys'] if key['id'] == legacy_id)
                     self.assertEqual(legacy['active_count'], 2)
                 with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0}) as reopened:
-                    self.assertEqual(reopened.manage({'action':'public_status'}), {'enabled':True, 'backend':'cloudcli'})
+                    self.assertEqual(reopened.manage({'action':'public_status'}), {'enabled':True, 'backend':'cloudcli', 'gatewayRevision':server.GATEWAY_REVISION})
                     self.assertEqual(reopened.manage({'action':'list'})['concurrency'], 2)
                 self.assertEqual(request('GET','/v1/cloudcli/models',legacy_key)[0],200)
 

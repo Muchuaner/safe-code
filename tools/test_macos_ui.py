@@ -19,9 +19,9 @@ with sync_playwright() as p:
    const generatesAccount=m.op==='safeCodeApi.install'&&!window.cloudInstalled&&window.publicGatewayFixture?.cloudcliConfigured===false;
    if(m.op==='safeCodeApi.install'&&!needsKey){
      window.cloudInstalled=true;
-     window.publicGatewayFixture={enabled:window.publicGatewayFixture?.enabled||false,backend:'cloudcli',cloudcliConfigured:true};
+     window.publicGatewayFixture={enabled:window.publicGatewayFixture?.enabled||false,backend:'cloudcli',gatewayRevision:1,cloudcliConfigured:true};
    }
-   if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true,backend:'cloudcli',cloudcliConfigured:true};
+   if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true,backend:'cloudcli',gatewayRevision:1,cloudcliConfigured:true};
    if(m.op==='cloud.install')window.cloudInstalled=true;
    const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:
      m.op==='desktopKey.status'?{configured:false,running:false}:
@@ -34,7 +34,7 @@ with sync_playwright() as p:
      needsKey?{cloudcliKeyRequired:true}:
      generatesAccount?{...window.publicGatewayFixture,cloudcliAccount:{username:'generated-fixture',password:'generated-fixture-password'}}:
      ['safeCodeApi.publicStatus','safeCodeApi.install','safeCodeApi.enablePublic'].includes(m.op)?
-       window.publicGatewayFixture||{enabled:true,backend:'cloudcli',active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
+       window.publicGatewayFixture||{enabled:true,backend:'cloudcli',gatewayRevision:1,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
      m.op==='window.gateway.open'?true:
      m.op==='connect'?{server:{statuses:{account:true,claude:window.claudeInstalled},cloudReady:window.cloudInstalled,assignedIps:[],osVersion:'24.04'}}:
      m.op==='cloud.install'?{statuses:{account:true},cloudReady:true,assignedIps:[],osVersion:'24.04'}:
@@ -149,10 +149,13 @@ with sync_playwright() as p:
  page.locator('#claude-desktop-close').click()
  assert not errors,errors
 
- for cloud_installed in (False,True):
+ for gateway_state,cloud_installed,needs_key in (
+     ('{installed:false,enabled:false,cloudcliConfigured:false}',False,False),
+     ('{enabled:true,cloudcliConfigured:false}',True,True),
+     ("{enabled:true,backend:'cloudcli',cloudcliConfigured:true}",True,False),
+ ):
   newbie=browser.new_page(viewport={'width':740,'height':634})
   newbie.on('pageerror',lambda e:errors.append(str(e)))
-  gateway_state='{enabled:true,cloudcliConfigured:false}' if cloud_installed else '{installed:false,enabled:false,cloudcliConfigured:false}'
   flags='window.publicGatewayFixture='+gateway_state+';window.cloudInstalled='+str(cloud_installed).lower()+';'
   newbie.add_init_script(main_fixture+';'+flags)
   newbie.goto((root/'web'/'index.html').as_uri())
@@ -169,7 +172,7 @@ with sync_playwright() as p:
   enable.click()
   expect(newbie.locator('#app-message-confirm')).to_have_text('升级网关' if cloud_installed else '安装 API 服务')
   newbie.locator('#app-message-confirm').click()
-  if cloud_installed:
+  if needs_key:
    expect(newbie.locator('#safe-code-cloudcli-config')).to_be_visible()
    expect(newbie.locator('#safe-code-cloudcli-config input')).to_have_count(1)
    newbie.locator('#safe-code-cloudcli-api-key').fill('fixture-cloudcli-key')
@@ -177,7 +180,7 @@ with sync_playwright() as p:
    newbie.locator('#app-message-confirm').click()
    newbie.wait_for_function("calls.filter(message=>message.op==='safeCodeApi.install').length===2")
    assert newbie.evaluate("calls.filter(message=>message.op==='safeCodeApi.install').at(-1).args.cloudcli")=={'apiKey':'fixture-cloudcli-key'}
-  else:
+  elif not cloud_installed:
    expect(newbie.locator('#app-message-title')).to_have_text('CloudCLI 账户已创建')
    expect(newbie.locator('#app-message-body')).to_contain_text('generated-fixture-password')
    newbie.locator('#app-message-confirm').click()
@@ -188,6 +191,8 @@ with sync_playwright() as p:
    expect(newbie.locator('#app-message-confirm')).to_have_text('保证自用')
    newbie.locator('#app-message-confirm').click()
   expect(enable).to_have_text('公网已启用')
+  if cloud_installed and not needs_key:
+   assert newbie.evaluate("calls.find(message=>message.op==='safeCodeApi.install').args")=={'accepted':True}
   expect(newbie.locator('#safe-code-cloudcli-api-key')).to_have_value('')
   newbie.locator('#safe-code-api-manage').click()
   newbie.wait_for_function("calls.some(message=>message.op==='window.gateway.open')")

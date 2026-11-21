@@ -32,6 +32,7 @@ from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegi
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
+GATEWAY_REVISION = 1
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中确认「保证自用」并启用公网。'
 # A shared promotional code, checked only at the gateway.
 ACTIVATION_CODE_SHA256 = bytes.fromhex('89debb851e3fc69c8e163a3b6462a3493e93d38ae8cf0132e419bd9e0b32d2b9')
@@ -468,7 +469,8 @@ class PublicServer(ThreadingHTTPServer):
     def manage(self, request):
         operation = request.get('action')
         if operation == 'public_status':
-            status = {'enabled': self.public_enabled, 'backend': 'cloudcli' if self.config['cloudcli'] else 'unconfigured'}
+            status = {'enabled': self.public_enabled, 'backend': 'cloudcli' if self.config['cloudcli'] else 'unconfigured',
+                      'gatewayRevision': GATEWAY_REVISION}
             if status['enabled'] and request.get('runtime') is True:
                 active, waiters, concurrency = self.queue.snapshot()
                 status.update(active=sum(active.values()), waiting=sum(waiters.values()),
@@ -481,7 +483,7 @@ class PublicServer(ThreadingHTTPServer):
             if self.config['cloudcli'] is None:
                 raise ValueError(CLOUDCLI_REQUIRED)
             (self.root/PUBLIC_ENABLED).touch(mode=0o600, exist_ok=True)
-            return {'enabled': self.public_enabled, 'backend': 'cloudcli'}
+            return {'enabled': self.public_enabled, 'backend': 'cloudcli', 'gatewayRevision': GATEWAY_REVISION}
         if not self.public_enabled:
             raise ValueError(PUBLIC_DISABLED_MESSAGE)
         if operation == 'refresh_subscription':

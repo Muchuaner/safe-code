@@ -133,6 +133,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let claudeDesktopBusy=false,claudeDesktopStatus=null,claudeDesktopPolling=false;
     let publicGatewayEnabled=false,publicGatewayLoading=false,publicGatewayReachable=false,publicGatewayMissing=false;
     let publicGatewayUpgrade=false,publicGatewayNeedsCloudKey=false;
+    const requiredGatewayRevision=1;
     let publicGatewaySetupOnly=false;
     let publicGatewayTask,publicGatewayTimer;
     let publicGatewaySubscription;
@@ -732,7 +733,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const reachable=Boolean(status);
       if(reachable) {
         publicGatewayMissing=status.installed===false;
-        publicGatewayUpgrade=!publicGatewayMissing&&status.backend!=='cloudcli';
+        publicGatewayUpgrade=!publicGatewayMissing&&(status.backend!=='cloudcli'||(status.gatewayRevision??0)<requiredGatewayRevision);
         if(status.cloudcliConfigured||status.backend==='cloudcli')publicGatewayNeedsCloudKey=false;
         publicGatewayEnabled=status.enabled===true&&!publicGatewayUpgrade;
       }
@@ -781,7 +782,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           renderPublicGatewayStatus(status);
           if(!claudeDesktopBusy&&(interactive||publicGatewayMissing||publicGatewayUpgrade))
             publicGatewayNotice(publicGatewayNeedsCloudKey?'请填写 CloudCLI API Key。'
-              :publicGatewayUpgrade?'旧网关需要升级为 CloudCLI 后端。已有 Safe Code Key 和用量将保留。'
+              :publicGatewayUpgrade?'当前网关有更新。升级会保留已有 Safe Code Key 和用量。'
               :publicGatewayMissing?'安装时会自动检查并准备 CloudCLI。':'');
         }catch(error){
           if(attempt!==connectionAttempt)return;
