@@ -81,6 +81,16 @@ public sealed partial class SshSession
         }
     }
 
+    public Task<JsonElement> BindPublicGatewayHostAsync(PublicGatewayTicket ticket, string hostname, CancellationToken ct)
+    {
+        RequireVerifiedHostControl();
+        string keyId = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(ticket.Key)));
+        return RequestGatewayAsync(new
+        {
+            action = "bind_ssh_device", keyId, pin = ticket.Pin, hostClientId, hostname
+        }, ct, timeout: TimeSpan.FromSeconds(15));
+    }
+
     public async Task<JsonElement> ManagePublicGatewayAsync(Dictionary<string, JsonElement> request, CancellationToken ct)
     {
         string? action = request.GetValueOrDefault("action").ValueKind == JsonValueKind.String
@@ -127,7 +137,7 @@ public sealed partial class SshSession
         });
     }
 
-    public async Task<JsonElement> InstallPublicGatewayAsync(CancellationToken ct)
+    public async Task<JsonElement> InstallPublicGatewayAsync(CancellationToken ct, JsonElement? cloudcli = null)
     {
         var assembly = Assembly.GetExecutingAssembly();
         var files = new Dictionary<string, string>();
@@ -143,7 +153,7 @@ public sealed partial class SshSession
             files.Add(resource[prefix..],
                 Convert.ToBase64String(buffer.ToArray()));
         }
-        return await RequestGatewayAsync(new { action = "install", accepted = true, files }, ct,
+        return await RequestGatewayAsync(new { action = "install", accepted = true, files, cloudcli }, ct,
             timeout: TimeSpan.FromSeconds(225));
     }
 

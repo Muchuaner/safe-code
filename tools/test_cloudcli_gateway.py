@@ -13,6 +13,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ REMOTE = ROOT / 'src/SafeCode.Core/Remote'
 PUBLIC = ROOT / 'tools/desktop-api'
 sys.path[:0] = [str(REMOTE), str(PUBLIC)]
 import desktop_gateway as gateway
+import configure_cloudcli as setup_cloudcli
 
 public_spec = importlib.util.spec_from_file_location('public_gateway_fixture', PUBLIC / 'server.py')
 public_gateway = importlib.util.module_from_spec(public_spec)
@@ -119,6 +121,11 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
                                             for index, (name, mime, data) in enumerate(uploads)]})
             return
         data = json.loads(raw)
+        if self.path == '/api/agent' and not data:
+            allowed = self.headers.get('x-api-key') == API_KEY
+            self.send_json({'error': 'Either githubUrl or projectPath is required' if allowed else 'Invalid API key'},
+                           400 if allowed else 401)
+            return
         if self.path == '/api/projects/create-project':
             server.registered_projects.append(data['path'])
             self.send_json({'success': True})
@@ -813,23 +820,56 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(len(self.cloud.requests), 3)
         self.assertNoNativeFallback()
 
-    def test_public_cloudcli_backend_requires_loopback_before_listening(self):
+    def test_public_cloudcli_backend_rejects_unrestricted_direct_listeners(self):
         with patch.object(public_gateway, 'load_cloudcli_config', return_value=self.config):
-            with self.assertRaisesRegex(ValueError, 'requires a loopback listener'):
+            with self.assertRaisesRegex(ValueError, 'require Desktop tool approvals'):
                 public_gateway.PublicServer(self.working_state, {'bind': '0.0.0.0', 'port': 0})
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
 
-    def test_new_public_account_stays_in_native_mode_until_restart(self):
+    def test_deployment_verifies_agent_credentials_without_dispatching_a_turn(self):
+        gateway.verify_cloudcli_agent(self.config)
+        with self.assertRaisesRegex(gateway.GatewayError, '拒绝了'):
+            gateway.verify_cloudcli_agent({**self.config, 'apiKey': 'invalid-test-key'})
+        self.assertFalse(self.cloud.requests)
+        self.assertNoNativeFallback()
+
+    def test_direct_deployment_preserves_listener_and_stores_only_verified_cloudcli_settings(self):
+        self.config_path.unlink()
+        self.use_patch(patch.object(setup_cloudcli, 'cloudcli_websocket'))
+        # Self-hosted production uses port 3001; use an isolated loopback fixture here.
+        verify = self.use_patch(patch.object(setup_cloudcli, 'verify_cloudcli_agent',
+            side_effect=lambda config: gateway.verify_cloudcli_agent({**config,'port':self.config['port']})))
+        login = self.use_patch(patch.object(setup_cloudcli, 'cloudcli_web_login',
+            side_effect=lambda port, credentials: gateway.cloudcli_web_login(self.config['port'], credentials)))
+        state = self.working_state/'config.json'
+        listener = {'bind': '0.0.0.0', 'port': 45144}
+        state.write_text(json.dumps(listener))
+        with self.assertRaisesRegex(ValueError, '创建网页账户'):
+            setup_cloudcli.prepare_public_gateway(self.home, self.working_state, {})
+        self.assertFalse(self.config_path.exists())
+        options = {'apiKey':API_KEY, 'username':'fixture', 'password':'fixture-password'}
+        result = setup_cloudcli.prepare_public_gateway(self.home, self.working_state, options)
+        self.assertEqual(result['bind'], listener['bind'])
+        self.assertEqual(hashlib.sha256(self.config_path.read_bytes()).hexdigest(), result['created'])
+        self.assertEqual(self.config_path.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(gateway.load_cloudcli_config()['desktopToolApprovals'])
+        self.assertEqual(json.loads(state.read_text()), listener)
+        verify.assert_called_once()
+        login.assert_called_once()
+        self.assertFalse(self.cloud.requests)
+        self.assertNoNativeFallback()
+
+    def test_unconfigured_gateway_refuses_models_and_messages_even_when_an_old_key_is_enabled(self):
         public_state = self.home / 'public-state'
         (public_state / 'keys').mkdir(parents=True)
         subprocess.run([
-            'openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
+            'openssl', 'req', '-x509', '-newkey', 'rsa:2048',
             '-nodes', '-keyout', str(public_state / 'key.pem'), '-out', str(public_state / 'cert.pem'),
             '-days', '1', '-subj', '/CN=SafeCode Test Fixture',
         ], check=True, capture_output=True, timeout=5)
 
-        # A native listener was started before a later CloudCLI configuration was saved.
+        # A legacy public gateway is upgraded before its operator configures CloudCLI.
         configured = self.config_path.read_text()
         self.config_path.unlink()
         with patch.object(public_gateway, 'load_cloudcli_config', return_value=None) as startup_config:
@@ -837,12 +877,30 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 self.config_path.write_text(configured)
                 self.config_path.chmod(0o600)
                 self.assertIsNotNone(gateway.load_cloudcli_config())
-                account = public.account('f' * 64, 'macos')
+                key = 'a' * 43
+                digest = hashlib.sha256(key.encode()).hexdigest()
+                (public_state/'keys'/digest).touch()
+                (public_state/public_gateway.PUBLIC_ENABLED).touch()
+                worker = threading.Thread(target=public.serve_forever, daemon=True)
+                worker.start()
                 try:
-                    self.assertIsNone(account.cloudcli)
+                    for method, path in (('GET', '/v1/models'), ('GET', '/v1/cloudcli/models'),
+                                         ('POST', '/v1/messages'), ('POST', '/v1/cloudcli/messages')):
+                        conn = http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=3,
+                                                           context=ssl._create_unverified_context())
+                        try:
+                            conn.request(method, path, b'{}' if method == 'POST' else None,
+                                         {'Authorization': 'Bearer '+key})
+                            response = conn.getresponse()
+                            self.assertEqual(response.status, 503)
+                            response.read()
+                        finally:
+                            conn.close()
+                    self.assertFalse(public.accounts)
                     startup_config.assert_called_once_with()
                 finally:
-                    account.close()
+                    public.shutdown()
+                    worker.join()
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
 

@@ -49,7 +49,7 @@ Claude Desktop 的系统提示、客户端工具定义、模型输出预算、�
 
 需要 VPS 上的 CloudCLI 1.37.7 或 1.37.8。Mac 通过 SafeCode 已启用的「本机远程控制」连接到同一台 VPS。Mac 需有可用的 `/usr/bin/python3`，且 macOS 已允许该 SSH 登录账户访问所选目录。CloudCLI 用的是工作用户配置的 Claude 认证。面向用户的服务使用 Claude Console API Key 或支持的云提供商认证。[Anthropic 认证说明](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
 
-更新 VPS 网关时，把本仓库 `tools/desktop-api/` 下的安装脚本及其 Python 文件，与 `src/SafeCode.Core/Remote/` 下的 `desktop_gateway.py`、`codex_bridge.zip` 放到同一目录。用 [网关安装脚本](../tools/desktop-api/install.sh) 将监听地址设为 `127.0.0.1`。CloudCLI 模式通过 SafeCode 的 SSH 接入或一条既有的本机回环转发使用，公网监听不承载这个模式。
+更新 VPS 网关时，把本仓库 `tools/desktop-api/` 下的安装脚本及其 Python 文件，与 `src/SafeCode.Core/Remote/` 下的 `desktop_gateway.py`、`codex_bridge.zip` 放到同一目录。已有固定工作站配置的网关，使用 [网关安装脚本](../tools/desktop-api/install.sh) 保持监听地址为 `127.0.0.1`，继续使用原 HTTPS 入口或 SSH 通道。新部署的公网直连网关可通过 Safe Code 的「公网网关」配置，使用 CloudCLI 的标准工具审批。
 
 在 Mac 启用「本机远程控制」，然后用 CloudCLI 服务的 Linux 工作账户运行配置工具。以下目录是公开示例，替换为目标 Mac 上的目录：
 

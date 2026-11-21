@@ -1,6 +1,7 @@
 """SafeCode device enrolment and the private FRP authorization callback."""
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
+import fcntl
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,6 +13,7 @@ import secrets
 import shlex
 import socket
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import time
@@ -19,6 +21,7 @@ import time
 
 PROOF = re.compile(r'[A-Za-z0-9_-]{43}')
 DEVICE = re.compile(r'[0-9a-f]{20}')
+SSH_DEVICE = re.compile(r'ssh-[0-9a-f]{20}')
 KEY_ID = re.compile(r'[0-9a-f]{64}')
 PORTS = range(45300, 45332)
 MAX_JSON = 4096
@@ -43,6 +46,88 @@ def write_file(path, content):
             staged.replace(path)
         finally:
             staged.unlink(missing_ok=True)
+
+
+class OwnerHosts:
+    """Bind a Key to an existing Safe Code SSH tunnel via the VPS management channel."""
+    def __init__(self, state, *, home=None):
+        self.state = Path(state)
+        self.home = Path.home() if home is None else Path(home)
+
+    def path(self, owner, device):
+        if not isinstance(owner, str) or not KEY_ID.fullmatch(owner) or not self.active_key(owner):
+            raise DeviceError('SafeCode Key cannot reuse an SSH device')
+        if not isinstance(device, str) or not SSH_DEVICE.fullmatch(device):
+            raise DeviceError('Invalid SSH device')
+        return self.state/'ssh-devices'/(owner+'-'+device)
+
+    def active_key(self, owner):
+        return (self.state/'keys'/owner).is_file() and not (self.state/'device-required'/owner).is_file()
+
+    @contextmanager
+    def locked(self, target):
+        target.parent.mkdir(mode=0o700, exist_ok=True)
+        fd = os.open(target.parent/'.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'wb') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+
+    def identity(self, device):
+        client_id = device[4:]
+        folder = self.home/'.ssh/safe-code-host'/client_id
+        def read_private(name):
+            with os.fdopen(os.open(folder/name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+                    raise DeviceError('Invalid SSH device configuration')
+                return stream.read(8193)
+        try:
+            lines = read_private('config').decode().splitlines()
+            public_key = read_private('identity.pub')
+            if len(lines) < 4 or lines[0] != '# Safe Code host bridge '+client_id or not public_key.startswith(b'ssh-ed25519 '):
+                raise ValueError()
+            alias = re.fullmatch(r'Host ([a-z][a-z0-9_-]{0,31})', lines[1])
+            if alias is None or lines[2].strip() != 'HostName 127.0.0.1':
+                raise ValueError()
+            return alias[1], hashlib.sha256(public_key).hexdigest(), shlex.join(['ssh', '-F', str(folder/'config'), alias[1]])
+        except (OSError, ValueError):
+            raise DeviceError('The verified SSH tunnel is unavailable') from None
+
+    def bind(self, owner, client_id, hostname):
+        device = 'ssh-'+client_id if isinstance(client_id, str) else ''
+        target = self.path(owner, device)
+        if not isinstance(hostname, str) or not re.fullmatch(r'[\w .-]{1,48}', hostname) or not hostname.strip():
+            raise DeviceError('Invalid SSH device name')
+        alias, identity, _ = self.identity(device)
+        proof = secrets.token_urlsafe(32)
+        with self.locked(target):
+            write_file(target, json.dumps({'proof':digest(proof),'identity':identity,'hostname':hostname.strip()}))
+        return {'deviceId':device,'deviceProof':proof,'alias':alias}
+
+    def authenticate(self, owner, platform, device, proof):
+        target = self.path(owner, device)
+        if platform != 'windows' or not isinstance(proof, str) or not PROOF.fullmatch(proof):
+            raise DeviceError('Invalid SSH device proof')
+        try:
+            with os.fdopen(os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+                record = json.loads(stream.read(4096))
+            if not hmac.compare_digest(record['proof'], digest(proof)):
+                raise ValueError()
+        except (OSError, KeyError, TypeError, ValueError):
+            raise DeviceError('Invalid SSH device proof') from None
+        return target, record
+
+    def chat_binding(self, owner, platform, device, proof):
+        _, record = self.authenticate(owner, platform, device, proof)
+        alias, identity, command = self.identity(device)
+        if not hmac.compare_digest(identity, record['identity']):
+            raise DeviceError('The SSH device was changed')
+        return {'id':device,'platform':platform,'hostname':record['hostname'],'alias':alias,'command':command}
+
+    def revoke(self, owner, platform, device, proof):
+        with self.locked(self.path(owner, device)):
+            target, _ = self.authenticate(owner, platform, device, proof)
+            target.unlink(missing_ok=True)
 
 
 class Devices:

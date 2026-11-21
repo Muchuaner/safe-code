@@ -11,6 +11,37 @@ spec.loader.exec_module(bridge)
 
 
 class DevicePairingTests(unittest.TestCase):
+    def test_key_can_use_only_its_verified_ssh_device_and_stops_when_identity_changes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            owner, other, client = 'a'*64, 'b'*64, 'c'*20
+            (root/'keys').mkdir()
+            for key in (owner, other):
+                (root/'keys'/key).touch()
+            tunnel = root/'.ssh/safe-code-host'/client
+            tunnel.mkdir(parents=True)
+            (tunnel/'config').write_text(f'# Safe Code host bridge {client}\nHost win-fixture\n  HostName 127.0.0.1\n  Port 45300\n')
+            public_key = tunnel/'identity.pub'
+            public_key.write_text('ssh-ed25519 fixture')
+            hosts = bridge.OwnerHosts(root, home=root)
+            binding = hosts.bind(owner, client, 'fixture PC')
+            device_id, proof = binding['deviceId'], binding['deviceProof']
+            result = hosts.chat_binding(owner, 'windows', device_id, proof)
+            self.assertEqual((result['hostname'], result['alias']), ('fixture PC', 'win-fixture'))
+            self.assertTrue(result['command'].endswith(' win-fixture'))
+            for key, platform, token in ((other,'windows',proof), (owner,'macos',proof), (owner,'windows','x'*43)):
+                with self.assertRaises(bridge.DeviceError):
+                    hosts.chat_binding(key, platform, device_id, token)
+            public_key.write_text('ssh-ed25519 replacement')
+            with self.assertRaises(bridge.DeviceError):
+                hosts.chat_binding(owner, 'windows', device_id, proof)
+            replacement = hosts.bind(owner, client, 'fixture PC')
+            with self.assertRaises(bridge.DeviceError):
+                hosts.revoke(owner, 'windows', device_id, proof)
+            hosts.revoke(owner, 'windows', device_id, replacement['deviceProof'])
+            with self.assertRaises(bridge.DeviceError):
+                hosts.chat_binding(owner, 'windows', device_id, replacement['deviceProof'])
+
     def test_same_key_has_distinct_ports_aliases_and_proofs(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

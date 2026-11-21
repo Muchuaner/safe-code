@@ -132,6 +132,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let bridgeBusy=false,bridgeStatus=null,bridgePolling=false;
     let claudeDesktopBusy=false,claudeDesktopStatus=null,claudeDesktopPolling=false;
     let publicGatewayEnabled=false,publicGatewayLoading=false,publicGatewayReachable=false,publicGatewayMissing=false;
+    let publicGatewayUpgrade=false,publicGatewayNeedsCloudConfig=false;
     let publicGatewaySetupOnly=false;
     let publicGatewayTask,publicGatewayTimer;
     let publicGatewaySubscription;
@@ -265,6 +266,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     function prepareWorkspace(settings){
       clearTimeout(publicGatewayTimer);
       publicGatewayEnabled=false;publicGatewayReachable=false;publicGatewayLoading=false;publicGatewayMissing=false;
+      publicGatewayUpgrade=false;publicGatewayNeedsCloudConfig=false;
       publicGatewaySubscription=undefined;
       $('#public-gateway-footer').hidden=true;
       clearInterval(metricsTimer);clearInterval(resourceTimer);clearInterval(environmentTimer);setResources(null,'等待服务器连接完成。');setEnvironmentAssessment(null,'等待连接');$('#update-login-password').hidden=true;nativeServer=null;connectionReady=false;connectionInFlight=true;busy=false;currentTask=-1;accountOptions={};resetDeploymentSettings();ipPolicy={lockIngress:false,lockEgress:false};
@@ -697,7 +699,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const gatewayUnavailable=claudeDesktopBusy||busy||publicGatewayLoading||!nativeServer?.statuses?.account;
       $('#public-gateway-runtime').disabled=gatewayUnavailable;
       $('#safe-code-api-enable').disabled=gatewayUnavailable||publicGatewayEnabled||!publicGatewayReachable;
-      $('#safe-code-api-enable').textContent=publicGatewayMissing?'安装 API 服务':publicGatewayEnabled?'公网已启用':'公网启用';
+      $('#safe-code-api-enable').textContent=publicGatewayMissing?'安装 API 服务':publicGatewayUpgrade?'升级 CloudCLI 网关':publicGatewayEnabled?'公网已启用':'公网启用';
+      $('#safe-code-cloudcli-config').hidden=!publicGatewayNeedsCloudConfig||!nativeServer?.cloudReady;
       $('#safe-code-api-manage').disabled=gatewayUnavailable||!publicGatewayEnabled;
       $('#claude-desktop-stop').hidden=publicGatewaySetupOnly||!managed;$('#claude-desktop-stop').disabled=claudeDesktopBusy;
       $('#claude-desktop-dialog').classList.toggle('public-api-only',publicGatewaySetupOnly);
@@ -722,20 +725,25 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     function publicGatewayNotice(message){
       const status=$('#safe-code-api-progress');
       status.textContent=message;status.hidden=!message;
-      $('#safe-code-api-deploy-claude').hidden=!message.includes('请先在 Safe Code 的部署列表中安装 Claude Code');
+      $('#safe-code-api-deploy-claude').hidden=!message.includes('安装 CloudCLI');
     }
     function renderPublicGatewayStatus(status,error){
       const footer=$('#public-gateway-footer'),badge=$('#public-gateway-runtime'),quota=$('#footer-claude-limits');
       footer.hidden=!connectionReady||!nativeServer?.statuses?.account;
       const reachable=Boolean(status);
-      if(reachable)publicGatewayEnabled=status.enabled===true;
+      if(reachable) {
+        publicGatewayMissing=status.installed===false;
+        publicGatewayUpgrade=!publicGatewayMissing&&status.backend!=='cloudcli';
+        publicGatewayNeedsCloudConfig=status.cloudcliConfigured===false;
+        publicGatewayEnabled=status.enabled===true&&!publicGatewayUpgrade;
+      }
       publicGatewayReachable=reachable;
-      publicGatewayMissing=status?.installed===false;
       badge.classList.toggle('inactive',!reachable||!publicGatewayEnabled);
       badge.title=error||(publicGatewayEnabled?'打开 Safe Code API 网关管理':'打开 Safe Code API 公网设置');
       if(!reachable)badge.textContent=/SSH 认证失败|服务器身份已变化/.test(error||'')
         ?'公网网关 · 需检查 SSH':publicGatewayEnabled?'公网网关 · 管理连接重连中':'公网网关 · 状态不可用';
       else if(publicGatewayMissing)badge.textContent='公网网关 · 待安装';
+      else if(publicGatewayUpgrade)badge.textContent='公网网关 · 待升级';
       else if(!publicGatewayEnabled)badge.textContent='公网网关 · 未启用';
       else if(status.waiting==null)badge.textContent='公网网关 · 已启用';
       else {
@@ -771,10 +779,12 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         try{
           const status=await native('safeCodeApi.publicStatus');
           if(attempt!==connectionAttempt)return;
-          const wasMissing=publicGatewayMissing;
           renderPublicGatewayStatus(status);
-          if(!claudeDesktopBusy&&(interactive||wasMissing||publicGatewayMissing))
-            publicGatewayNotice(publicGatewayMissing?'当前 VPS 尚未安装 Safe Code API 管理服务。安装后可启用公网。':'');
+          if(!claudeDesktopBusy&&(interactive||publicGatewayMissing||publicGatewayUpgrade))
+            publicGatewayNotice(publicGatewayNeedsCloudConfig&&!nativeServer?.cloudReady
+              ? '请先安装 CloudCLI，并创建 CloudCLI 网页账户和 API Key。'
+              : publicGatewayUpgrade?'旧网关需要升级为 CloudCLI 后端。已有 Safe Code Key 和用量将保留。'
+              : publicGatewayMissing?'配置 CloudCLI 后即可安装并启用公网网关。':'');
         }catch(error){
           if(attempt!==connectionAttempt)return;
           renderPublicGatewayStatus(null,error.message);
@@ -832,25 +842,40 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#claude-desktop-dialog').addEventListener('cancel',event=>{if(claudeDesktopBusy)event.preventDefault();});
     $('#claude-desktop-dialog').addEventListener('close',()=>{
       if($('#claude-desktop-dialog').open)return;
+      for(const name of ['api-key','username','password'])$('#safe-code-cloudcli-'+name).value='';
       publicGatewaySetupOnly=false;renderClaudeDesktop();
     });
     $('#safe-code-api-deploy-claude').onclick=()=>{
       $('#claude-desktop-dialog').close();
       switchMode('deployment');
+      void installAdvanced('cloud');
     };
+    $('#safe-code-open-cloudcli').onclick=()=>native('cloud.open').catch(e=>publicGatewayNotice(e.message));
     $('#claude-desktop-consent').onchange=()=>renderClaudeDesktop();
     $('#safe-code-api-enable').onclick=async()=>{
       if($('#safe-code-api-enable').disabled)return;
       const attempt=connectionAttempt;
-      if(publicGatewayMissing){
-        if(!await showAppMessage('将在当前 VPS 安装 Safe Code API，默认端口为 45143。缺少 Node.js 时会从官方渠道安装，完成后仍需确认启用公网。',
-          {title:'安装 Safe Code API',confirm:'安装 API 服务',cancel:'取消'}))return;
-        if(attempt!==connectionAttempt||!publicGatewayMissing||$('#safe-code-api-enable').disabled||!$('#claude-desktop-dialog').open)return;
-        claudeDesktopBusy=true;renderClaudeDesktop();publicGatewayNotice('正在检查所需组件并安装 Safe Code API 服务…');
+      if(publicGatewayMissing||publicGatewayUpgrade){
+        const upgrade=publicGatewayUpgrade;
+        if(publicGatewayNeedsCloudConfig&&!nativeServer?.cloudReady){
+          publicGatewayNotice('请先安装 CloudCLI，并创建 CloudCLI 网页账户和 API Key。');return;
+        }
+        const fields=['api-key','username','password'].map(name=>$('#safe-code-cloudcli-'+name));
+        const [apiKey,username,password]=fields.map(field=>field.value);
+        if(publicGatewayNeedsCloudConfig&&(!apiKey.trim()||!username.trim()||!password)){
+          publicGatewayNotice('请填写 CloudCLI API Key 和网页登录资料。');fields.find(field=>!field.value.trim())?.focus();return;
+        }
+        if(!await showAppMessage(upgrade?'将在当前 VPS 验证 CloudCLI 并重启 API 服务。已有 Safe Code Key 和用量会保留。':'将在当前 VPS 验证 CloudCLI 并安装 API 服务。安装完成后可确认启用公网。',
+          {title:upgrade?'升级 CloudCLI 网关':'安装 Safe Code API',confirm:upgrade?'升级网关':'安装 API 服务',cancel:'取消'}))return;
+        if(attempt!==connectionAttempt||(!publicGatewayMissing&&!publicGatewayUpgrade)||$('#safe-code-api-enable').disabled||!$('#claude-desktop-dialog').open)return;
+        const options=publicGatewayNeedsCloudConfig?{accepted:true,cloudcli:{apiKey:apiKey.trim(),username:username.trim(),password}}:{accepted:true};
+        fields.forEach(field=>field.value='');
+        claudeDesktopBusy=true;renderClaudeDesktop();publicGatewayNotice('正在验证 CloudCLI 并部署 API 服务…');
         try{
-          const status=await native('safeCodeApi.install',{accepted:true});
+          const status=await native('safeCodeApi.install',options);
           if(attempt!==connectionAttempt)return;
           renderPublicGatewayStatus(status);
+          void refreshPublicGateway();
           publicGatewayNotice(publicGatewayEnabled?'API 服务已启用，可以管理网关。':'API 服务已安装，可以启用公网。');
         }catch(error){if(attempt===connectionAttempt)publicGatewayNotice(error.message);}
         finally{claudeDesktopBusy=false;renderClaudeDesktop();}
@@ -858,7 +883,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       }
       if(!await showAppMessage('高并发、大量调用会显著增加账户风险，由此造成的损失 SafeCode 概不负责！请确保您知道自己在做什么！',
         {title:'⚠️ 公网启用警告',confirm:'保证自用',cancel:'我点错了'}))return;
-      if(attempt!==connectionAttempt||publicGatewayMissing||$('#safe-code-api-enable').disabled||!$('#claude-desktop-dialog').open)return;
+      if(attempt!==connectionAttempt||publicGatewayMissing||publicGatewayUpgrade||$('#safe-code-api-enable').disabled||!$('#claude-desktop-dialog').open)return;
       claudeDesktopBusy=true;renderClaudeDesktop();publicGatewayNotice('正在启用公网…');
       try{
         const status=await native('safeCodeApi.enablePublic',{accepted:true});

@@ -149,7 +149,8 @@ internal sealed class MacBackend : IDisposable
                 return await ReadGatewayStatusAsync(RequireGatewaySession(),ct);
             case "safeCodeApi.install":
                 if (!Flag("accepted")) throw new InvalidOperationException("请先确认安装 Safe Code API 服务。");
-                return await RequireGatewaySession().InstallPublicGatewayAsync(ct);
+                return await RequireGatewaySession().InstallPublicGatewayAsync(ct,
+                    args.TryGetProperty("cloudcli",out var cloudcliInstall)?cloudcliInstall:null);
             case "safeCodeApi.enablePublic":
                 if (!Flag("accepted")) throw new InvalidOperationException("请先确认「保证自用」。");
                 return await RequireGatewaySession().EnablePublicGatewayAsync(ct);
@@ -171,7 +172,7 @@ internal sealed class MacBackend : IDisposable
                 return await gatewaySession.ManagePublicGatewayAsync(request,ct);
             case "claudeDesktop.status":return await claudeDesktop.RefreshAsync(ct);
             case "claudeDesktop.start":
-                if(!Flag("accepted"))throw new InvalidOperationException("请先确认通过 VPS 上原版 Claude Code 接入。");
+                if(!Flag("accepted"))throw new InvalidOperationException("请先确认通过 VPS 上的 CloudCLI 接入。");
                 if(File.Exists(Path.Combine(directory,"desktop-key.state")))throw new InvalidOperationException("请先停用 API Key 接入，再启用 SSH 接入。");
                 using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {

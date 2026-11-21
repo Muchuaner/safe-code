@@ -187,6 +187,7 @@ class GatewayError(Exception):
 
 
 CLOUDCLI_CONFIG = Path('.config/safe-code/cloudcli-gateway.json')
+CLOUDCLI_REQUIRED = '请先在当前 VPS 配置 CloudCLI 后端。Safe Code 的 Claude Desktop 接入需要 CloudCLI。'
 CLOUDCLI_MCP_SCRIPT = '/opt/safe-code/desktop-api/host_control_mcp.py'
 CLOUDCLI_SESSION_ID = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}')
 CLOUDCLI_ERROR_STATUS = {400, 401, 402, 403, 404, 409, 413, 422, 429, 500, 502, 503, 504, 529}
@@ -220,6 +221,31 @@ def load_cloudcli_config(home=None):
         return cloudcli_config(json.loads(raw))
     except (OSError, ValueError, TypeError, OverflowError):
         raise GatewayError('CloudCLI configuration is invalid or is not private to the work account', 503) from None
+
+
+def require_cloudcli_config():
+    try:
+        config = load_cloudcli_config()
+    except GatewayError:
+        raise GatewayError('VPS 上的 CloudCLI 配置无效，请检查工作账户的网关配置。', 503) from None
+    if config is None:
+        raise GatewayError(CLOUDCLI_REQUIRED, 503)
+    return config
+
+
+def verify_cloudcli_agent(config):
+    """The authenticated Agent route rejects an empty body before preparing a turn."""
+    try:
+        with closing(HTTPConnection('127.0.0.1', config['port'], timeout=5)) as conn:
+            conn.request('POST', '/api/agent', b'{}', {'Content-Type': 'application/json', 'x-api-key': config['apiKey']})
+            with conn.getresponse() as response:
+                if response.status in (401, 403):
+                    raise GatewayError('CloudCLI 拒绝了网关使用的 API Key，请检查 CloudCLI 的密钥设置。', 503)
+                if response.status == 400 and json.loads(response.read(4096)).get('error') == 'Either githubUrl or projectPath is required':
+                    return
+    except (OSError, HTTPException, ValueError, AttributeError):
+        pass
+    raise GatewayError('无法验证 VPS 上的 CloudCLI Agent API，请检查 CloudCLI 是否已安装并运行。', 503)
 
 
 def cloudcli_web_origin(origin):
@@ -2613,11 +2639,13 @@ class Conversation:
 
 
 class Manager:
-    def __init__(self, directory, config):
+    def __init__(self, directory, config, *, require_cloudcli=False):
         self.directory, self.config = Path(directory), config
         settings = config['cloudcli'] if 'cloudcli' in config else load_cloudcli_config()
         if settings is not None:
             settings = cloudcli_config(settings)
+        if require_cloudcli and settings is None:
+            raise GatewayError(CLOUDCLI_REQUIRED, 503)
         self.cloudcli = CloudCliBackend(self.directory, settings, config.get('pairedDevice')) if settings is not None else None
         self.conversations = []
         self.history = DesktopHistory(self.directory/'desktop-history.sqlite3')
@@ -2663,7 +2691,8 @@ class Manager:
             for turn_id in self.turn_messages.keys()|self.completed_usage.keys():
                 parts=[self.completed_usage[turn_id]] if turn_id in self.completed_usage else [self.usage[i] for i in self.turn_messages[turn_id]]
                 for key in usage:usage[key]+=sum(v.get(key,0) for v in parts)
-        return {'ok': True, 'bridge': 'vps-claude-code', 'instance': self.config['instance'], 'pid': os.getpid(),
+        return {'ok': True, 'bridge': 'vps-claude-code', 'backend': 'cloudcli' if self.cloudcli else 'claude_code',
+                'instance': self.config['instance'], 'pid': os.getpid(),
                 'turnsStarted': self.started, 'usageAvailable': bool(self.usage or self.completed_usage), 'usage': usage}
 
     def finish_conversation_request(self, conversation):
@@ -2980,7 +3009,7 @@ def sse_tail(response):
 def serve(directory):
     directory = Path(directory)
     config = json.loads((directory/'config.json').read_text())
-    manager = Manager(directory, config)
+    manager = Manager(directory, {**config, 'cloudcli': require_cloudcli_config()}, require_cloudcli=True)
     server = Server(manager)
     (directory/'running.json').write_text(json.dumps({'managedBy': 'safe-code-desktop-vps', 'pid': os.getpid(), 'port': server.server_port, 'instance': config['instance']}))
     def shutdown(*args):threading.Thread(target=server.shutdown, daemon=True).start()
@@ -3036,22 +3065,11 @@ def manage(directory, request):
         configpath.unlink(missing_ok=True)
         return {'ready': False, 'port': 0, 'instance': '', 'warning': None}
     if request['action'] != 'start':raise GatewayError('Unknown gateway action', 400)
-    import zipfile, io
-    archive = base64.b64decode(request['bridgeSource'])
-    if hashlib.sha256(archive).hexdigest() != request['bridgeHash']:raise GatewayError('Remote component checksum mismatch')
-    library = Path.home()/'.local/share/safe-code/desktop-vps-components'/request['bridgeHash'][:16]
-    with zipfile.ZipFile(io.BytesIO(archive)) as source:
-        for name in source.namelist():
-            relative = Path(name)
-            destination = library/relative
-            if relative.is_absolute() or '..' in relative.parts or not destination.resolve().is_relative_to(Path.home().resolve()):raise GatewayError('Invalid component path')
-            content = source.read(name)
-            if destination.exists():
-                if destination.is_symlink() or destination.read_bytes() != content:raise GatewayError('Existing component was modified; refusing to overwrite')
-            else:
-                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                destination.write_bytes(content)
-    config = {'token': request['token'], 'instance': request['instance'], 'library': str(library), 'node': request['node']}
+    try:
+        verify_cloudcli_agent(require_cloudcli_config())
+    except GatewayError as error:
+        return {'ready': False, 'port': 0, 'instance': '', 'warning': str(error)}
+    config = {'token': request['token'], 'instance': request['instance']}
     configpath.write_text(json.dumps(config));configpath.chmod(0o600)
     subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), '--serve', str(directory)],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(directory), start_new_session=True)

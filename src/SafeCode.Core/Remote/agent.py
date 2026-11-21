@@ -205,11 +205,6 @@ if operation=='desktop_gateway':
     import base64,hashlib,re,subprocess
     client=request.get('clientId','')
     if not re.fullmatch('[a-f0-9]{32}',client) or relative!=pathlib.Path('.local/state/safe-code/desktop-gateway')/client:raise ValueError('Desktop 网关目录无效。')
-    if request.get('action')=='start':
-        claude=base/'.local/bin/claude'
-        if not claude.is_file() or not os.access(claude,os.X_OK):raise ValueError('请先为工作用户部署 Claude Code。')
-        help_result=subprocess.run([str(claude),'--help'],cwd=str(base),capture_output=True,text=True,timeout=20)
-        if help_result.returncode or not all(flag in help_result.stdout+help_result.stderr for flag in ['--tools','--strict-mcp-config','--include-partial-messages']):raise ValueError('请先更新 Claude Code，Desktop 桥接需要工具限制与流式事件支持。')
     data=base64.b64decode(request['source']);digest=hashlib.sha256(data).hexdigest()
     library=base/'.local/share/safe-code/desktop-gateway';library.mkdir(parents=True,exist_ok=True,mode=0o700)
     if not library.resolve().is_relative_to(base):raise ValueError('Desktop 网关程序路径越界。')
@@ -1037,7 +1032,7 @@ API_STATE='.local/state/safe-code-desktop-api'
 def safe_code_api(options):
     action=options.get('action')
     if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
-                      'ticket_endpoint','key_host_reuse'):
+                      'ticket_endpoint','key_host_reuse','bind_ssh_device'):
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
@@ -1047,10 +1042,19 @@ def safe_code_api(options):
                  'LANG=C.UTF-8','/usr/bin/python3']
     command=[*work_python,'-B',str(script),'--state',str(directory)]
     if action=='install':
-        return install_safe_code_api(entry, command, options)
+        return install_safe_code_api(entry, command, options, work_python)
     if not script.is_file():
-        if action=='public_status':return {'installed':False,'enabled':False}
+        if action=='public_status':
+            return {'installed':False,'enabled':False,
+                    'cloudcliConfigured':(Path(entry.pw_dir)/'.config/safe-code/cloudcli-gateway.json').is_file()}
         raise RuntimeError('当前 VPS 尚未安装 Safe Code API 管理服务。')
+    if action == 'public_status':
+        status = safe_code_api_admin(command, options)
+        return {**status, 'cloudcliConfigured':(Path(entry.pw_dir)/'.config/safe-code/cloudcli-gateway.json').is_file()}
+    if action in ('enable_public', 'issue', 'key_host_reuse', 'bind_ssh_device'):
+        status = safe_code_api_admin(command, {'action':'public_status'})
+        if status.get('backend') != 'cloudcli':
+            raise RuntimeError('当前 VPS 需要先配置 CloudCLI 并升级 API 服务。请打开 Safe Code 的公网网关完成配置。')
     if action == 'set_port':
         return change_safe_code_api_port(command, options)
     if action == 'refresh_subscription':
@@ -1059,13 +1063,24 @@ def safe_code_api(options):
         source = Path(__file__).with_name('claude_usage.py').read_text()
         output = run([*work_python, '-I', '-'], stdin=source, timeout=18)
         return json.loads(output.stdout)
-    if action == 'key_host_reuse':
+    if action in ('key_host_reuse','bind_ssh_device'):
         settings = safe_code_api_admin(command, {'action':'settings'})
         # CloudCLI's gateway requires a loopback bind and uses its own device routing.
         if ipaddress.ip_address(settings['bind']).is_loopback:
             return {'allowed': False}
         reply = user_files('gateway_key_host_reuse', API_STATE, keyId=options.get('keyId'), pin=options.get('pin'))
-        return json.loads(reply.stdout)
+        allowed = json.loads(reply.stdout)
+        if action == 'key_host_reuse':
+            return allowed
+        if not allowed.get('allowed'):
+            raise ValueError('此 Key 无法绑定当前 VPS 的 SSH 控制通道。')
+        binding = run([*command, 'bind-ssh-device'],stdin=json.dumps({
+            'keyId':options.get('keyId'), 'hostClientId':options.get('hostClientId'), 'hostname':options.get('hostname'),
+        }),timeout=8)
+        value = json.loads(binding.stdout)
+        if value.get('error'):
+            raise ValueError(value['error'])
+        return value['value']
     if action in ('issue', 'ticket_endpoint'):
         origin = gateway_public_origin(safe_code_api_admin(command, {'action':'settings'}), options.get('hints'))
         if action == 'ticket_endpoint':
@@ -1103,7 +1118,7 @@ def gateway_public_origin(settings, hints):
             return f'https://{host}:{port}'
     raise ValueError('未识别到 VPS 的公网 IP。请用 VPS 控制台显示的公网 IP 重新建立 SSH 连接后再创建密钥。')
 
-def install_safe_code_api(entry, command, options):
+def install_safe_code_api(entry, command, options, work_python):
     if options.get('accepted') is not True:
         raise ValueError('请先确认安装 Safe Code API 服务。')
     files=options.get('files')
@@ -1116,40 +1131,124 @@ def install_safe_code_api(entry, command, options):
         try:fcntl.flock(guard,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:raise OperationError('deployment_busy','VPS 有部署正在运行，请等待完成后重试。') from None
         status={'action':'public_status'}
-        if (API_DIRECTORY/'server.py').is_file():
-            return safe_code_api_admin(command,status)
-        if (API_DIRECTORY.exists() or API_DIRECTORY.is_symlink() or API_UNIT.exists() or API_UNIT.is_symlink()
+        upgrading = (API_DIRECTORY/'server.py').is_file()
+        if not upgrading and (API_DIRECTORY.exists() or API_DIRECTORY.is_symlink() or API_UNIT.exists() or API_UNIT.is_symlink()
             or run(['systemctl','show','-p','LoadState','--value',API_UNIT.name],check=False).stdout.strip()!='not-found'):
             raise RuntimeError('检测到已有的 Safe Code API 文件或服务。请在 VPS 修复现有安装后重试。')
         secure_root_directory(API_DIRECTORY.parent,0o755)
         work_home=Path(entry.pw_dir)
-        if not os.access(work_home/'.local/bin/claude',os.X_OK):
-            raise RuntimeError('请先在 Safe Code 的部署列表中安装 Claude Code，再安装 API 服务。')
-        cloud_config=work_home/'.config/safe-code/cloudcli-gateway.json'
-        bind='127.0.0.1' if cloud_config.exists() or cloud_config.is_symlink() else '0.0.0.0'
+        if upgrading:
+            existing = safe_code_api_admin(command, status)
+            if existing.get('enabled'):
+                settings = safe_code_api_admin(command, {'action':'settings'})
+                if settings.get('busy'):
+                    raise RuntimeError('网关还有请求正在处理，请等网关空闲后再升级。')
+            if (API_DIRECTORY.is_symlink()
+                or run(['systemctl','show','-p','User','--value',API_UNIT.name]).stdout.strip()!=entry.pw_name):
+                raise RuntimeError('无法确认现有 Safe Code API 服务归属，请检查 VPS 服务配置。')
         with tempfile.TemporaryDirectory(prefix='desktop-api-install-',dir=STATE) as folder:
             for name,data in files.items():
-                (Path(folder)/name).write_bytes(base64.b64decode(data,validate=True))
+                source = Path(folder)/name
+                source.write_bytes(base64.b64decode(data,validate=True))
             if hashlib.sha256((Path(folder)/'codex_bridge.zip').read_bytes()).hexdigest()!=CODEX_BRIDGE_SOURCE_HASH:
                 raise ValueError('Safe Code API 安装组件校验失败。')
-            gateway_node()
+            # Stage code under a root-owned directory and send credentials only over stdin.
+            credentials = options.get('cloudcli') or {}
+            if not isinstance(credentials,dict):
+                raise ValueError('CloudCLI 登录资料格式无效。')
+            for field in ('apiKey','password'):
+                if isinstance(credentials.get(field),str) and credentials[field]:
+                    REDACTIONS.append(credentials[field])
+            if credentials and run([*work_python,'-I','-c','import websocket'],check=False,timeout=5).returncode:
+                apt(['python3-websocket'])
+            with tempfile.TemporaryDirectory(prefix='safe-code-cloudcli-') as preflight:
+                path = Path(preflight)
+                path.chmod(0o755)
+                for name in ('configure_cloudcli.py','desktop_gateway.py','host_control_mcp.py'):
+                    shutil.copyfile(Path(folder)/name, path/name)
+                    (path/name).chmod(0o644)
+                checked = json.loads(run([*work_python,'-B',str(path/'configure_cloudcli.py'),
+                    '--prepare-public-gateway',str(work_home/API_STATE)],stdin=json.dumps(credentials),timeout=28).stdout)
+                if checked.get('error'):
+                    raise ValueError(checked['error'])
+                bind = checked['bind']
+                created = checked.get('created')
+                def rollback_config():
+                    if created:
+                        run([*work_python,'-B',str(path/'configure_cloudcli.py'),
+                             '--rollback-public-gateway',created],timeout=8)
+                if upgrading:
+                    if existing.get('enabled') and safe_code_api_admin(command, {'action':'settings'}).get('busy'):
+                        rollback_config()
+                        raise RuntimeError('网关还有请求正在处理，请等网关空闲后再升级。')
+                    return upgrade_safe_code_api(command, Path(folder), rollback_config)
+                try:
+                    run(['/bin/bash',str(Path(folder)/'install.sh'),entry.pw_name,bind,'45143'],
+                        env={**os.environ,'SAFECODE_INITIAL_API_INSTALL':'1'},timeout=60)
+                    deadline=time.monotonic()+8
+                    while time.monotonic()<deadline:
+                        try:
+                            state = safe_code_api_admin(command,status,timeout=2)
+                            if state.get('backend')=='cloudcli':return state
+                        except (RuntimeError,subprocess.TimeoutExpired):
+                            pass
+                        time.sleep(.25)
+                    raise RuntimeError('CloudCLI 网关未能启动，请检查 VPS 上的服务日志。')
+                except (RuntimeError,OSError,subprocess.TimeoutExpired):
+                    if API_UNIT.is_file():
+                        try:run(['systemctl','disable','--now',API_UNIT.name],timeout=12)
+                        except (RuntimeError,OSError,subprocess.TimeoutExpired) as error:
+                            raise RuntimeError('Safe Code API 安装失败，VPS 服务未能回退，请检查该服务的状态。') from error
+                        API_UNIT.unlink()
+                        run(['systemctl','daemon-reload'],check=False,timeout=8)
+                    if API_DIRECTORY.is_dir():shutil.rmtree(API_DIRECTORY)
+                    rollback_config()
+                    raise
+
+def upgrade_safe_code_api(command, source, rollback_config):
+    names = sorted(name for name in API_FILES if name.endswith('.py'))
+    original = {}
+    for name in names:
+        target = API_DIRECTORY/name
+        if target.is_symlink() or (target.exists() and not target.is_file()):
+            rollback_config()
+            raise ValueError('检测到非标准网关组件，未覆盖现有服务。')
+        original[name] = target.read_bytes() if target.exists() else None
+    try:
+        for name in names:
+            write_api_component(API_DIRECTORY/name, (source/name).read_bytes())
+        run(['systemctl','restart',API_UNIT.name],timeout=30)
+        deadline = time.monotonic()+8
+        while time.monotonic()<deadline:
             try:
-                run(['/bin/bash',str(Path(folder)/'install.sh'),entry.pw_name,bind,'45143'],
-                    env={**os.environ,'SAFECODE_INITIAL_API_INSTALL':'1'},timeout=60)
-                deadline=time.monotonic()+8
-                while time.monotonic()<deadline:
-                    try:return safe_code_api_admin(command,status,timeout=2)
-                    except (RuntimeError,subprocess.TimeoutExpired):time.sleep(0.25)
-                raise RuntimeError('Safe Code API 服务未能启动，请检查 VPS 上的服务日志和 45143 端口占用。')
-            except (RuntimeError,OSError,subprocess.TimeoutExpired):
-                if API_UNIT.is_file():
-                    try:run(['systemctl','disable','--now',API_UNIT.name],timeout=12)
-                    except (RuntimeError,OSError,subprocess.TimeoutExpired) as error:
-                        raise RuntimeError('Safe Code API 安装失败，VPS 服务未能回退，请检查该服务的状态。') from error
-                    API_UNIT.unlink()
-                    run(['systemctl','daemon-reload'],check=False,timeout=8)
-                if API_DIRECTORY.is_dir():shutil.rmtree(API_DIRECTORY)
-                raise
+                state = safe_code_api_admin(command,{'action':'public_status'},timeout=2)
+                if state.get('backend')=='cloudcli':
+                    return state
+            except (RuntimeError,subprocess.TimeoutExpired):
+                pass
+            time.sleep(.25)
+        raise RuntimeError('更新后的 CloudCLI 网关未能通过启动检查。')
+    except (OSError,RuntimeError,subprocess.TimeoutExpired):
+        for name,data in original.items():
+            target=API_DIRECTORY/name
+            if data is None:
+                target.unlink(missing_ok=True)
+            else:
+                write_api_component(target,data)
+        rollback_config()
+        run(['systemctl','restart',API_UNIT.name],timeout=30)
+        raise RuntimeError('CloudCLI 网关更新失败，已恢复之前的网关组件。') from None
+
+def write_api_component(target, data):
+    with tempfile.NamedTemporaryFile(dir=target.parent,delete=False) as stream:
+        staged=Path(stream.name)
+        try:
+            stream.write(data)
+            stream.flush()
+            os.fchmod(stream.fileno(),0o644)
+            staged.replace(target)
+        finally:
+            staged.unlink(missing_ok=True)
 
 def safe_code_api_admin(command, options, timeout=12):
     process = run([*command, 'admin'], check=False, stdin=json.dumps(options), timeout=timeout)
@@ -1211,14 +1310,7 @@ def desktop_gateway(options):
     action=options.get('action','')
     if action not in ['start','stop']:raise ValueError('Desktop 网关操作无效。')
     if action=='start' and (not re.fullmatch('[A-Za-z0-9_-]{43}',options.get('token','')) or not re.fullmatch('[a-f0-9]{32}',options.get('instance',''))):raise ValueError('Desktop 本机通道凭据无效。')
-    node=Path('/opt/safe-code/node/bin/node')
-    if not node.exists():
-        candidate=shutil.which('node')
-        if not candidate:raise ValueError('请先部署 CloudCLI 或 Codex 接入所需的 Node.js 20+ 组件。')
-        node=Path(candidate)
-    if action=='start' and int(run([str(node),'-p','process.versions.node.split(".")[0]']).stdout.strip())<20:raise ValueError('Desktop 网关需要 Node.js 20 或更高版本。')
-    parameters={**options,'node':str(node),'bridgeHash':CODEX_BRIDGE_SOURCE_HASH}
-    return json.loads(user_files('desktop_gateway','.local/state/safe-code/desktop-gateway/'+client,**parameters).stdout)
+    return json.loads(user_files('desktop_gateway','.local/state/safe-code/desktop-gateway/'+client,**options).stdout)
 
 def host_bridge(options):
     client=options.get('clientId','');action=options.get('action','')
@@ -1448,7 +1540,11 @@ def main():
     if sys.argv[1]=='--poll':
         if os.geteuid()!=0:raise RuntimeError('需要安装管理员权限。')
         result(poll_job(sys.argv[2],sys.argv[3]));return
-    request=json.loads(Path(sys.argv[1]).read_text())
+    request_path=Path(sys.argv[1])
+    request=json.loads(request_path.read_text())
+    if (request.get('op') == 'safe_code_api' and (request.get('options') or {}).get('cloudcli')
+        and request_path.parent == Path(__file__).parent and re.fullmatch(r'request-[0-9a-f]{32}\.json', request_path.name)):
+        request_path.unlink(missing_ok=True)
     if request.get('jobId'):JOB_DIR=job_directory(request['jobId'])
     op=request.get('op','inspect')
     if op=='inspect':result(inspect());return

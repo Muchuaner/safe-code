@@ -25,8 +25,8 @@ from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from claude_usage import read_subscription
-from desktop_gateway import COUNT_TOKENS_PATH, MAX_REQUEST, MESSAGES_PATH, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
-from device_bridge import DeviceError, Devices, read_json
+from desktop_gateway import CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_REQUEST, MESSAGES_PATH, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
+from device_bridge import DeviceError, Devices, OwnerHosts, SSH_DEVICE, read_json
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
 
 PUBLIC_ENABLED = 'public-enabled'
@@ -41,8 +41,8 @@ TICKET_AUTH_KEY = bytes.fromhex('bf8145e375d11db0fdd2fb0d9734fdda504c5a480fc2eae
 
 
 class PublicManager(Manager):
-    def __init__(self, folder, config):
-        super().__init__(folder, config)
+    def __init__(self, folder, config, *, require_cloudcli=True):
+        super().__init__(folder, config, require_cloudcli=require_cloudcli)
         self.lock = threading.RLock()
         self.accounting = threading.local()
 
@@ -169,10 +169,16 @@ class PublicHandler(Handler):
 
     def do_GET(self):
         self.device = None
+        if self.path.partition('?')[0] == '/v1/cloudcli/models':
+            self.path = self.path.replace('/v1/cloudcli/', '/v1/', 1)
         if self.path.partition('?')[0] != '/v1/models':
             return self.reply(404, {'error':{'message':'Unknown endpoint'}})
         if not self.server.public_enabled:
             return self.public_disabled()
+        if self.server.config['cloudcli'] is None:
+            if not self.authorized():
+                return self.device_error(401, 'SafeCode Key required')
+            return self.backend_required()
         super().do_GET()
 
     def do_CONNECT(self):
@@ -206,6 +212,8 @@ class PublicHandler(Handler):
 
     def do_POST(self):
         self.device = None
+        if self.path.partition('?')[0] in ('/v1/cloudcli/messages', '/v1/cloudcli/messages/count_tokens'):
+            self.path = self.path.replace('/v1/cloudcli/', '/v1/', 1)
         if self.path.partition('?')[0] not in (MESSAGES_PATH, COUNT_TOKENS_PATH):
             return self.handle_public()
         with self.request_diagnostic('unknown'):
@@ -223,20 +231,23 @@ class PublicHandler(Handler):
         proof = self.headers.get('X-SafeCode-Device-Proof')
         if not self.authorized():
             return self.reject_device_message(401, 'SafeCode Key required')
+        if self.server.config['cloudcli'] is None:
+            return self.reject_device_message(503, CLOUDCLI_REQUIRED)
         if self.headers.get('X-SafeCode-Diagnostics') == '1':
             active, waiting, slots = self.server.queue.snapshot()
             diagnostic(backend='cloudcli' if self.server.config['cloudcli'] else 'claude_code',
                        active=min(1000000, sum(active.values())), waiting=min(1000000, sum(waiting.values())),
                        slots=min(1000000, slots))
         if device is None and proof is None:
-            if self.server.devices and self.server.devices.required(self.digest):
+            if (self.server.root/'device-required'/self.digest).is_file():
                 return self.reject_device_message(403, 'Verify SafeCode local device control before starting a chat')
         else:
             diagnostic(stage='device_check')
             try:
-                if self.server.devices is None:
+                binding = self.server.owner_hosts if SSH_DEVICE.fullmatch(device or '') else self.server.devices
+                if binding is None:
                     raise DeviceError('Device pairing is unavailable')
-                self.device = self.server.devices.chat_binding(self.digest, self.platform, device, proof)
+                self.device = binding.chat_binding(self.digest, self.platform, device, proof)
             except (DeviceError, sqlite3.Error):
                 return self.reject_device_message(403, 'SafeCode device authorization is unavailable')
         super().handle_messages()
@@ -261,12 +272,16 @@ class PublicHandler(Handler):
     def device_control(self):
         if not self.authorized():
             return self.device_error(401, 'SafeCode Key required')
-        devices = self.server.devices
-        if devices is None or not devices.permitted(self.digest):
-            return self.device_error(403, 'Device control is unavailable for this Key')
         try:
             request = read_json(self)
             action = request.get('action')
+            device = request.get('deviceId')
+            if action == 'revoke' and isinstance(device, str) and SSH_DEVICE.fullmatch(device):
+                self.server.owner_hosts.revoke(self.digest, self.platform, device, request.get('deviceProof'))
+                return self.reply(200, {'revoked':True})
+            devices = self.server.devices
+            if devices is None or not devices.permitted(self.digest):
+                return self.device_error(403, 'Device control is unavailable for this Key')
             if action == 'capability':
                 return self.reply(200, {'supported': True, 'transport': 'frp', 'httpsTunnel': True, 'port': self.server.frp_port,
                                         'deviceRequired': devices.required(self.digest)})
@@ -292,6 +307,9 @@ class PublicHandler(Handler):
     def public_disabled(self):
         self.close_connection = True
         return self.reply(403, {'error': {'type': 'permission_error', 'message': PUBLIC_DISABLED_MESSAGE}})
+
+    def backend_required(self):
+        return self.reply(503, {'type': 'error', 'error': {'type': 'api_error', 'message': CLOUDCLI_REQUIRED}})
 
     def execute_message(self, data, **options):
         if not isinstance(data,dict):
@@ -355,13 +373,15 @@ class PublicServer(ThreadingHTTPServer):
 
     def __init__(self, root, config):
         cloudcli = load_cloudcli_config()
-        if cloudcli and not ipaddress.ip_address(config['bind']).is_loopback:
-            raise ValueError('The CloudCLI gateway requires a loopback listener. Connect through the SafeCode SSH tunnel.')
+        if cloudcli and not ipaddress.ip_address(config['bind']).is_loopback and (
+                cloudcli.get('hostControl') or not cloudcli.get('desktopToolApprovals')):
+            raise ValueError('Direct CloudCLI gateways require Desktop tool approvals and no shared workstation.')
         self.root, self.config = root, {**config, 'cloudcli': cloudcli}
         self.frp_port = config.get('deviceFrpPort')
         if self.frp_port is not None and (type(self.frp_port) is not int or not 1024 <= self.frp_port <= 65535):
             raise ValueError('Invalid private FRP control port')
         self.devices = Devices(root) if cloudcli and self.frp_port else None
+        self.owner_hosts = OwnerHosts(root)
         self.accounts = {}
         self.lock = threading.Lock()
         self.usage_lock = threading.Lock()
@@ -447,7 +467,7 @@ class PublicServer(ThreadingHTTPServer):
     def manage(self, request):
         operation = request.get('action')
         if operation == 'public_status':
-            status = {'enabled': self.public_enabled}
+            status = {'enabled': self.public_enabled, 'backend': 'cloudcli' if self.config['cloudcli'] else 'unconfigured'}
             if status['enabled'] and request.get('runtime') is True:
                 active, waiters, concurrency = self.queue.snapshot()
                 status.update(active=sum(active.values()), waiting=sum(waiters.values()),
@@ -457,8 +477,10 @@ class PublicServer(ThreadingHTTPServer):
         if operation == 'enable_public':
             if request.get('accepted') is not True:
                 raise ValueError(PUBLIC_DISABLED_MESSAGE)
+            if self.config['cloudcli'] is None:
+                raise ValueError(CLOUDCLI_REQUIRED)
             (self.root/PUBLIC_ENABLED).touch(mode=0o600, exist_ok=True)
-            return {'enabled': self.public_enabled}
+            return {'enabled': self.public_enabled, 'backend': 'cloudcli'}
         if not self.public_enabled:
             raise ValueError(PUBLIC_DISABLED_MESSAGE)
         if operation == 'refresh_subscription':
@@ -533,6 +555,8 @@ class PublicServer(ThreadingHTTPServer):
                 raise ValueError('累计额度应为 0 到 1,000,000 美元，最多两位小数。')
             billing = {'budget_nanos': None if budget is None else budget * 10_000_000} if 'budget_cents' in request else {}
             if operation=='issue':
+                if self.config['cloudcli'] is None:
+                    raise ValueError(CLOUDCLI_REQUIRED)
                 origin = self.public_origin or request.get('origin')
                 if not origin:
                     raise ValueError('无法识别 VPS 的公网 IP，请从 Safe Code 的 SSH 会话创建密钥。')
@@ -678,6 +702,7 @@ if __name__=='__main__':
     cmds=parser.add_subparsers(dest='command',required=True)
     cmds.add_parser('serve')
     cmds.add_parser('admin')
+    cmds.add_parser('bind-ssh-device')
     configure = cmds.add_parser('configure-port')
     configure.add_argument('expected_port', type=int)
     configure.add_argument('port', type=int)
@@ -698,6 +723,14 @@ if __name__=='__main__':
     elif args.command=='revoke':
         if not re.fullmatch('[a-f0-9]{64}',args.key_id):parser.error('Invalid key ID')
         KeyRegistry(args.state).revoke(args.key_id)
+    elif args.command=='bind-ssh-device':
+        import sys
+        try:
+            options = json.loads(sys.stdin.buffer.read(4096))
+            binding = OwnerHosts(args.state).bind(options['keyId'], options['hostClientId'], options['hostname'])
+            print(json.dumps({'value':binding}))
+        except (OSError, ValueError, KeyError, TypeError):
+            print(json.dumps({'error':'无法将 Key 绑定到已验证的本机远程控制，请重新验证该设备。'}))
     elif args.command=='admin':
         import sys
         try:

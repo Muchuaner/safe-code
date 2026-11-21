@@ -5,15 +5,19 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import getpass
+import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import sys
 import tempfile
 
-from desktop_gateway import (GatewayError, cloudcli_extended_context, cloudcli_web_login,
-                             cloudcli_web_origin, cloudcli_websocket)
+from desktop_gateway import (CLOUDCLI_CONFIG, GatewayError, cloudcli_config, cloudcli_extended_context,
+                             cloudcli_web_login, cloudcli_web_origin, cloudcli_websocket,
+                             load_cloudcli_config, verify_cloudcli_agent)
 from host_control_mcp import ToolError, bridge_arguments, call_tool, mac_workspace_path
 
 
@@ -92,6 +96,50 @@ def select_host(home, requested):
     if len(active) != 1:
         raise ValueError('Enable SafeCode 本机远程控制. If several clients are configured, use --client-id to select one.')
     return active[0]
+
+
+def prepare_public_gateway(home, state, options):
+    """Configure a fresh direct gateway using the operator's existing CloudCLI account."""
+    config_path = home/CLOUDCLI_CONFIG
+    _, listener = read_object(state/'config.json', allow_missing=True)
+    created = None
+    with setup_lock(config_path.parent):
+        config = load_cloudcli_config(home)
+        trusted_ingress = config and (config['hostControl'] or not config['desktopToolApprovals'])
+        bind = listener.get('bind', '127.0.0.1' if trusted_ingress else '0.0.0.0')
+        direct = not ipaddress.ip_address(bind).is_loopback
+        if config is None:
+            key = options.get('apiKey', '')
+            username, password = options.get('username', ''), options.get('password', '')
+            if not key or not username or not password:
+                raise ValueError('请先安装并打开 CloudCLI，创建网页账户和 CloudCLI API Key，再填写网关配置。')
+            project = home/'.local/share/safe-code/cloudcli-workspace'
+            if not project.resolve().is_relative_to(home):
+                raise ValueError('CloudCLI 项目目录必须位于 VPS 工作账户的主目录内。')
+            project.mkdir(mode=0o700, parents=True, exist_ok=True)
+            config = {
+                'apiKey': key, 'projectPath': str(project), 'port': 3001,
+                'models': ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
+                'desktopQuestions': {'username': username, 'password': password},
+                'desktopToolApprovals': True,
+            }
+            try:
+                config = cloudcli_config(config)
+            except ValueError:
+                raise ValueError('CloudCLI API Key 或网页登录资料格式无效。') from None
+            verify_cloudcli_agent(config)
+            cloudcli_web_login(config['port'], config['desktopQuestions'])
+            cloudcli_websocket()
+            atomic_settings(config_path, config, None)
+            created = hashlib.sha256(config_path.read_bytes()).hexdigest()
+        else:
+            if direct and (config['hostControl'] or not config['desktopToolApprovals']):
+                raise ValueError('公网直连需要启用 Desktop 工具审批，且不能绑定共享的工作站。已有工作站配置可沿用回环监听及 HTTPS 入口。')
+            verify_cloudcli_agent(config)
+            if direct:
+                cloudcli_web_login(config['port'], config['desktopQuestions'])
+                cloudcli_websocket()
+    return {'bind': bind, 'created': created}
 
 
 @contextmanager
@@ -291,4 +339,18 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) == 3 and sys.argv[1] == '--rollback-public-gateway' and os.getuid():
+        config_path = Path.home()/CLOUDCLI_CONFIG
+        with setup_lock(config_path.parent):
+            original, _ = read_object(config_path, allow_missing=True)
+            if original and hashlib.sha256(original).hexdigest() == sys.argv[2]:
+                config_path.unlink()
+    elif len(sys.argv) == 3 and sys.argv[1] == '--prepare-public-gateway' and os.getuid():
+        try:
+            print(json.dumps(prepare_public_gateway(Path.home(), Path(sys.argv[2]), json.load(sys.stdin))))
+        except (ValueError, GatewayError) as error:
+            print(json.dumps({'error': str(error)}))
+        except (OSError, KeyError, TypeError, AttributeError):
+            print(json.dumps({'error': '无法准备 CloudCLI 网关，请检查工作账户和配置文件的权限。'}))
+    else:
+        main()

@@ -259,6 +259,8 @@ class SafeCodeApiTest(unittest.TestCase):
         bind = '0.0.0.0'
 
         def manage(command, request):
+            if request == {'action':'public_status'}:
+                return {'enabled':True, 'backend':'cloudcli'}
             if request == {'action':'settings'}:
                 return {'origin':'', 'bind':bind, 'port':45144}
             self.assertEqual(request, {'action':'issue', 'note':'fixture', 'origin':origin})
@@ -345,7 +347,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 read_subscription(timeout=1.5)
         self.assertFalse((self.root/'unexpected-enter').exists())
 
-    def test_install_missing_api_without_enabling_public_or_overwriting_an_existing_service(self):
+    def test_install_checks_cloudcli_and_upgrades_existing_service_without_enabling_public(self):
         app = self.root/'desktop-api'
         unit = self.root/'safe-code-desktop-api.service'
         entry = SimpleNamespace(pw_uid=1000, pw_name='fixture', pw_dir=str(self.root))
@@ -358,7 +360,10 @@ if sys.stdin.buffer.read(1) == b'\r':
 
         def run(args, **kwargs):
             if args[0] == 'systemctl':
-                return SimpleNamespace(stdout='not-found\n')
+                return SimpleNamespace(stdout='fixture\n' if 'User' in args else 'not-found\n')
+            if '--prepare-public-gateway' in args:
+                preflight = {'bind':expected_bind} if cloud_config.exists() else {'error':'请先配置 CloudCLI'}
+                return SimpleNamespace(stdout=json.dumps(preflight))
             if args[0] == '/bin/bash':
                 self.assertEqual(args[2:], ['fixture', expected_bind, '45143'])
                 self.assertEqual(kwargs['env']['SAFECODE_INITIAL_API_INSTALL'], '1')
@@ -382,8 +387,8 @@ if sys.stdin.buffer.read(1) == b'\r':
               patch.object(agent.os, 'access', return_value=True),
               patch.object(agent.shutil, 'which', return_value='/usr/bin/node'),
               patch.object(agent, 'run', side_effect=run) as runner,
-              patch.object(agent, 'safe_code_api_admin', return_value={'enabled': False}) as admin):
-            self.assertEqual(agent.safe_code_api({'action':'public_status'}), {'installed':False,'enabled':False})
+              patch.object(agent, 'safe_code_api_admin', return_value={'enabled': False, 'backend':'cloudcli'})):
+            self.assertEqual(agent.safe_code_api({'action':'public_status'}), {'installed':False,'enabled':False,'cloudcliConfigured':True})
             with self.assertRaisesRegex(ValueError, '确认安装'):
                 agent.safe_code_api({'action':'install','files':files})
             runner.assert_not_called()
@@ -396,12 +401,15 @@ if sys.stdin.buffer.read(1) == b'\r':
             self.assertTrue(any(call.args[0][1:3]==['disable','--now'] for call in runner.call_args_list))
             start_fails = False
             cloud_config.unlink()
-            expected_bind = '0.0.0.0'
-            self.assertEqual(agent.safe_code_api(install), {'enabled':False})
-            calls = runner.call_count
-            self.assertEqual(agent.safe_code_api(install), {'enabled':False})
-            self.assertEqual(runner.call_count, calls)
-            self.assertEqual([call.args[1] for call in admin.call_args_list], [{'action':'public_status'}]*2)
+            with self.assertRaisesRegex(ValueError, '请先配置 CloudCLI'):
+                agent.safe_code_api(install)
+            self.assertFalse(app.exists())
+            cloud_config.touch()
+            self.assertEqual(agent.safe_code_api(install), {'enabled':False, 'backend':'cloudcli'})
+            (self.root/'legacy-key-data').write_text('fixture')
+            self.assertEqual(agent.safe_code_api(install), {'enabled':False, 'backend':'cloudcli'})
+            self.assertEqual((self.root/'legacy-key-data').read_text(), 'fixture')
+            self.assertEqual((app/'server.py').read_bytes(), b'fixture')
             self.assertTrue(unit.is_file())
 
     def test_gateway_provisions_verified_node_without_cloudcli(self):
@@ -446,7 +454,7 @@ if sys.stdin.buffer.read(1) == b'\r':
             self.assertEqual(len(downloads), 2)
 
     def test_failed_gateway_turn_without_final_usage_releases_partial_accounting(self):
-        manager = server.PublicManager(self.root, {'instance': 'fixture'})
+        manager = server.PublicManager(self.root, {'instance': 'fixture'}, require_cloudcli=False)
         manager.conversations.append(SimpleNamespace(turn_id='failed-turn', pending={'tool': True}))
         manager.accounting.before = {}
         manager.count_usage({'id': 'completed-piece', 'usage': {'input_tokens': 10}}, 'failed-turn')
@@ -475,7 +483,7 @@ if sys.stdin.buffer.read(1) == b'\r':
         self.assertFalse(manager.usage)
 
     def test_concurrent_accounting_preserves_other_turn_usage(self):
-        manager = server.PublicManager(self.root, {'instance': 'fixture'})
+        manager = server.PublicManager(self.root, {'instance': 'fixture'}, require_cloudcli=False)
         worker_has_usage = threading.Event()
         finish_worker = threading.Event()
         totals = []
@@ -500,7 +508,8 @@ if sys.stdin.buffer.read(1) == b'\r':
             worker.join(3)
         self.assertEqual(totals, [11])
 
-    def test_activation_is_required_after_the_first_active_key(self):
+    @patch.object(server, 'load_cloudcli_config', return_value={'fixture': True})
+    def test_activation_is_required_after_the_first_active_key(self, _):
         openssl = ['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=fixture']
         subprocess.run([*openssl, '-keyout', self.root/'key.pem', '-out', self.root/'cert.pem'], check=True, capture_output=True)
         for digest in self.digests[:2]:
@@ -534,13 +543,14 @@ if sys.stdin.buffer.read(1) == b'\r':
             self.assertFalse(public.manage({'action':'list'})['activation_required'])
             self.assertIsNotNone(free_issue())
 
-    def test_local_admin_and_public_api_boundary(self):
+    @patch.object(server, 'load_cloudcli_config', return_value={'fixture': True})
+    def test_local_admin_and_public_api_boundary(self, _):
         subprocess.run(['openssl','req','-x509','-newkey','rsa:2048',
                         '-nodes','-days','1','-subj','/CN=fixture','-keyout',self.root/'key.pem',
                         '-out',self.root/'cert.pem'],check=True,capture_output=True)
         with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0,
                                            'publicOrigin':'https://fixture.example'}) as public:
-            fake=server.PublicManager(self.root,{'instance':'fixture'})
+            fake=server.PublicManager(self.root,{'instance':'fixture'},require_cloudcli=False)
             fake.catalog=lambda: {'data':[{'id':'claude-test'}]}
             def model(data, **options):
                 fake.count_usage({'id':'fixture','usage':{'input_tokens':7}}, 'turn')
@@ -572,7 +582,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                     finally:
                         conn.close()
 
-                self.assertEqual(manage('public_status'), {'enabled': False})
+                self.assertEqual(manage('public_status'), {'enabled': False, 'backend':'cloudcli'})
                 for operation in ('list', 'settings', 'issue', 'enable_public'):
                     self.assertEqual(admin_request(operation), {'error': server.PUBLIC_DISABLED_MESSAGE})
                 self.assertEqual(admin_request('enable_public', accepted='true'), {'error': server.PUBLIC_DISABLED_MESSAGE})
@@ -587,7 +597,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 with self.assertRaisesRegex(ValueError, '启用公网'):
                     server.issue(self.root, 'https://fixture.example', self.root/'unissued.key')
                 self.assertFalse((self.root/'unissued.key').exists())
-                self.assertEqual(manage('enable_public', accepted=True), {'enabled': True})
+                self.assertEqual(manage('enable_public', accepted=True), {'enabled': True, 'backend':'cloudcli'})
                 runtime = manage('public_status', runtime=True)
                 self.assertEqual((runtime['enabled'], runtime['active'], runtime['waiting']), (True, 0, 0))
                 self.assertEqual(runtime['subscription'], {'state': 'unavailable', 'windows': {}})
@@ -625,9 +635,9 @@ if sys.stdin.buffer.read(1) == b'\r':
                     legacy = next(key for key in summary['keys'] if key['id'] == legacy_id)
                     self.assertEqual(legacy['active_count'], 2)
                 with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0}) as reopened:
-                    self.assertEqual(reopened.manage({'action':'public_status'}), {'enabled':True})
+                    self.assertEqual(reopened.manage({'action':'public_status'}), {'enabled':True, 'backend':'cloudcli'})
                     self.assertEqual(reopened.manage({'action':'list'})['concurrency'], 2)
-                self.assertEqual(request('GET','/v1/models',legacy_key)[0],200)
+                self.assertEqual(request('GET','/v1/cloudcli/models',legacy_key)[0],200)
 
                 settings = manage('settings')
                 self.assertEqual(settings, {'bind': '127.0.0.1', 'port': public.server_port,
@@ -648,7 +658,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 self.assertEqual(hashlib.sha256(key.encode()).hexdigest(),created['id'])
                 self.assertEqual(post('/admin',key,False)[0],404)
                 self.assertNotIn(key,json.dumps(manage('list')))
-                self.assertEqual(post('/v1/messages',key)[0],200)
+                self.assertEqual(post('/v1/cloudcli/messages',key)[0],200)
                 self.assertEqual(post('/v1/messages',key)[0],429)
                 details=manage('usage',id=created['id'])
                 model_usage=details['models'][0]

@@ -77,7 +77,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
             endpoint = gateway?.Endpoint ?? "",
             startedAt = started,
             usage = gateway?.Usage ?? IntegrationUsage.Unavailable("尚未连接 VPS 网关"),
-            usageSource = "VPS 原版 Claude Code assistant usage"
+            usageSource = "VPS CloudCLI"
         };
     }
 
@@ -290,7 +290,7 @@ internal sealed class MacClaudeDesktopBridge(string dataDirectory, bool offline,
             }
             entries.Add(entry);
         }
-        if (entries.Count == 0) throw new IOException("VPS 原版 Claude Code 未返回可用聊天模型。");
+        if (entries.Count == 0) throw new IOException("VPS 上的 CloudCLI 未返回可用聊天模型。");
         var profile = new JsonObject
         {
             ["inferenceProvider"] = "gateway", ["inferenceGatewayBaseUrl"] = endpoint,

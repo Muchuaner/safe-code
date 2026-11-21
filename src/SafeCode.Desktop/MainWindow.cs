@@ -363,7 +363,11 @@ public sealed class MainWindow : Window
                 await target.MaintainHostControlForChatAsync(ct);
             var leaseReady=target.CaptureVerifiedHostControl();
             bool HostReady()=>ReferenceEquals(session,target)&&control.IsEnabledFor(target)&&leaseReady();
-            var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,hostReady:HostReady);
+            string hostname=Environment.MachineName.Length<=48?Environment.MachineName:Environment.MachineName[..48];
+            var binding=await target.BindPublicGatewayHostAsync(setup.Remote,hostname,ct);
+            var device=new DesktopKeyAccess.DeviceBinding(binding.GetProperty("deviceId").GetString()!,
+                binding.GetProperty("deviceProof").GetString()!,binding.GetProperty("alias").GetString()!,0,"");
+            var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device,hostReady:HostReady);
             if(startedHere)keyStartedHost=target;
             pendingKeyDevice=null;
             return result;
@@ -448,7 +452,8 @@ public sealed class MainWindow : Window
                 if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
                 var installSession=RequireGatewaySession();
                 deploying=true;activeStep="gateway_install";
-                try{return await installSession.InstallPublicGatewayAsync(lifetime.Token);}
+                try{return await installSession.InstallPublicGatewayAsync(lifetime.Token,
+                    args.TryGetProperty("cloudcli",out var cloudcliInstall)?cloudcliInstall:null);}
                 finally{deploying=false;activeStep="";}
             case "safeCodeApi.enablePublic":
                 if (!args.TryGetProperty("accepted", out var publicAccepted) || publicAccepted.ValueKind != JsonValueKind.True)
@@ -480,7 +485,7 @@ public sealed class MainWindow : Window
             case "claudeDesktop.status": claudeDesktop??=new ClaudeDesktopBridge(dataDirectory);return await claudeDesktop.RefreshAsync(lifetime.Token);
             case "claudeDesktop.start":
                 if(keyAccess?.Configured==true)throw new InvalidOperationException("请先停用 API Key 接入。");
-                if(!args.TryGetProperty("accepted",out var claudeAccepted)||!claudeAccepted.GetBoolean())throw new InvalidOperationException("请先确认通过 VPS 原版 Claude Code 接入。");
+                if(!args.TryGetProperty("accepted",out var claudeAccepted)||!claudeAccepted.GetBoolean())throw new InvalidOperationException("请先确认通过 VPS 上的 CloudCLI 接入。");
                 if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
                 claudeDesktop??=new ClaudeDesktopBridge(dataDirectory);deploying=true;activeStep="claude_desktop";
                 try{return await claudeDesktop.StartAsync(RequireSession(),true,lifetime.Token);}finally{deploying=false;activeStep="";}

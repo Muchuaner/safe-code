@@ -45,7 +45,7 @@ internal sealed class ClaudeDesktopBridge : IDisposable
             string message=lastError??(active?"SSH 网关已连接，可在 Claude Desktop 中开始对话":managed?"VPS 通道不可用或待清理；不会回退到外部 API":configured?"检测到旧网关配置；启用后将替换为 VPS 桥接，旧直连配置仅加密归档":state?.Note??"尚未启用 VPS 桥接");
             return new(active,managed,configured,installed,lastError!=null||managed&&!active?"attention":active?"active":"unconfigured",message,
                 gateway?.Endpoint??"",state?.Model??"opus",state?.Display??"Opus",active,false,
-                state?.StartedAt,state?.StoppedAt,gateway?.Usage??state?.Usage??IntegrationUsage.Unavailable("尚未启用 VPS 桥接"),"VPS 原版 Claude Code assistant usage");
+                state?.StartedAt,state?.StoppedAt,gateway?.Usage??state?.Usage??IntegrationUsage.Unavailable("尚未启用 VPS 桥接"),"VPS CloudCLI");
         }
     }
     public Task<ClaudeDesktopStatus> TickAsync(CancellationToken ct=default)=>RefreshAsync(ct);
@@ -79,7 +79,7 @@ internal sealed class ClaudeDesktopBridge : IDisposable
 
     public async Task<ClaudeDesktopStatus> StartAsync(SshSession target,bool accepted,CancellationToken ct=default)
     {
-        if(!accepted)throw new InvalidOperationException("请先确认通过 VPS 上原版 Claude Code 接入。");
+        if(!accepted)throw new InvalidOperationException("请先确认通过 VPS 上的 CloudCLI 接入。");
         await gate.WaitAsync(ct);
         try
         {
@@ -115,7 +115,7 @@ internal sealed class ClaudeDesktopBridge : IDisposable
                 var chatModels=models.Where(m=>!m.AutoModeClassifier).ToArray();
                 var selected=chatModels.FirstOrDefault(m=>previousModel!=null&&(m.Id==previousModel||m.Family==previousModel))
                     ??chatModels.FirstOrDefault(m=>m.Family=="opus")??chatModels.FirstOrDefault()
-                    ??throw new InvalidOperationException("VPS 原版 Claude Code 未返回可用模型，请检查远端配置与授权。");
+                    ??throw new InvalidOperationException("VPS 上的 CloudCLI 未返回可用模型，请检查远端配置与授权。");
                 var modelEntries=chatModels.OrderBy(m=>m.Id==selected.Id?0:1).Select(m=>
                 {
                     var entry=new Dictionary<string,object>
@@ -337,7 +337,7 @@ internal sealed class ClaudeDesktopBridge : IDisposable
         public DateTimeOffset StartedAt{get;set;}
         public DateTimeOffset? StoppedAt{get;set;}
         public string? Note{get;set;}
-        public IntegrationUsage Usage{get;set;}=IntegrationUsage.Unavailable("等待 VPS 原版 Claude Code usage");
+        public IntegrationUsage Usage{get;set;}=IntegrationUsage.Unavailable("等待 CloudCLI 用量");
     }
     private sealed class Backup
     {

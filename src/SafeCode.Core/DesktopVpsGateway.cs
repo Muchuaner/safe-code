@@ -29,7 +29,7 @@ public sealed class DesktopVpsGateway : IDisposable
     public bool Connected{get;private set;}
     public string Endpoint{get;private set;}="";
     public string LocalToken=>token;
-    public IntegrationUsage Usage{get;private set;}=IntegrationUsage.Unavailable("等待 VPS 原生 CLI usage");
+    public IntegrationUsage Usage{get;private set;}=IntegrationUsage.Unavailable("等待 CloudCLI 用量");
     public long TurnsStarted{get;private set;}
     public DesktopVpsGateway(SshSession session,string clientId,string? localToken=null,uint localPort=0)
     {this.session=session;this.clientId=clientId;this.localPort=localPort;token=localToken??Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_');}
@@ -39,7 +39,7 @@ public sealed class DesktopVpsGateway : IDisposable
         using var buffer=new MemoryStream();await stream.CopyToAsync(buffer,ct);return Convert.ToBase64String(buffer.ToArray());
     }
     private async Task<DesktopGatewayRemote> RequestAsync(string action,CancellationToken ct)
-        =>await session.RequestAsync<DesktopGatewayRemote>("desktop_gateway",new{action,clientId,token,instance,source=await ResourceAsync("desktop_gateway.py",ct),bridgeSource=action=="start"?await ResourceAsync("codex_bridge.zip",ct):""},ct);
+        =>await session.RequestAsync<DesktopGatewayRemote>("desktop_gateway",new{action,clientId,token,instance,source=await ResourceAsync("desktop_gateway.py",ct)},ct);
     public async Task StartAsync(CancellationToken ct=default)
     {
         if(!session.IsConnected)throw new IOException("请先连接目标 VPS。");
@@ -47,7 +47,8 @@ public sealed class DesktopVpsGateway : IDisposable
         try
         {
             var remote=await RequestAsync("start",ct);
-            if(!remote.Ready||remote.Instance!=instance||remote.Port is <1024 or >65535)throw new IOException("VPS 网关未确认启动。");
+            if(!remote.Ready||remote.Instance!=instance||remote.Port is <1024 or >65535)
+                throw new IOException(remote.Warning??"VPS 网关未确认启动。");
             tunnel=await session.OpenDesktopTunnelAsync((uint)remote.Port,ct,localPort);
             Endpoint="http://127.0.0.1:"+tunnel.BoundPort;
             if(!await RefreshAsync(ct))throw new IOException("VPS 网关未通过 SSH 隧道验证；未改写 Desktop 配置。");
@@ -67,13 +68,14 @@ public sealed class DesktopVpsGateway : IDisposable
             using var request=new HttpRequestMessage(HttpMethod.Get,Endpoint+"/health");request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",token);
             using var response=await http.SendAsync(request,ct);response.EnsureSuccessStatusCode();
             using var document=JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));var root=document.RootElement;
-            Connected=root.GetProperty("ok").GetBoolean()&&root.GetProperty("bridge").GetString()=="vps-claude-code"&&root.GetProperty("instance").GetString()==instance;
+            Connected=root.GetProperty("ok").GetBoolean()&&root.TryGetProperty("backend",out var backend)&&
+                backend.GetString()=="cloudcli"&&root.GetProperty("instance").GetString()==instance;
             if(!Connected){CloseLocal();return false;}
             TurnsStarted=root.GetProperty("turnsStarted").GetInt64();
             if(root.GetProperty("usageAvailable").GetBoolean())
             {
                 var usage=root.GetProperty("usage");
-                Usage=IntegrationUsage.FromAnthropic(usage.GetProperty("input_tokens").GetInt64(),usage.GetProperty("output_tokens").GetInt64(),usage.GetProperty("cache_read_input_tokens").GetInt64(),usage.GetProperty("cache_creation_input_tokens").GetInt64(),"VPS 原版 Claude Code assistant usage");
+                Usage=IntegrationUsage.FromAnthropic(usage.GetProperty("input_tokens").GetInt64(),usage.GetProperty("output_tokens").GetInt64(),usage.GetProperty("cache_read_input_tokens").GetInt64(),usage.GetProperty("cache_creation_input_tokens").GetInt64(),"VPS CloudCLI");
             }
             return true;
         }
@@ -89,7 +91,7 @@ public sealed class DesktopVpsGateway : IDisposable
         using var response=await catalogHttp.SendAsync(request,timeout.Token);response.EnsureSuccessStatusCode();
         using var document=JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
         var models=document.RootElement.GetProperty("data").Deserialize<DesktopGatewayModel[]>(JsonDefaults.Options)??[];
-        if(models.Length==0)throw new IOException("VPS 原版 Claude Code 未返回可用模型列表。");
+        if(models.Length==0)throw new IOException("VPS 上的 CloudCLI 未提供可用模型。");
         return models;
     }
     public async Task<string?> StopAsync(CancellationToken ct=default)

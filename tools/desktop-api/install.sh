@@ -9,9 +9,6 @@ home=$(getent passwd "$user" | cut -d: -f6)
 [[ -n "$home" && "$user" =~ ^[a-z_][a-z0-9_-]*$ && "$user" != root && -x "$home/.local/bin/claude" ]]
 app=/opt/safe-code/desktop-api
 state="$home/.local/state/safe-code-desktop-api"
-node=/opt/safe-code/node/bin/node
-[[ -x "$node" ]] || node=$(command -v node)
-[[ $("$node" -p 'Number(process.versions.node.split(".")[0]) >= 20') == true ]]
 dir=$(cd "$(dirname "$0")" && pwd)
 if [[ ${SAFECODE_INITIAL_API_INSTALL:-} == 1 ]]; then
     runuser -u "$user" -- test ! -e "$state/public-enabled" || {
@@ -32,10 +29,10 @@ p=Path(sys.argv[1])
 assert hashlib.sha256(p.read_bytes()).hexdigest()=='3d6c8d98604e7301bd92046b00ead3b08eddefa157e1c5661d2c9599aefe58c3'
 with zipfile.ZipFile(p) as z:z.extractall(Path(sys.argv[2])/'components')
 PY
-runuser -u "$user" -- python3 - "$state" "$bind" "$port" "$node" "$app" "$public_ip" "${SAFECODE_INITIAL_API_INSTALL:-}" <<'PY'
+runuser -u "$user" -- python3 - "$state" "$bind" "$port" "$public_ip" "${SAFECODE_INITIAL_API_INSTALL:-}" <<'PY'
 import json,sys,os,ipaddress
 from pathlib import Path
-state,bind,port,node,app,public_ip,initial=sys.argv[1:]
+state,bind,port,public_ip,initial=sys.argv[1:]
 assert 1024<=int(port)<=65535
 os.umask(0o077)
 directory=Path(state)
@@ -51,7 +48,7 @@ if initial == '1' and config:
     if saved_port != int(port) and config.get('autoPort') != saved_port:
         raise ValueError('检测到保留的监听配置，请在 VPS 恢复原服务。')
     port = saved_port
-config.update(bind=str(ipaddress.ip_address(bind)),port=int(port),node=node,library=app+'/components')
+config.update(bind=str(ipaddress.ip_address(bind)),port=int(port))
 if initial == '1':
     config['autoPort'] = int(port)
 if public_ip:

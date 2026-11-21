@@ -118,7 +118,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var capabilities=await DeviceControlAsync(ticket,new{action="capability"},deadline.Token);
             if(!capabilities.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)
                 throw new InvalidOperationException("此网关尚未支持通过 HTTPS 建立本机远程控制。");
-            return new(ticket,replace,useSaved,saved?.Remote==ticket?saved.Device:null);
+            return new(ticket,replace,useSaved,saved?.Remote==ticket&&saved.Device is { } previous&&
+                !previous.DeviceId.StartsWith("ssh-",StringComparison.Ordinal)?previous:null);
         }
         finally{gate.Release();}
     }
@@ -133,7 +134,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         string key=auth.StartsWith("Bearer ",StringComparison.Ordinal)?auth[7..]:ctx.Request.Headers["x-api-key"].ToString();
         if(!CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(key),Encoding.UTF8.GetBytes(token)))
         {ctx.Response.StatusCode=401;return;}
-        using var req=new HttpRequestMessage(new HttpMethod(ctx.Request.Method),path+ctx.Request.QueryString.Value);
+        // Old gateways do not expose this namespace, so downgrades cannot dispatch a native CLI turn.
+        using var req=new HttpRequestMessage(new HttpMethod(ctx.Request.Method),"/v1/cloudcli"+path[3..]+ctx.Request.QueryString.Value);
         if(ctx.Request.Method=="POST")
         {
             // The remote Messages endpoint requires Content-Length, including for a chunked local request.
@@ -543,7 +545,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             if(useSaved&&previous==null)throw new InvalidOperationException("没有保存的接入 Key，请输入新的 Key。");
             if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」切换已保存的接入。");
             var t=verified?.Remote??(useSaved?previous!.Remote:Ticket.Parse(code.Trim()));
-            bool controlReady=verified?.HostSession==null?device!=null:device==null&&hostReady?.Invoke()==true;
+            bool controlReady=verified?.HostSession==null?device!=null:device!=null&&hostReady?.Invoke()==true;
             if(verified!=null&&(!controlReady||replace!=verified.Replace||useSaved!=verified.UseSaved||
                useSaved&&t!=previous!.Remote))
                 throw new InvalidOperationException("接入配置已变更，请重新验证设备。");
@@ -634,7 +636,13 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     {
         try
         {
-            return await client.GetAsync("/v1/models", ct);
+            var response = await client.GetAsync("/v1/cloudcli/models", ct);
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable)
+            {
+                response.Dispose();
+                throw new InvalidOperationException("这个 Key 的 VPS 尚未启用 CloudCLI 网关。请通过 SSH 进入 Safe Code 的公网网关，配置 CloudCLI 并升级 API 服务。");
+            }
+            return response;
         }
         catch (HttpRequestException error) when (error.HttpRequestError == HttpRequestError.SecureConnectionError)
         {
