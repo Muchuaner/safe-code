@@ -191,11 +191,11 @@ dialog::backdrop { background: #19332b52; }
 }
 
 .gateway-header .actions{flex-wrap:wrap;justify-content:flex-end;flex-shrink:1}
-.gateway-quota{display:inline-flex;align-items:center;gap:8px;border:1px solid #dce9df;border-radius:7px;background:var(--accent-wash);padding:7px 9px;font-size:11px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.gateway-header .actions>button{height:34px}
+.gateway-quota{display:inline-flex;align-items:center;gap:8px;border:1px solid #dce9df;border-radius:7px;background:var(--accent-wash);height:34px;padding:0 9px;font-size:11px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .gateway-quota strong{color:var(--accent)}
 .quota-refresh{display:inline-grid;place-items:center;width:22px;height:22px;padding:0;min-height:0;background:transparent;border:0;color:inherit;border-radius:4px;cursor:pointer}
 .quota-refresh:disabled{opacity:.45;cursor:wait}
-.quota-link{color:inherit;text-underline-offset:2px}
 .quota-refresh:hover{background:#dce9df}
 .quota-refresh svg{width:14px;height:14px}
 .gateway-quota strong[data-low="true"]{color:var(--danger)}

@@ -324,7 +324,9 @@ if sys.argv[1:] == ['auth', 'status', '--json']:
 assert '--safe-mode' in sys.argv and '-p' not in sys.argv
 assert sys.stdin.isatty() and sys.stdout.isatty()
 tty.setraw(sys.stdin.fileno())
-print('Accessing workspace:', os.getcwd(), '\n❯ 1. Yes, I trust this folder', flush=True)
+print('Accessing workspace:', os.getcwd(), '\r\r\n❯\x1b[4GNo,\x1b[8Gexit\r\r\n\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\x1b[22Gfolder', flush=True)
+assert sys.stdin.buffer.read(3) == b'\x1b[B'
+print('\n❯\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\x1b[22Gfolder', flush=True)
 assert sys.stdin.buffer.read(1) == b'\r'
 print('\n❯ Try asking a question', flush=True)
 assert sys.stdin.buffer.read(6) == b'/usage'
@@ -658,6 +660,11 @@ if sys.stdin.buffer.read(1) == b'\r':
                 key=ticket_payload['key']
                 self.assertEqual(hashlib.sha256(key.encode()).hexdigest(),created['id'])
                 self.assertEqual(post('/admin',key,False)[0],404)
+                self.assertEqual(request('GET','/v1/key/balance')[0],401)
+                status, balance = request('GET','/v1/key/balance',key)
+                self.assertEqual(status,200)
+                self.assertEqual(json.loads(balance),{'budget_nanos':None,'used_nanos':0,'remaining_nanos':None})
+                self.assertEqual(request('GET','/v1/key/balance?id='+created['id'],legacy_key)[0],404)
                 self.assertNotIn(key,json.dumps(manage('list')))
                 self.assertEqual(post('/v1/cloudcli/messages',key)[0],200)
                 self.assertEqual(post('/v1/messages',key)[0],429)
@@ -717,6 +724,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 self.assertEqual((model_failure['outcome'],model_failure['status']),('failed',400))
                 capped = manage('issue', budget_cents=0)
                 capped_key = decode_new_ticket(capped['ticket'])['key']
+                self.assertEqual(json.loads(request('GET','/v1/key/balance',capped_key)[1])['remaining_nanos'],0)
                 self.assertEqual(post('/v1/messages', capped_key)[0], 402)
                 manage('update', id=capped['id'], budget_cents=1)
                 public.registry.record(capped['id'], 'claude-opus-5-5', False, {'output_tokens': 500})

@@ -54,6 +54,36 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     internal bool Running=>relay!=null;
     internal bool ReusesHostControl=>relay?.HostReady!=null;
     internal bool Configured=>File.Exists(StatePath);
+    internal async Task<KeyBalance> ReadBalanceAsync(CancellationToken ct)
+    {
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!Running) throw new InvalidOperationException("API Key 接入尚未启动。");
+            using var client=Remote(Load().Remote);
+            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(8));
+            using var response=await client.GetAsync("/v1/key/balance",deadline.Token).ConfigureAwait(false);
+            if (response.StatusCode==HttpStatusCode.NotFound)
+                throw new InvalidOperationException("请升级 VPS 网关后再查看 Key 余额。");
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                throw new InvalidOperationException("Key 无效或公网网关已停用。");
+            response.EnsureSuccessStatusCode();
+            using var body=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(deadline.Token).ConfigureAwait(false));
+            var value=body.RootElement;
+            var remaining=value.GetProperty("remaining_nanos");
+            return new KeyBalance(value.GetProperty("used_nanos").GetInt64(),
+                                  remaining.ValueKind==JsonValueKind.Null?null:remaining.GetInt64());
+        }
+        finally { gate.Release(); }
+    }
+
+    internal sealed record KeyBalance(long UsedNanos,long? RemainingNanos)
+    {
+        private static string Usd(long nanos)=>"$"+(nanos/1_000_000_000m).ToString("0.00##",System.Globalization.CultureInfo.InvariantCulture);
+        public string Used=>"已用 "+Usd(UsedNanos);
+        public string Remaining=>RemainingNanos is long amount?"余额 "+Usd(amount):"不限额";
+    }
     private string Library()
     {
         return profileDirectory??ProfileLibrary();

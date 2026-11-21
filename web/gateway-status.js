@@ -25,24 +25,20 @@ function renderClaudeSubscription(container, subscription) {
 
 function bindClaudeUsageRefresh(container, lookup, accept) {
   const button = container.querySelector('.quota-refresh');
-  const link = container.querySelector('.quota-link');
   async function refresh() {
     if (button.disabled) return;
     button.disabled = true;
     button.title = '正在查询…';
-    link.hidden = true;
     try {
       const value = await lookup();
       accept(value);
       if (value?.state !== 'available') {
-        button.title = value?.reason || 'Claude Code 未返回最新额度，可在官方用量页查看';
-        link.hidden = false;
+        button.title = value?.reason || 'Claude Code 未返回最新额度，请稍后重试';
       } else {
         button.title = '查询 Claude 用量';
       }
     } catch (error) {
       button.title = error.message;
-      link.hidden = false;
     } finally {
       button.disabled = false;
     }

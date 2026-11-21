@@ -3,7 +3,7 @@ import WebKit
 import Security
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "Beta-0.4.4.30"
+private let safeCodeVersion = "Beta-0.4.4.31"
 private enum AppError: LocalizedError {
     case message(String)
     case keychainCancelled
@@ -62,6 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var readBuffer = Data()
     private var completions: [String:(Result<Any,Error>)->Void] = [:]
     private var statusItem: NSStatusItem!
+    private let balanceText=NSTextField(wrappingLabelWithString:"")
+    private var balanceButton: NSButton!
+    private var keyRunning=false
     private var popover = NSPopover()
     private var stateText: NSTextField!
     private var durationText: NSTextField!
@@ -74,11 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var servicesWindow: NSWindow?
     private var servicesWeb: WKWebView?
     private var gatewayWindow: NSWindow?
-    private var gatewayWeb: WKWebView?
+    private var gatewayPanel: GatewayPanel?
     private var gatewayContext: String?
     private var gatewayMutationPending = false
     private var gatewayOpening = false
-    private var gatewayPage: URL { resources.appendingPathComponent("Web/web/gateway.html") }
     private struct DialogSpec {
         let id: String
         let title: String
@@ -141,15 +143,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         document.addEventListener('click',e=>{if(!window.safeCodeNativeReady&&!e.target.closest?.('[data-safe-code-startup-close]')){e.preventDefault();e.stopImmediatePropagation();}},true);
         document.addEventListener('DOMContentLoaded',()=>{if(!window.safeCodeNativeReady){document.body.innerHTML='<p style="padding:32px;font:14px system-ui">客户端界面未能加载，请检查应用是否完整。</p>';}});
         """ }
-    private func configuration(services: Bool=false, gateway: Bool=false) -> WKWebViewConfiguration {
+    private func configuration(services: Bool=false) -> WKWebViewConfiguration {
         let config=WKWebViewConfiguration();config.websiteDataStore = .nonPersistent()
         config.preferences.javaScriptCanOpenWindowsAutomatically=false
         config.userContentController.add(self,name:"native")
         config.userContentController.addUserScript(WKUserScript(source:shim,injectionTime:.atDocumentStart,forMainFrameOnly:true))
-        if !gateway {
-            let flag=services ? "window.__safeCodeServicesWindow=true" : "window.__safeCodeNativeDialogs=true"
-            config.userContentController.addUserScript(WKUserScript(source:flag,injectionTime:.atDocumentStart,forMainFrameOnly:true))
-        }
+        let flag=services ? "window.__safeCodeServicesWindow=true" : "window.__safeCodeNativeDialogs=true"
+        config.userContentController.addUserScript(WKUserScript(source:flag,injectionTime:.atDocumentStart,forMainFrameOnly:true))
         return config
     }
     private func makeWindow() {
@@ -171,6 +171,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let metrics=NSStackView();metrics.orientation = .horizontal;metrics.distribution = .fillEqually;metrics.spacing=12
         for title in ["发送","接收","读写"] {let column=NSStackView();column.orientation = .vertical;column.alignment = .leading;column.spacing=3;let label=NSTextField(labelWithString:title);label.font = .systemFont(ofSize:10);label.textColor = .secondaryLabelColor;let value=NSTextField(labelWithString:title=="读写" ? "0 次":"0 B");value.font = .monospacedDigitSystemFont(ofSize:12,weight:.medium);values.append(value);column.addArrangedSubview(label);column.addArrangedSubview(value);metrics.addArrangedSubview(column)}
         main.addArrangedSubview(metrics);metrics.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
+        balanceButton=NSButton(title:"查询 Key 余额",target:self,action:#selector(refreshKeyBalance))
+        balanceButton.bezelStyle = .rounded
+        balanceButton.controlSize = .small
+        balanceButton.isHidden=true
+        balanceText.font = .systemFont(ofSize:11)
+        balanceText.isHidden=true
+        main.addArrangedSubview(balanceButton)
+        main.addArrangedSubview(balanceText)
+        balanceText.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
         let buttons=NSStackView();buttons.orientation = .horizontal;buttons.spacing=7;buttons.distribution = .fillEqually
         for (title,selector) in [("主界面",#selector(showMain)),("重连",#selector(reconnect)),("安全退出",#selector(quit))] {let b=NSButton(title:title,target:self,action:selector);b.bezelStyle = .rounded;b.controlSize = .small;buttons.addArrangedSubview(b)}
         main.addArrangedSubview(buttons);buttons.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
@@ -238,12 +247,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     func userContentController(_ userContentController: WKUserContentController,didReceive message:WKScriptMessage) {
         guard message.frameInfo.isMainFrame,let source=message.frameInfo.request.url,source.isFileURL,let body=message.body as? [String:Any] else{return}
-        if source.standardizedFileURL.path==gatewayPage.path {
-            guard let view=message.webView,view===gatewayWeb,
-                  let id=body["id"] as? String,let op=body["op"] as? String,let args=body["args"] as? [String:Any] else{return}
-            gatewayRequest(op,args,id:id,from:view)
-            return
-        }
         guard source.standardizedFileURL.path==index.path,let id=body["id"] as? String,let op=body["op"] as? String,let args=body["args"] as? [String:Any] else{return}
         if let view=message.webView,view===servicesWeb {
             let allowed=["services.preferences","services.consent","diagnostics.consent","updates.check","updates.download","updates.install","feedback.send"]
@@ -479,67 +482,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         panel.contentMinSize=NSSize(width:min(740,size.width),height:min(400,size.height))
         panel.isReleasedWhenClosed=false
         panel.delegate=self
-        let view=WKWebView(frame:.zero,configuration:configuration(gateway:true))
-        view.navigationDelegate=self
-        panel.contentView=view
+        let content=GatewayPanel { [weak self] action,args,reply in
+            guard let self else {return}
+            self.manageGateway(action,args,reply:reply)
+        }
+        panel.contentViewController=content
         gatewayContext=context
-        gatewayWeb=view
+        gatewayPanel=content
         gatewayWindow=panel
-        view.loadFileURL(gatewayPage,allowingReadAccessTo:gatewayPage.deletingLastPathComponent())
         panel.setFrameOrigin(NSPoint(x:visible.midX-panel.frame.width/2,y:visible.midY-panel.frame.height/2))
         panel.makeKeyAndOrderFront(nil)
+        content.start()
     }
-    private func gatewayRequest(_ op:String,_ args:[String:Any],id:String,from view:WKWebView) {
-        if op=="copy" {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(args["text"] as? String ?? "",forType:.string)
-            answer(id,true,in:view)
+    private func manageGateway(_ action:String,_ args:[String:Any],reply:@escaping GatewayPanel.Reply) {
+        if smokeOutput != nil {
+            switch action {
+            case "list": reply(.success(["keys":[["id":String(repeating:"a",count:64),"note":"示例密钥","enabled":true]],
+              "active_count":0,"waiting":0,"origin":"https://gateway.example.test"]))
+            case "refresh_subscription": reply(.success(["state":"available","windows":["five_hour":["used":20]]]))
+            default: reply(.failure(AppError.message("未提供该预览操作。")))
+            }
             return
         }
-        guard op=="safeCodeApi.manage",let action=args["action"] as? String else{answer(id,error:"未知网关管理操作。",in:view);return}
-        if smokeOutput != nil && action=="list" {
-            answer(id,["keys":[],"active":false,"waiting":0,"origin":"https://gateway.example.test"],in:view)
-            return
-        }
-        if smokeOutput != nil && action=="refresh_subscription" {
-            answer(id,["state":"available","windows":["five_hour":["used":20]]],in:view)
-            return
-        }
-        guard let context=gatewayContext else{answer(id,error:"SSH 会话已变更，请重新打开网关管理。",in:view);return}
-        guard !gatewayMutationPending else{answer(id,error:"请等待当前网关操作完成。",in:view);return}
+        guard let context=gatewayContext else{reply(.failure(AppError.message("SSH 会话已变更，请重新打开网关管理。")));return}
+        guard !gatewayMutationPending else{reply(.failure(AppError.message("请等待当前网关操作完成。")));return}
         let modifies=["issue","update","revoke","delete","set_port","set_origin","set_concurrency","refresh_ticket"].contains(action)
         if modifies {gatewayMutationPending=true}
         var options=args
+        options["action"]=action
         options["context"]=context
-        request(op,options){[weak self,weak view] result in
-            guard let self=self else{return}
-            if modifies {self.gatewayMutationPending=false}
-            guard let view=view,view===self.gatewayWeb else{return}
-            switch result {
-            case .success(let value):self.answer(id,value,in:view)
-            case .failure(let error):self.answer(id,error:error.localizedDescription,in:view)
-            }
+        request("safeCodeApi.manage",options){[weak self] result in
+            if modifies {self?.gatewayMutationPending=false}
+            reply(result)
         }
     }
     private func inspectGatewayWindow(_ id:String,args:[String:Any]) {
-        guard let panel=gatewayWindow,let view=gatewayWeb else{answer(id,["visible":false]);return}
+        guard let panel=gatewayWindow,let content=gatewayPanel else{answer(id,["visible":false]);return}
         if args["close"] as? Bool == true {panel.performClose(nil);answer(id,gatewayWindow==nil);return}
         let previous=dialogHost.frame
         let gatewayOrigin=panel.frame.origin
         if args["move"] as? Bool == true {panel.setFrameOrigin(NSPoint(x:panel.frame.minX+20,y:panel.frame.minY))}
-        let check = """
-        (() => {
-          if (!window.safeCodeNativeReady || document.querySelector('#create-key').disabled) return false;
-          return !document.querySelector('#settings-dialog')
-            && document.querySelector('#gateway-claude-limits').dataset.state === 'available';
-        })()
-        """
-        view.evaluateJavaScript(check){[weak self] value,_ in
-            self?.answer(id,["visible":panel.isVisible,"ready":value as? Bool == true,
-                             "native":panel.styleMask.contains(.titled)&&panel.isMovable&&panel.contentView===view,
-                             "landscape":panel.frame.width>panel.frame.height,"moved":panel.frame.origin != gatewayOrigin,
-                             "parentUnmoved":self?.dialogHost.frame==previous])
-        }
+        answer(id,["visible":panel.isVisible,"ready":content.ready,
+                   "native":panel.styleMask.contains(.titled)&&panel.isMovable&&panel.contentViewController===content,
+                   "landscape":panel.frame.width>panel.frame.height,"moved":panel.frame.origin != gatewayOrigin,
+                   "parentUnmoved":dialogHost.frame==previous])
     }
     @objc private func openServices() {
         if let servicesWindow {
@@ -563,7 +549,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         panel.makeKeyAndOrderFront(nil)
     }
     private func openURL(_ raw:String) {
-        guard let url=URL(string:raw),url.scheme=="https" || (url.scheme=="http" && ["127.0.0.1","localhost","[::1]","::1"].contains(url.host ?? "")) else{return};NSWorkspace.shared.open(url)
+        guard let url=URL(string:raw),url.scheme=="https" || (url.scheme=="http" && ["127.0.0.1","localhost","[::1]","::1"].contains(url.host ?? "")) else{return}
+        if url.host?.lowercased()=="claude.ai" && url.path.hasPrefix("/settings/usage"){return}
+        NSWorkspace.shared.open(url)
     }
     private func openFile(_ path:String) {
         let url=URL(fileURLWithPath:path).standardizedFileURL;let root=directory.standardizedFileURL.path+"/"
@@ -608,8 +596,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     func windowWillClose(_ notification:Notification) {
         guard let panel=notification.object as? NSWindow,panel===gatewayWindow else{return}
-        gatewayWeb?.configuration.userContentController.removeScriptMessageHandler(forName:"native")
-        gatewayWeb=nil
+        gatewayPanel?.stop()
+        gatewayPanel=nil
         gatewayWindow=nil
         gatewayContext=nil
     }
@@ -619,7 +607,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     @objc private func closeKeyWindow(){NSApp.keyWindow?.performClose(nil)}
     @objc private func showMain(){popover.performClose(nil);window.orderFront(nil);dialogHost.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)}
-    @objc private func toggleStatus(){guard let button=statusItem.button else{return};if popover.isShown{popover.performClose(nil)}else{popover.show(relativeTo:button.bounds,of:button,preferredEdge:.minY)}}
+    @objc private func toggleStatus(){
+        guard let button=statusItem.button else{return}
+        if popover.isShown{popover.performClose(nil)}else{
+            popover.show(relativeTo:button.bounds,of:button,preferredEdge:.minY)
+            if keyRunning{refreshKeyBalance()}
+        }
+    }
+    @objc private func refreshKeyBalance(){
+        guard keyRunning,balanceButton.isEnabled else{return}
+        balanceButton.isEnabled=false
+        balanceText.stringValue="正在查询余额…"
+        request("desktopKey.balance"){[weak self] result in
+            guard let self=self else{return}
+            self.balanceButton.isEnabled=true
+            guard self.keyRunning else{return}
+            switch result {
+            case .success(let result):
+                let balance=result as? [String:Any]
+                self.balanceText.stringValue=[balance?["remaining"] as? String,balance?["used"] as? String].compactMap{$0}.joined(separator:" · ")
+            case .failure(let error):self.balanceText.stringValue=error.localizedDescription
+            }
+        }
+    }
     @objc private func reconnect(){request("mount.reconnect"){[weak self] result in if case .failure(let error)=result{self?.fail(error.localizedDescription)}}}
     @objc private func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Safe Code",.applicationVersion:safeCodeVersion,.credits:NSAttributedString(string:"macOS 客户端 · SSH、部署与目录挂载\n第三方适配器保持关闭")])}
     @objc private func quit(){
@@ -629,18 +639,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     private func updateStatus(_ message:[String:Any]) {
         busy=message["busy"] as? Bool ?? false;let mount=message["mount"] as? [String:Any] ?? [:];let host=message["host"] as? [String:Any] ?? [:]
-        let count=mount["count"] as? Int ?? 0;guarding=count>0 || (host["enabled"] as? Bool ?? false) || (message["desktopKeyRunning"] as? Bool ?? false) || (message["desktopSshRunning"] as? Bool ?? false)
+        let count=mount["count"] as? Int ?? 0
+        let running=message["desktopKeyRunning"] as? Bool == true
+        if running != keyRunning {
+            keyRunning=running
+            balanceButton.isHidden = !running
+            balanceText.isHidden = !running
+            balanceText.stringValue=""
+            popover.contentSize=NSSize(width:276,height:running ? 284:196)
+            if running && popover.isShown {refreshKeyBalance()}
+        }
+        guarding=count>0 || (host["enabled"] as? Bool ?? false) || running || (message["desktopSshRunning"] as? Bool ?? false)
         stateText.stringValue=(host["enabled"] as? Bool ?? false) ? "本机控制已启用":mount["message"] as? String ?? "未挂载目录"
         let seconds=Int((mount["durationSeconds"] as? Double ?? 0));durationText.stringValue="\(count) 个目录  ·  \(seconds/3600):\(String(format:"%02d",seconds/60%60)):\(String(format:"%02d",seconds%60))"
         values[0].stringValue=bytes(mount["bytesToServer"] as? Double ?? 0);values[1].stringValue=bytes(mount["bytesToLocal"] as? Double ?? 0);values[2].stringValue="\(mount["completedFiles"] as? Int ?? 0) 次"
-        statusItem.button?.toolTip="Safe Code · "+stateText.stringValue
+        statusItem.button?.toolTip=running ? "Safe Code · API Key 接入":"Safe Code · "+stateText.stringValue
         web.evaluateJavaScript("window.safeCodeMountStatus?.("+json(mount)+")",completionHandler:nil)
     }
     private func bytes(_ n:Double)->String {if n<1024{return "\(Int(n)) B"};if n<1048576{return String(format:"%.1f KB",n/1024)};if n<1073741824{return String(format:"%.1f MB",n/1048576)};return String(format:"%.1f GB",n/1073741824)}
     private func fail(_ message:String){if let smoke=smokeOutput {try? Data(json(["success":false,"error":message]).utf8).write(to:smoke);return};let alert=NSAlert();alert.messageText="Safe Code";alert.informativeText=message;alert.alertStyle = .warning;alert.runModal()}
     func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         guard let url=action.request.url else{decisionHandler(.cancel);return}
-        let expected=webView===gatewayWeb ? gatewayPage : index
+        let expected=index
         if url.isFileURL && url.standardizedFileURL.path==expected.path {decisionHandler(.allow)}else{decisionHandler(.cancel);if action.navigationType == .linkActivated{openURL(url.absoluteString)}}
     }
     func webView(_ webView:WKWebView,createWebViewWith configuration:WKWebViewConfiguration,for navigationAction:WKNavigationAction,windowFeatures:WKWindowFeatures)->WKWebView?{if let url=navigationAction.request.url{openURL(url.absoluteString)};return nil}

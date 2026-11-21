@@ -16,6 +16,9 @@ internal sealed class MountTray : IDisposable
     private readonly TextBlock status=new(),summary=new(),duration=new(),sent=new(),received=new(),files=new();
     private readonly TextBlock codexState=new(),codexDuration=new(),codexDetail=new(),desktopState=new(),desktopDuration=new(),desktopDetail=new();
     private readonly Border codexPanel,desktopPanel;
+    private readonly Button keyBalance=new(){Content="查询 Key 余额",Margin=new Thickness(0,8,0,0),Visibility=Visibility.Collapsed};
+    private readonly TextBlock keyBalanceText=new(){TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,4,0,0),
+        FontSize=11,Visibility=Visibility.Collapsed};
     private readonly DispatcherTimer timer=new(){Interval=TimeSpan.FromSeconds(1)};
     private readonly DispatcherTimer dismissTimer=new(){Interval=TimeSpan.FromMilliseconds(100)};
     private bool dismissAfterMouseRelease;
@@ -25,10 +28,15 @@ internal sealed class MountTray : IDisposable
     private readonly Func<HostControlStatus?>? readHost;
     private readonly Func<ClaudeCodexStatus?>? readCodex;
     private readonly Func<ClaudeDesktopStatus?>? readDesktop;
+    private readonly Func<bool> keyActive;
+    private readonly Func<Task<DesktopKeyAccess.KeyBalance>> readKeyBalance;
     private readonly System.Drawing.Icon appIcon;
-    public MountTray(Window owner,Func<MountStatus> read,Action show,Func<Task> retry,Action exit,Action<MountStatus> publish,Func<HostControlStatus?>? readHost=null,Func<ClaudeCodexStatus?>? readCodex=null,Func<ClaudeDesktopStatus?>? readDesktop=null)
+    public MountTray(Window owner,Func<MountStatus> read,Action show,Func<Task> retry,Action exit,Action<MountStatus> publish,
+        Func<HostControlStatus?> readHost,Func<ClaudeCodexStatus?> readCodex,Func<ClaudeDesktopStatus?> readDesktop,
+        Func<bool> keyActive,Func<Task<DesktopKeyAccess.KeyBalance>> readKeyBalance)
     {
         this.read=read;this.publish=publish;this.readHost=readHost;this.readCodex=readCodex;this.readDesktop=readDesktop;
+        this.keyActive=keyActive;this.readKeyBalance=readKeyBalance;
         string path=Path.Combine(AppContext.BaseDirectory,"Icons","safe-code-shortcut.ico");
         appIcon=File.Exists(path)?new System.Drawing.Icon(path):new System.Drawing.Icon(System.Drawing.SystemIcons.Shield,32,32);
         icon.Icon=appIcon;icon.Text="Safe Code · 挂载守护";icon.Visible=true;
@@ -56,6 +64,9 @@ internal sealed class MountTray : IDisposable
         codexPanel=BuildIntegrationPanel("Codex 接入",codexState,codexDuration,codexDetail);
         desktopPanel=BuildIntegrationPanel("Claude Desktop 接入",desktopState,desktopDuration,desktopDetail);
         content.Children.Add(codexPanel);content.Children.Add(desktopPanel);
+        keyBalance.Click+=async (_,_)=>await RefreshKeyBalanceAsync();
+        content.Children.Add(keyBalance);
+        content.Children.Add(keyBalanceText);
         var actions=new Grid{Margin=new Thickness(0,11,0,0)};
         for(int i=0;i<3;i++)actions.ColumnDefinitions.Add(new ColumnDefinition());
         AddButton(actions,0,"主界面","显示主界面",()=>{panel!.Hide();show();},true);
@@ -114,7 +125,33 @@ internal sealed class MountTray : IDisposable
         if(disposed)return;
         dismissTimer.Stop();
         if(panel.IsVisible){panel.Activate();return;}
+        if(keyActive())
+        {
+            keyBalanceText.Text="正在查询余额…";
+            keyBalanceText.Visibility=Visibility.Visible;
+        }
         Update();panel.UpdateLayout();panel.Show();var area=SystemParameters.WorkArea;panel.Left=Math.Max(area.Left,area.Right-panel.ActualWidth-12);panel.Top=Math.Max(area.Top,area.Bottom-panel.ActualHeight-12);panel.Activate();
+        if(keyActive())_=RefreshKeyBalanceAsync();
+    }
+    private async Task RefreshKeyBalanceAsync()
+    {
+        if(disposed||!keyActive()||!keyBalance.IsEnabled)return;
+        keyBalance.IsEnabled=false;
+        keyBalanceText.Text="正在查询余额…";
+        keyBalanceText.Visibility=Visibility.Visible;
+        try
+        {
+            var balance=await readKeyBalance();
+            if(!disposed&&keyActive())keyBalanceText.Text=balance.Remaining+" · "+balance.Used;
+        }
+        catch(Exception error)
+        {
+            if(!disposed&&keyActive())keyBalanceText.Text=ConnectionErrors.DescribeOperation(error);
+        }
+        finally
+        {
+            if(!disposed)keyBalance.IsEnabled=true;
+        }
     }
     public void NotifyHidden()=>icon.ShowBalloonTip(2000,"Safe Code","已转入托盘，后台任务继续运行。",Forms.ToolTipIcon.Info);
     private void Update()
@@ -131,13 +168,16 @@ internal sealed class MountTray : IDisposable
         bool codexActive=codex?.Running==true,desktopActive=desktop?.Active==true;
         UpdateCodex(codex);
         UpdateDesktop(desktop);
+        var usingKey=keyActive();
+        keyBalance.Visibility=usingKey?Visibility.Visible:Visibility.Collapsed;
+        if(!usingKey)keyBalanceText.Visibility=Visibility.Collapsed;
         string tooltip=value.Message;
         if(host?.Enabled==true){status.Text=host.State=="connected"?"本机控制开":host.State=="attention"?"本机需处理":"本机重连中";tooltip+="\n"+host.Message;status.Foreground=Brush(host.State=="connected"?"#2f7158":"#a57430");}
         else if(codexActive||desktopActive){status.Text="接入运行中";status.Foreground=Brush("#2f7158");}
         if(codexActive)tooltip+="\nCodex 接入：通道"+(codex!.Connected?"已连接":"重连中")+"；模型调用需由 Codex 发起";
         if(desktopActive)tooltip+="\nClaude Desktop 接入：VPS Claude Code 通道已连接";
         status.ToolTip=tooltip;
-        string iconText="Safe Code · "+value.Count+" 个目录 · "+(value.State=="connected"?"守护中":value.State=="reconnecting"?"重连中":value.State=="attention"?"需要处理":"未挂载")+(host?.Enabled==true?" · 本机控制已启用":"")+(codexActive||desktopActive?" · 接入运行中":"");
+        string iconText=usingKey?"Safe Code · API Key 接入": "Safe Code · "+value.Count+" 个目录 · "+(value.State=="connected"?"守护中":value.State=="reconnecting"?"重连中":value.State=="attention"?"需要处理":"未挂载")+(host?.Enabled==true?" · 本机控制已启用":"")+(codexActive||desktopActive?" · 接入运行中":"");
         icon.Text=iconText.Length>63?iconText[..63]:iconText;
     }
     private void UpdateCodex(ClaudeCodexStatus? codex)

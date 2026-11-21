@@ -110,6 +110,16 @@ class KeyRegistry:
                 AND budget_nanos <= (SELECT COALESCE(SUM(cost_nanos),0) FROM usage WHERE key_id=?)''',
                 (key_id, key_id)).fetchone() is not None
 
+    def balance(self, key_id):
+        with self.connect() as db:
+            row = db.execute('''SELECT k.budget_nanos, COALESCE(SUM(u.cost_nanos),0) AS used_nanos
+                FROM keys k LEFT JOIN usage u ON u.key_id=k.id WHERE k.id=? GROUP BY k.id''', (key_id,)).fetchone()
+        if row is None:
+            return None
+        budget, used = row['budget_nanos'], row['used_nanos']
+        return {'budget_nanos': budget, 'used_nanos': used,
+                'remaining_nanos': None if budget is None else max(0, budget-used)}
+
     def update(self, key_id, note, rpm, *, budget_nanos=...):
         with self.connect() as db:
             if not db.execute('UPDATE keys SET note=?, rpm=? WHERE id=?', (note,rpm,key_id)).rowcount:

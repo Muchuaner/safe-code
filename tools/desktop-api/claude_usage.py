@@ -22,10 +22,12 @@ WINDOW_NAMES = {
     'current week': 'seven_day',
 }
 ESCAPES = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][A-Za-z0-9]|[@-_])')
+COLUMNS = re.compile(r'\x1b\[[0-9]*[CG]')
 USED = re.compile(r'(?<![\d.])(\d{1,3}(?:\.\d+)?)\s*%\s*(used|remaining|left)\b', re.IGNORECASE)
 PROMPT = re.compile(r'(?m)^\s*[❯›]\s*(?:Try [^\n]*|Ask [^\n]*|Type [^\n]*)?$')
 USAGE_COMMAND = re.compile(r'(?im)^[ \t]*(?:[❯›][ \t]*)?/usage[ \t]+(?:[–-][ \t]*)?(?:show|display|view|check)\b')
-TRUST_TEMP = re.compile(r'(?im)^\s*[❯›]\s*1\.\s*Yes, I trust this folder\s*$')
+TRUST_YES = re.compile(r'(?im)^[ \t]*[❯›][ \t]*(?:1\.[ \t]*)?Yes,[ \t]+I trust this folder[ \t]*$')
+TRUST_NO = re.compile(r'(?im)^[ \t]*[❯›][ \t]*(?:2\.[ \t]*)?No,[ \t]+exit[ \t]*\n[ \t]*Yes,[ \t]+I trust this folder[ \t]*$')
 
 
 class UsageUnavailable(ValueError):
@@ -33,7 +35,7 @@ class UsageUnavailable(ValueError):
 
 
 def terminal_text(text):
-    return ESCAPES.sub('', text).replace('\r\n', '\n').replace('\r', '\n')
+    return ESCAPES.sub('', COLUMNS.sub(' ', text)).replace('\r\r\n', '\n').replace('\r\n', '\n').replace('\r', '\n')
 
 
 def usage_windows(text):
@@ -113,7 +115,8 @@ def read_subscription(timeout=12):
 def query_usage(terminal, deadline, workspace):
     phase = 'startup'
     output = b''
-    acknowledged_temp = False
+    trust_confirmations = 0
+    selecting_trust = False
     with selectors.DefaultSelector() as selector:
         selector.register(terminal, selectors.EVENT_READ)
         while time.monotonic() < deadline and selector.select(max(0, deadline - time.monotonic())):
@@ -130,10 +133,16 @@ def query_usage(terminal, deadline, workspace):
             output = (output + chunk)[-128*1024:]
             text = terminal_text(output.decode('utf-8', errors='replace'))
             if phase == 'startup':
-                if not acknowledged_temp and workspace in text and TRUST_TEMP.search(text):
+                if trust_confirmations < 2 and (selecting_trust or workspace in text) and TRUST_YES.search(text):
                     # The CLI is in the fresh empty directory created only for this query.
+                    if selecting_trust:
+                        time.sleep(0.12)
                     os.write(terminal, b'\r')
-                    acknowledged_temp, output = True, b''
+                    trust_confirmations += 1
+                    selecting_trust, output = False, b''
+                elif trust_confirmations < 2 and not selecting_trust and workspace in text and TRUST_NO.search(text):
+                    os.write(terminal, b'\x1b[B')
+                    selecting_trust, output = True, b''
                 elif PROMPT.search(text):
                     os.write(terminal, b'/usage')
                     phase, output = 'preview', b''

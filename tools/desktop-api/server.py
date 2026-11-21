@@ -32,7 +32,7 @@ from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegi
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 1
+GATEWAY_REVISION = 2
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中确认「保证自用」并启用公网。'
 # A shared promotional code, checked only at the gateway.
 ACTIVATION_CODE_SHA256 = bytes.fromhex('89debb851e3fc69c8e163a3b6462a3493e93d38ae8cf0132e419bd9e0b32d2b9')
@@ -170,6 +170,15 @@ class PublicHandler(Handler):
 
     def do_GET(self):
         self.device = None
+        if self.path == '/v1/key/balance':
+            if not self.server.public_enabled:
+                return self.public_disabled()
+            if not self.authorized():
+                return self.device_error(401, 'SafeCode Key required')
+            balance = self.server.registry.balance(self.digest)
+            if balance is None:
+                return self.device_error(401, 'SafeCode Key required')
+            return self.reply(200, balance)
         if self.path.partition('?')[0] == '/v1/cloudcli/models':
             self.path = self.path.replace('/v1/cloudcli/', '/v1/', 1)
         if self.path.partition('?')[0] != '/v1/models':

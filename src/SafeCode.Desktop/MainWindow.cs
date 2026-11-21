@@ -111,7 +111,8 @@ public sealed class MainWindow : Window
                 finally{integrationSampling=false;}
             };
             integrationTimer.Start();
-            mountTray=new MountTray(this,()=>session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),ShowMainWindow,ReconnectMountsFromTrayAsync,()=>{exitRequested=true;Close();},PublishMountStatus,()=>keyDeviceTunnel?.Status(hostControl?.Enabled==true)??hostControl?.Status,()=>claudeBridge?.Status,()=>claudeDesktop?.Status);
+            mountTray=new MountTray(this,()=>session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),ShowMainWindow,ReconnectMountsFromTrayAsync,()=>{exitRequested=true;Close();},PublishMountStatus,()=>keyDeviceTunnel?.Status(hostControl?.Enabled==true)??hostControl?.Status,()=>claudeBridge?.Status,()=>claudeDesktop?.Status,
+                ()=>keyAccess?.Running==true,()=>KeyAccess.ReadBalanceAsync(lifetime.Token));
             StateChanged+=(_,_)=>{if(WindowState==WindowState.Minimized){ShowInTaskbar=false;Hide();}};
         }
         Closing += async (_, e) =>

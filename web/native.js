@@ -133,7 +133,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let claudeDesktopBusy=false,claudeDesktopStatus=null,claudeDesktopPolling=false;
     let publicGatewayEnabled=false,publicGatewayLoading=false,publicGatewayReachable=false,publicGatewayMissing=false;
     let publicGatewayUpgrade=false,publicGatewayNeedsCloudKey=false;
-    const requiredGatewayRevision=1;
+    const requiredGatewayRevision=2;
     let publicGatewaySetupOnly=false;
     let publicGatewayTask,publicGatewayTimer;
     let publicGatewaySubscription;
