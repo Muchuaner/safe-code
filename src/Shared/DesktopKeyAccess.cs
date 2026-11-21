@@ -31,10 +31,10 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     string? windowsPolicyPath=null,Func<CancellationToken,Task>? beforeMessages=null) : IDisposable
 {
     internal sealed record DeviceBinding(string DeviceId,string DeviceProof,string Alias,int Port,string PublicKey);
-    internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing);
+    internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing,SshSession? HostSession=null);
     private sealed record Saved(Ticket Remote,string Local,int Port,string Profile,string Previous,JsonNode? Hybrid,bool CreatedMeta=false,
         Dictionary<string,PolicyValue>? WindowsPolicy=null,DeviceBinding? Device=null);
-    private sealed record Relay(WebApplication App,HttpClient Client,int Port) : IAsyncDisposable
+    private sealed record Relay(WebApplication App,HttpClient Client,int Port,Func<bool>? HostReady) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
@@ -52,6 +52,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private Relay? relay;
     private static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
     internal bool Running=>relay!=null;
+    internal bool ReusesHostControl=>relay?.HostReady!=null;
     internal bool Configured=>File.Exists(StatePath);
     private string Library()
     {
@@ -97,7 +98,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         return document.RootElement.Clone();
     }
 
-    internal async Task<DeviceSetup> VerifyDeviceGatewayAsync(string code,bool replace,bool useSaved,CancellationToken ct)
+    internal async Task<DeviceSetup> VerifyDeviceGatewayAsync(string code,bool replace,bool useSaved,SshSession? ssh,CancellationToken ct)
     {
         await gate.WaitAsync(ct);
         try
@@ -112,6 +113,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             using var response=await VerifyRemoteAsync(client,deadline.Token);
             if(response.StatusCode==HttpStatusCode.Unauthorized)throw new InvalidOperationException("Key 无效或已撤销。");
             response.EnsureSuccessStatusCode();
+            if(ssh!=null&&await ssh.CanReuseHostControlForKeyAsync(ticket,ct))
+                return new(ticket,replace,useSaved,null,ssh);
             var capabilities=await DeviceControlAsync(ticket,new{action="capability"},deadline.Token);
             if(!capabilities.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)
                 throw new InvalidOperationException("此网关尚未支持通过 HTTPS 建立本机远程控制。");
@@ -120,7 +123,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         finally{gate.Release();}
     }
 
-    private async Task Forward(HttpContext ctx,HttpClient client,string token)
+    private async Task Forward(HttpContext ctx,HttpClient client,string token,Func<bool>? hostReady)
     {
         string path=ctx.Request.Path.Value??"";
         if(!(ctx.Request.Method=="GET"&&path=="/v1/models"||
@@ -142,6 +145,13 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         foreach(var h in new[]{"anthropic-version","anthropic-beta","x-claude-code-session-id"})
             if(ctx.Request.Headers.TryGetValue(h,out var v))req.Headers.TryAddWithoutValidation(h,v.ToArray());
+        if(path=="/v1/messages"&&hostReady?.Invoke()==false)
+        {
+            ctx.Response.StatusCode=503;
+            await ctx.Response.WriteAsJsonAsync(new {type="error",error=new {type="api_error",
+                message="已授权的本机远程控制暂不可用。请在 SafeCode 恢复控制通道后再试。"}},ctx.RequestAborted);
+            return;
+        }
         var trace=diagnostics?.BeginDiagnostic("desktop_key_request");
         var gateway=trace==null?null:new GatewayDiagnostic(path switch
         {
@@ -198,7 +208,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
     }
 
-    private async Task<Relay> Listen(Ticket t,string local,int port,CancellationToken ct,DeviceBinding? device=null)
+    private async Task<Relay> Listen(Ticket t,string local,int port,CancellationToken ct,DeviceBinding? device=null,Func<bool>? hostReady=null)
     {
         var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions{Args=[],ContentRootPath=AppContext.BaseDirectory});
         builder.Configuration.Sources.Clear();
@@ -210,12 +220,12 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             client.DefaultRequestHeaders.Add("X-SafeCode-Device",device.DeviceId);
             client.DefaultRequestHeaders.Add("X-SafeCode-Device-Proof",device.DeviceProof);
         }
-        app.Run(ctx=>Forward(ctx,client,local));
+        app.Run(ctx=>Forward(ctx,client,local,hostReady));
         try
         {
             await app.StartAsync(ct);
             var addresses=app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses;
-            return new(app,client,new Uri(addresses.Single()).Port);
+            return new(app,client,new Uri(addresses.Single()).Port,hostReady);
         }
         catch{client.Dispose();await app.DisposeAsync();throw;}
     }
@@ -437,7 +447,12 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 break;
         }
     }
-    private object Status(string? error=null)=>new{configured=Configured,running=relay!=null,error};
+    private object Status(string? error=null)
+    {
+        bool disconnected=relay?.HostReady?.Invoke()==false;
+        return new{configured=Configured,running=relay!=null&&!disconnected,
+            error=error??(disconnected?"已授权的本机远程控制暂不可用。请恢复本机控制或选择「重新启用」。":null)};
+    }
     // The classifier accepts permission checks only. Publishing it as a chat model
     // also makes it compete with the real Sonnet family default in Desktop.
     internal static void SetClassifier(JsonObject profile,string classifier)
@@ -519,7 +534,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         finally{gate.Release();}
     }
-    internal async Task<object> EnableAsync(string code,CancellationToken ct,bool replace=false,bool useSaved=false,DeviceSetup? verified=null,DeviceBinding? device=null)
+    internal async Task<object> EnableAsync(string code,CancellationToken ct,bool replace=false,bool useSaved=false,DeviceSetup? verified=null,DeviceBinding? device=null,Func<bool>? hostReady=null)
     {
         await gate.WaitAsync(ct);
         try
@@ -528,7 +543,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             if(useSaved&&previous==null)throw new InvalidOperationException("没有保存的接入 Key，请输入新的 Key。");
             if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」切换已保存的接入。");
             var t=verified?.Remote??(useSaved?previous!.Remote:Ticket.Parse(code.Trim()));
-            if(verified!=null&&(device==null||replace!=verified.Replace||useSaved!=verified.UseSaved||
+            bool controlReady=verified?.HostSession==null?device!=null:device==null&&hostReady?.Invoke()==true;
+            if(verified!=null&&(!controlReady||replace!=verified.Replace||useSaved!=verified.UseSaved||
                useSaved&&t!=previous!.Remote))
                 throw new InvalidOperationException("接入配置已变更，请重新验证设备。");
             using var client=Remote(t);using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -556,7 +572,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             string applied=(string?)meta["appliedId"]??"";
             bool wasApplied=previous!=null&&applied==profileId;
             string local=previous?.Local??Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-            var next=await Listen(t,local,0,ct,device);
+            if(hostReady?.Invoke()==false)throw new InvalidOperationException("本机远程控制连接已中断，请重新验证。");
+            var next=await Listen(t,local,0,ct,device,hostReady);
             Action? undoPolicy=null;
             bool profileWritten=false,metaWritten=false;
             try

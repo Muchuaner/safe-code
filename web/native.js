@@ -1001,7 +1001,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#host-alias').disabled=true;
       $('#host-enable').hidden=false;
       $('#host-enable').disabled=hostBusy||!$('#host-risk').checked;
-      $('#host-enable').textContent=hostBusy?'正在部署…':'同意并开始部署';
+      $('#host-enable').textContent=keyDeviceSetup.existingControl
+        ? (hostBusy?'正在验证…':'同意并使用')
+        : (hostBusy?'正在部署…':'同意并开始部署');
       $('#host-disable').hidden=true;
       $('#host-command-area').hidden=true;
     }
@@ -1057,7 +1059,11 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         ?'请先在系统设置 → 通用 → 共享开启远程登录，仅允许当前账户。Safe Code 将添加专用密钥，不会开启或更改系统 SSH 服务。'
         :'启用时会请求 Windows 管理员授权；首次部署需要几秒至几十秒。');
       $('#host-progress').textContent=keyDeviceSetup
-        ? '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。部署需要 Windows 管理员授权。'
+        ? (keyDeviceSetup.reuseControl
+          ? (keyDeviceSetup.existingControl
+            ? '这把 Key 由当前 VPS 签发。授权后将使用已验证的本机远程控制通道。'
+            : '这把 Key 由当前 VPS 签发。授权后将通过当前 SSH 会话开启本机远程控制。')
+          : '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。部署需要 Windows 管理员授权。')
         : (required?'Claude Desktop SSH 接入需要先验证本机远程控制。':'')+instructions;
       renderHostControl();
       hostDialog.showModal();
@@ -1100,7 +1106,11 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       event.preventDefault();if(hostBusy||!$('#host-risk').checked||!$('#host-form').reportValidity())return;
       if(keyDeviceSetup){
         hostBusy=true;renderHostControl();
-        $('#host-progress').textContent='请完成 Windows 管理员授权。接下来会建立 FRP 通道并验证 SSH 登录。';
+        $('#host-progress').textContent=keyDeviceSetup.reuseControl
+          ? (keyDeviceSetup.existingControl
+            ? '正在检查已授权的本机控制通道并启用 Key…'
+            : '请完成 Windows 管理员授权。接下来会验证本机远程控制并启用 Key。')
+          : '请完成 Windows 管理员授权。接下来会建立 FRP 通道并验证 SSH 登录。';
         try{
           keyState=await native('desktopKey.authorizeDevice',{riskAccepted:true});
           keyDeviceSetup=null;keyReplacing=false;

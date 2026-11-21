@@ -65,6 +65,22 @@ public sealed partial class SshSession
     public Task<JsonElement> EnablePublicGatewayAsync(CancellationToken ct) =>
         RequestGatewayAsync(new { action = "enable_public", accepted = true }, ct, remember: true);
 
+    public async Task<bool> CanReuseHostControlForKeyAsync(PublicGatewayTicket ticket, CancellationToken ct)
+    {
+        string keyId = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(ticket.Key)));
+        try
+        {
+            var response = await RequestGatewayAsync(new { action = "key_host_reuse", keyId, pin = ticket.Pin }, ct,
+                timeout: TimeSpan.FromSeconds(8));
+            return response.TryGetProperty("allowed", out var allowed) && allowed.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception error) when (!ct.IsCancellationRequested &&
+            error is InvalidOperationException or IOException or SshException or OperationCanceledException or TimeoutException or SocketException)
+        {
+            return false;
+        }
+    }
+
     public async Task<JsonElement> ManagePublicGatewayAsync(Dictionary<string, JsonElement> request, CancellationToken ct)
     {
         string? action = request.GetValueOrDefault("action").ValueKind == JsonValueKind.String

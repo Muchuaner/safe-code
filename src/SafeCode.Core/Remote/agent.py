@@ -334,14 +334,22 @@ if operation=='install_claude':
         finally:link.unlink(missing_ok=True)
     finally:temporary.unlink(missing_ok=True)
     sys.exit(0)
-if operation=='gateway_origin':
-    import hashlib, re, ssl
+if operation in ('gateway_origin', 'gateway_key_host_reuse'):
+    import hashlib, hmac, re, ssl
     key_id = request['keyId']
     if not isinstance(key_id, str) or not re.fullmatch(r'[a-f0-9]{64}', key_id) or not (target/'keys'/key_id).is_file():
+        if operation == 'gateway_key_host_reuse':
+            print(json.dumps({'allowed': False}));sys.exit(0)
         raise ValueError('这把 Key 在当前 VPS 上不存在或已撤销。')
     with (target/'cert.pem').open() as cert_file:
         cert = ssl.PEM_cert_to_DER_cert(cert_file.read(65536))
-    print(json.dumps({'pin':hashlib.sha256(cert).hexdigest()}));sys.exit(0)
+    pin = hashlib.sha256(cert).hexdigest()
+    if operation == 'gateway_key_host_reuse':
+        supplied_pin = request.get('pin')
+        allowed = (isinstance(supplied_pin, str) and re.fullmatch(r'[a-f0-9]{64}', supplied_pin)
+                   and hmac.compare_digest(pin, supplied_pin) and not (target/'device-required'/key_id).is_file())
+        print(json.dumps({'allowed': bool(allowed)}));sys.exit(0)
+    print(json.dumps({'pin':pin}));sys.exit(0)
 if operation=='read':
     if not target.is_file():print(json.dumps(''));sys.exit(0)
     with target.open() as f:value=f.read(1048577)
@@ -1029,7 +1037,7 @@ API_STATE='.local/state/safe-code-desktop-api'
 def safe_code_api(options):
     action=options.get('action')
     if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
-                      'ticket_endpoint'):
+                      'ticket_endpoint','key_host_reuse'):
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
@@ -1051,6 +1059,13 @@ def safe_code_api(options):
         source = Path(__file__).with_name('claude_usage.py').read_text()
         output = run([*work_python, '-I', '-'], stdin=source, timeout=18)
         return json.loads(output.stdout)
+    if action == 'key_host_reuse':
+        settings = safe_code_api_admin(command, {'action':'settings'})
+        # CloudCLI's gateway requires a loopback bind and uses its own device routing.
+        if ipaddress.ip_address(settings['bind']).is_loopback:
+            return {'allowed': False}
+        reply = user_files('gateway_key_host_reuse', API_STATE, keyId=options.get('keyId'), pin=options.get('pin'))
+        return json.loads(reply.stdout)
     if action in ('issue', 'ticket_endpoint'):
         origin = gateway_public_origin(safe_code_api_admin(command, {'action':'settings'}), options.get('hints'))
         if action == 'ticket_endpoint':

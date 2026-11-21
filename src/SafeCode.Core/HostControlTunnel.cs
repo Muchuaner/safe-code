@@ -33,6 +33,12 @@ public sealed partial class SshSession
         if(!HasVerifiedHostControl)
             throw new InvalidOperationException("请先在当前服务器上开启「本机远程控制」，并等待 SSH 登录验证通过。");
     }
+    public Func<bool> CaptureVerifiedHostControl()
+    {
+        var lease = hostLifetime;
+        RequireVerifiedHostControl();
+        return () => ReferenceEquals(hostLifetime, lease) && HasVerifiedHostControl;
+    }
     public async Task<HostControlIdentity> PrepareHostControlAsync(string clientId,CancellationToken ct=default)
     {
         if(!Regex.IsMatch(clientId,"\\A[a-f0-9]{20}\\z"))throw new ArgumentException("本机控制标识无效。");

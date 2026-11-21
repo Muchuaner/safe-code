@@ -44,6 +44,7 @@ public sealed class MainWindow : Window
     private DesktopKeyAccess? keyAccess;
     private DesktopKeyAccess.DeviceSetup? pendingKeyDevice;
     private WindowsDeviceTunnel? keyDeviceTunnel;
+    private SshSession? keyStartedHost;
     private WindowsHostControl? hostControl;
     private ClaudeCodexBridge? claudeBridge;
     private ClaudeDesktopBridge? claudeDesktop;
@@ -301,8 +302,10 @@ public sealed class MainWindow : Window
     {
         var setup=pendingKeyDevice??throw new InvalidOperationException("请重新验证接入 Key。");
         if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
-        hostControl??=new WindowsHostControl(dataDirectory);
-        if(hostControl.Enabled)throw new InvalidOperationException("本机已有控制通道，请先停用后再部署 Key 接入。");
+        var control=hostControl??=new WindowsHostControl(dataDirectory);
+        if(setup.HostSession is { } target)
+            return await AuthorizeKeyHostControlAsync(setup,target,control,ct);
+        if(control.Enabled)throw new InvalidOperationException("本机已有控制通道，请先停用后再部署 Key 接入。");
         await StopKeyDeviceAsync();
         deploying=true;
         activeStep="host_enable";
@@ -312,7 +315,7 @@ public sealed class MainWindow : Window
         try
         {
             device??=await WindowsDeviceTunnel.PrepareAsync(setup.Remote,ct);
-            var ssh=await hostControl.EnableDeviceAsync(device.PublicKey,ct);
+            var ssh=await control.EnableDeviceAsync(device.PublicKey,ct);
             startedLocal=true;
             tunnel=await WindowsDeviceTunnel.ConnectAsync(setup.Remote,device,ssh.Port,dataDirectory,ct);
             await tunnel.VerifyAsync(ssh,ct);
@@ -325,7 +328,7 @@ public sealed class MainWindow : Window
         catch
         {
             if(tunnel!=null)await tunnel.DisposeAsync();
-            if(startedLocal)await hostControl.DisableAsync(CancellationToken.None);
+            if(startedLocal)await control.DisableAsync(CancellationToken.None);
             if(setup.Existing==null&&device!=null)
             {
                 try{await DesktopKeyAccess.DeviceControlAsync(setup.Remote,
@@ -337,12 +340,55 @@ public sealed class MainWindow : Window
         finally{deploying=false;activeStep="";}
     }
 
+    private async Task<object> AuthorizeKeyHostControlAsync(DesktopKeyAccess.DeviceSetup setup,SshSession target,
+        WindowsHostControl control,CancellationToken ct)
+    {
+        if(!ReferenceEquals(RequireSession(),target))
+            throw new InvalidOperationException("SSH 会话已变更，请重新验证接入 Key。");
+        if(control.Enabled&&!control.IsEnabledFor(target))
+            throw new InvalidOperationException("现有本机远程控制属于另一台 VPS。请先在本机远程控制中停用它。");
+        deploying=true;
+        activeStep="host_enable";
+        bool startedHere=false;
+        try
+        {
+            if(!await target.CanReuseHostControlForKeyAsync(setup.Remote,ct))
+                throw new InvalidOperationException("该 Key 或网关的设备授权已变更，请重新验证接入 Key。");
+            if(!control.Enabled)
+            {
+                await control.EnableAsync(target,control.DefaultAlias,ct);
+                startedHere=true;
+            }
+            else if(target.HostControlStatus.State!="connected")
+                await target.MaintainHostControlForChatAsync(ct);
+            var leaseReady=target.CaptureVerifiedHostControl();
+            bool HostReady()=>ReferenceEquals(session,target)&&control.IsEnabledFor(target)&&leaseReady();
+            var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,hostReady:HostReady);
+            if(startedHere)keyStartedHost=target;
+            pendingKeyDevice=null;
+            return result;
+        }
+        catch
+        {
+            if(startedHere)await control.DisableAsync(CancellationToken.None);
+            throw;
+        }
+        finally{deploying=false;activeStep="";}
+    }
+
     private async Task StopKeyDeviceAsync()
     {
-        if(keyDeviceTunnel is not { } tunnel)return;
-        keyDeviceTunnel=null;
-        await tunnel.DisposeAsync();
-        if(hostControl?.Enabled==true)await hostControl.DisableAsync();
+        if(keyDeviceTunnel is { } tunnel)
+        {
+            keyDeviceTunnel=null;
+            await tunnel.DisposeAsync();
+            if(hostControl?.Enabled==true)await hostControl.DisableAsync();
+        }
+        if(keyStartedHost is { } target)
+        {
+            keyStartedHost=null;
+            if(hostControl?.IsEnabledFor(target)==true)await hostControl.DisableAsync();
+        }
     }
 
     private async Task<object?> HandleAsync(string operation,JsonElement args,Action<Exception>? observeFailure=null)
@@ -372,8 +418,12 @@ public sealed class MainWindow : Window
                 pendingKeyDevice=null;
                 pendingKeyDevice=await KeyAccess.VerifyDeviceGatewayAsync(Read("key"),
                     args.TryGetProperty("replace",out var replaceKey)&&replaceKey.ValueKind==JsonValueKind.True,
-                    args.TryGetProperty("useSaved",out var useSavedKey)&&useSavedKey.ValueKind==JsonValueKind.True,lifetime.Token);
-                return new { requiresDevice=true, alias=pendingKeyDevice.Existing?.Alias };
+                    args.TryGetProperty("useSaved",out var useSavedKey)&&useSavedKey.ValueKind==JsonValueKind.True,
+                    !connectionPending&&session?.IsConnected==true&&session.Server!=null?session:null,lifetime.Token);
+                var keyHost=pendingKeyDevice.HostSession;
+                bool existingControl=keyHost!=null&&hostControl?.IsEnabledFor(keyHost)==true;
+                return new { requiresDevice=true, reuseControl=keyHost!=null, existingControl,
+                    alias=existingControl?keyHost!.HostControlStatus.Alias:pendingKeyDevice.Existing?.Alias };
             case "desktopKey.authorizeDevice":
                 if(!args.TryGetProperty("riskAccepted",out var deviceConsent)||deviceConsent.ValueKind!=JsonValueKind.True)
                     throw new InvalidOperationException("请先阅读并同意本机远程控制权限说明。");
@@ -454,6 +504,11 @@ public sealed class MainWindow : Window
                 {
                     await KeyAccess.DisableAsync(lifetime.Token);
                     await StopKeyDeviceAsync();
+                }
+                if(keyAccess?.ReusesHostControl==true)
+                {
+                    await keyAccess.StopAsync();
+                    keyStartedHost=null;
                 }
                 return hostControl==null?new HostControlStatus(false,"disabled","","","未启用"):await hostControl.DisableAsync(lifetime.Token);
             case "preview.begin":

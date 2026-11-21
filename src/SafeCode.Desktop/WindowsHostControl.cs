@@ -19,6 +19,7 @@ internal sealed class WindowsHostControl : IDisposable
     private string nonce="";
     private readonly SemaphoreSlim gate=new(1,1);
     public bool Enabled=>heartbeat!=null;
+    internal bool IsEnabledFor(SshSession target)=>Enabled&&ReferenceEquals(session,target);
     public string DefaultAlias=>"win-"+machineId[..6];
     public HostControlStatus Status=>session?.HostControlStatus??new(false,"disabled",DefaultAlias,"","未启用");
     public WindowsHostControl(string dataDirectory)

@@ -256,10 +256,11 @@ class SafeCodeApiTest(unittest.TestCase):
         entry = SimpleNamespace(pw_uid=1000, pw_name='fixture', pw_dir=str(self.root))
         origin = 'https://8.8.4.4:45144'
         hints = {'sshHost':'8.8.4.4'}
+        bind = '0.0.0.0'
 
         def manage(command, request):
             if request == {'action':'settings'}:
-                return {'origin':'', 'bind':'0.0.0.0', 'port':45144}
+                return {'origin':'', 'bind':bind, 'port':45144}
             self.assertEqual(request, {'action':'issue', 'note':'fixture', 'origin':origin})
             return {'ticket':'fixture'}
 
@@ -277,7 +278,19 @@ class SafeCodeApiTest(unittest.TestCase):
             self.assertEqual(issued, {'ticket':'fixture'})
             options = {'action':'ticket_endpoint', 'hints':hints, 'keyId':key_id}
             self.assertEqual(agent.safe_code_api(options), {'origin':origin, 'pin':pin})
+            check = {'action':'key_host_reuse', 'keyId':key_id, 'pin':pin}
+            self.assertEqual(agent.safe_code_api(check), {'allowed':True})
+            self.assertEqual(agent.safe_code_api({**check,'pin':'f'*64}), {'allowed':False})
+            (state/'device-required').mkdir()
+            required = state/'device-required'/key_id
+            required.touch()
+            self.assertEqual(agent.safe_code_api(check), {'allowed':False})
+            required.unlink()
+            bind = '127.0.0.1'
+            self.assertEqual(agent.safe_code_api(check), {'allowed':False})
+            bind = '0.0.0.0'
             (state/'keys'/key_id).unlink()
+            self.assertEqual(agent.safe_code_api(check), {'allowed':False})
             with self.assertRaises(subprocess.CalledProcessError):
                 agent.safe_code_api(options)
         self.assertFalse((state/'public-origin').exists())

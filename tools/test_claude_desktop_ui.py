@@ -20,6 +20,7 @@ with sync_playwright() as p:
     page.add_init_script('''
       window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;window.claudeStartCalls=[];window.claudeStopCalls=0;window.clientOpenCalls=[];window.clientOpenError=null;
       window.claudeWarningAccepts=0;window.keyEnableCalls=[];window.keyDisableCalls=0;
+      window.keyAuthorizations=[];window.keyCanceled=0;
       const hostDisabled={enabled:false,state:'disabled',alias:'mac',command:'',message:'未启用'};
       window.hostState=hostDisabled;window.hostEnableCalls=[];window.hostEnableError=null;
       window.chrome={webview:{postMessage(m){
@@ -51,11 +52,20 @@ with sync_playwright() as p:
           }
           if(m.op==='desktopKey.enable'){
             window.keyEnableCalls.push(m.args);
+            if(m.args.key==='sc1.own-vps'){
+              const result={requiresDevice:true,reuseControl:true,existingControl:true,alias:'win-fixture'};
+              queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result}));return;
+            }
             if(m.args.useSaved? !window.keyConfigured : !['sc1.fixture','sc1.replacement'].includes(m.args.key)){
               queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,error:'Key 无效或已撤销。'}));return;
             }
             window.keyConfigured=true;window.keyRunning=true;
           }
+          if(m.op==='desktopKey.authorizeDevice'){
+            window.keyAuthorizations.push(m.args);
+            window.keyConfigured=true;window.keyRunning=true;
+          }
+          if(m.op==='desktopKey.cancelDevice')window.keyCanceled++;
           if(m.op==='desktopKey.disable'){window.keyDisableCalls++;window.keyConfigured=false;window.keyRunning=false;}
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{configured:!!window.keyConfigured,running:!!window.keyRunning}}));return;
         }
@@ -133,6 +143,29 @@ with sync_playwright() as p:
     page.locator('#desktop-key-disable').click()
     assert page.locator('#desktop-key-enable').is_visible()
     page.locator('#desktop-key-close').click()
+    page.evaluate("window.hostState={enabled:true,state:'connected',alias:'win-fixture',command:'ssh fixture'}")
+    workspace_key.click()
+    page.locator('#desktop-key-input').fill('sc1.own-vps')
+    page.locator('#desktop-key-enable').click()
+    page.locator('#host-progress').get_by_text('这把 Key 由当前 VPS 签发。授权后将使用已验证的本机远程控制通道。').wait_for()
+    assert page.locator('#host-alias').input_value()=='win-fixture'
+    assert page.locator('#host-enable').is_disabled()
+    page.locator('#host-close').click()
+    page.wait_for_function('window.keyCanceled===1')
+    assert not page.locator('#desktop-key-dialog').is_visible()
+    assert page.evaluate('window.keyAuthorizations.length===0')
+    workspace_key.click()
+    page.locator('#desktop-key-input').fill('sc1.own-vps')
+    page.locator('#desktop-key-enable').click()
+    page.locator('#host-risk').check()
+    assert page.locator('#host-enable').inner_text()=='同意并使用'
+    page.locator('#host-enable').click()
+    page.locator('#desktop-key-open').wait_for()
+    assert page.evaluate('window.keyAuthorizations')==[{'riskAccepted':True}]
+    assert page.evaluate('window.hostEnableCalls.length===0')
+    page.locator('#desktop-key-disable').click()
+    page.locator('#desktop-key-close').click()
+    page.evaluate('window.hostState={enabled:false,state:"disabled",alias:"mac",command:"",message:"未启用"}')
     page.evaluate("window.safeCodeClaudeBridgeStatus({running:true,connected:true,configuration:'fixture'})")
     assert page.locator('#codex-gateway-status').inner_text()=='Codex网关已启用'
     page.evaluate("window.safeCodeClaudeBridgeStatus({running:true,connected:false})")
