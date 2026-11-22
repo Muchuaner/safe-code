@@ -29,7 +29,9 @@ class DevicePairingTests(unittest.TestCase):
             result = hosts.chat_binding(owner, 'windows', device_id, proof)
             self.assertEqual((result['hostname'], result['alias']), ('fixture PC', 'win-fixture'))
             self.assertTrue(result['command'].endswith(' win-fixture'))
-            for key, platform, token in ((other,'windows',proof), (owner,'macos',proof), (owner,'windows','x'*43)):
+            mac_result = hosts.chat_binding(owner, 'macos', device_id, proof)
+            self.assertEqual(mac_result['hostname'], 'fixture PC')
+            for key, platform, token in ((other,'windows',proof), (owner,'windows','x'*43), (owner,'macos','x'*43)):
                 with self.assertRaises(bridge.DeviceError):
                     hosts.chat_binding(key, platform, device_id, token)
             public_key.write_text('ssh-ed25519 replacement')
@@ -77,6 +79,28 @@ class DevicePairingTests(unittest.TestCase):
             self.assertFalse(devices.permit_frp({'op': 'Login', 'content': {
                 'metas': {'device': second['deviceId'], 'proof': second['deviceProof']},
             }}))
+
+    def test_shared_key_keeps_two_mac_devices_separate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            owner = 'd'*64
+            for subdir in ('keys', 'device-access'):
+                (root/subdir).mkdir()
+                (root/subdir/owner).touch()
+            devices = bridge.Devices(root, home=root)
+            first = devices.prepare(owner, 'macos', 'Mac One')
+            second = devices.prepare(owner, 'macos', 'Mac Two')
+            self.assertEqual(first['alias'], 'mac-'+first['deviceId'])
+            self.assertEqual(second['alias'], 'mac-'+second['deviceId'])
+            self.assertNotEqual(first['deviceId'], second['deviceId'])
+            self.assertNotEqual(first['deviceProof'], second['deviceProof'])
+            devices.enrolled(owner, 'macos', first['deviceId'], first['deviceProof'])
+            devices.enrolled(owner, 'macos', second['deviceId'], second['deviceProof'])
+            for device, proof in ((first, second['deviceProof']), (second, first['deviceProof'])):
+                with self.assertRaises(bridge.DeviceError):
+                    devices.enrolled(owner, 'macos', device['deviceId'], proof)
+                with self.assertRaises(bridge.DeviceError):
+                    devices.enrolled(owner, 'windows', device['deviceId'], device['deviceProof'])
 
     def test_pending_registrations_expire_without_reusing_identity(self):
         with tempfile.TemporaryDirectory() as folder:

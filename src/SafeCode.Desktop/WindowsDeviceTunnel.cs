@@ -218,7 +218,14 @@ internal sealed class WindowsDeviceTunnel : IAsyncDisposable
         listener.Stop();
         if (process is { } frpc)
         {
-            try { if (!frpc.HasExited) frpc.Kill(); }
+            try
+            {
+                if (!frpc.HasExited)
+                {
+                    frpc.Kill(entireProcessTree: true);
+                    await frpc.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+            }
             catch (InvalidOperationException) { }
             frpc.Dispose();
         }

@@ -106,7 +106,7 @@ class OwnerHosts:
 
     def authenticate(self, owner, platform, device, proof):
         target = self.path(owner, device)
-        if platform != 'windows' or not isinstance(proof, str) or not PROOF.fullmatch(proof):
+        if platform not in ('windows', 'macos') or not isinstance(proof, str) or not PROOF.fullmatch(proof):
             raise DeviceError('Invalid SSH device proof')
         try:
             with os.fdopen(os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:

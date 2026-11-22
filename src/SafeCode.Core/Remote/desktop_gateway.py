@@ -1975,7 +1975,13 @@ class CloudCliBackend:
             return self.ssh_workspace_instruction(self.device['hostname'], system, workspace, self.device['command'])
         host = self.config['hostControl']
         if host is None:
-            return ''
+            return ('No SafeCode client device is authorized for this conversation. '
+                    'Native Read, Write, Edit, Glob, Grep, NotebookEdit and Bash tools run on the '
+                    'VPS working account, not on the API user\'s computer. If the user asks to '
+                    'inspect, clean, or modify their own desktop, downloads, local files, or local '
+                    'applications, stop and ask them to authorize client-device control in SafeCode. '
+                    'Never substitute a similarly named VPS directory or claim a VPS operation '
+                    'touched their computer. Use these VPS tools only for an explicitly VPS-side task.')
         if workspace is None:
             return '所选本机目录超出了已配置的文件访问范围。需要操作项目文件时，请用户确认一个可访问的本机目录。'
         home = Path.home()

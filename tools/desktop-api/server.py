@@ -257,7 +257,8 @@ class PublicHandler(Handler):
                        active=min(1000000, sum(active.values())), waiting=min(1000000, sum(waiting.values())),
                        slots=min(1000000, slots))
         if device is None and proof is None:
-            if (self.server.root/'device-required'/self.digest).is_file():
+            if (self.headers.get('X-SafeCode-Client') == 'safecode-desktop'
+                    or (self.server.root/'device-required'/self.digest).is_file()):
                 return self.reject_device_message(403, 'Verify SafeCode local device control before starting a chat')
         else:
             diagnostic(stage='device_check')

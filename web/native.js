@@ -939,9 +939,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     const keyEnable=$('#desktop-key-enable'), keyReplace=$('#desktop-key-replace'), keyResume=$('#desktop-key-resume');
     let keyReplacing=false, keyDeviceSetup=null;
     function describeKey(op,args){
+      const target=keyState.deviceAlias?'\n工具目标：已授权的本机设备 '+keyState.deviceAlias:'';
       if(keyState.error)return (keyState.configured?'已保存 Key，暂未恢复接入。\n':'')+keyState.error;
-      if(keyState.running)return args?.replace||args?.useSaved?'已启用。\n请完全退出并重新打开 Claude Desktop 以应用更改。':
-        '已启用。\n首次接入请完全退出并重新打开 Claude Desktop。';
+      if(keyState.running)return '已启用。'+target+'\n'+(args?.replace||args?.useSaved?'请完全退出并重新打开 Claude Desktop 以应用更改。':'首次接入请完全退出并重新打开 Claude Desktop。');
       if(keyState.configured)return '已保存 Key，当前 Claude 配置未启用此接入。';
       return op==='disable'?'已停用。\n请重新打开 Claude Desktop 以应用更改。':'尚未启用。';
     }
@@ -1086,7 +1086,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           ? (keyDeviceSetup.existingControl
             ? '这把 Key 由当前 VPS 签发。授权后将使用已验证的本机远程控制通道。'
             : '这把 Key 由当前 VPS 签发。授权后将通过当前 SSH 会话开启本机远程控制。')
-          : '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。部署需要 Windows 管理员授权。')
+          : (isMac
+            ? '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。SafeCode 只会为当前 macOS 账户添加一把专用 SSH 公钥。'
+            : '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。部署需要 Windows 管理员授权。'))
         : instructions;
       renderHostControl();
       hostDialog.showModal();
@@ -1121,8 +1123,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         $('#host-progress').textContent=keyDeviceSetup.reuseControl
           ? (keyDeviceSetup.existingControl
             ? '正在检查已授权的本机控制通道并启用 Key…'
-            : '请完成 Windows 管理员授权。接下来会验证本机远程控制并启用 Key。')
-          : '请完成 Windows 管理员授权。接下来会建立 FRP 通道并验证 SSH 登录。';
+            : (isMac?'正在为系统远程登录添加专用公钥，接下来会验证本机远程控制并启用 Key。':'请完成 Windows 管理员授权。接下来会验证本机远程控制并启用 Key。'))
+          : (isMac?'正在为系统远程登录添加专用公钥，并建立 FRP 通道验证 SSH 登录。':'请完成 Windows 管理员授权。接下来会建立 FRP 通道并验证 SSH 登录。');
         try{
           keyState=await native('desktopKey.authorizeDevice',{riskAccepted:true});
           keyDeviceSetup=null;keyReplacing=false;

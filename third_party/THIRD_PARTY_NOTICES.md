@@ -22,6 +22,6 @@ Net.Coffee 为可选 IP 情报来源，评分不是 Anthropic 官方结论。VPS
 
 Codex 接入 Claude 测试组件基于用户提供的《Claude-Codex-VPS迁移包.zip》，保留其 MIT LICENSE.txt、Node.js THIRD_PARTY_LICENSES.txt 和 UPSTREAM.txt。包内声明的上游为 https://github.com/EthanSK/claude-in-codex ，提交 9ad1632ffeeed6b35d89b3476f337d22e15c8ddd（MIT）；Windows 适配器由提供者构建且未数字签名，并非本项目或 OpenAI / Anthropic 官方构建。原始 Windows EXE 固定 SHA256 c8b2353f14afeef2a04c759d0da64d4aca301127a9e0fcdb82a8032026acd070；服务器五个 mjs 文件保留原内容，见 third_party/claude-codex-vps/SOURCE.json。界面另留作者致谢位置，待用户补充，不替代许可证原作者信息。
 
-macOS 开发包使用系统 AppKit / WKWebView、Keychain、OpenSSH 与 Terminal，不重新分发 Apple 系统组件；自包含 .NET macOS 运行时的 LICENSE.TXT / THIRD-PARTY-NOTICES.TXT 随包保留。Mac 包不含 Windows WebView2、Win32-OpenSSH 或用户附件的 Windows 模型适配器。
+macOS 开发包使用系统 AppKit / WKWebView、Keychain、OpenSSH 与 Terminal，不重新分发 Apple 系统组件；自包含 .NET macOS 运行时的 LICENSE.TXT / THIRD-PARTY-NOTICES.TXT 随包保留。Mac 包不含 Windows WebView2、Win32-OpenSSH 或用户附件的 Windows 模型适配器。Key 接入的本机通道附带 fatedier/frp 0.65.0 官方 darwin/arm64 `frpc`，上游地址：https://github.com/fatedier/frp/releases/tag/v0.65.0 ，Apache License 2.0；构建时核验官方归档 SHA256，并保留包内 LICENSE。
 
 Claude 与 Codex 板块使用各自官方站点提供的原始客户端图标，分别来自 https://claude.ai/apple-touch-icon.png 与 https://chatgpt.com/codex 页面引用的 OpenAI 静态资源，仅用于标识对应客户端。图标及商标归 Anthropic / OpenAI 所有，不属于 Safe Code 的 MIT 授权范围，不表示官方合作或背书。来源及 SHA256 记录于 assets/client-logos.json。

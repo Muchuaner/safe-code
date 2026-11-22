@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Build a self-contained Apple Silicon app and disk image without changing installed apps or publishing."""
-import argparse,hashlib,json,os,plistlib,shutil,subprocess,tempfile
-from pathlib import Path
+import argparse,hashlib,json,os,plistlib,shutil,subprocess,tarfile,tempfile,urllib.request
+from pathlib import Path,PurePosixPath
 root=Path(__file__).resolve().parents[1]
+frp_version='0.65.0';frp_archive='frp_'+frp_version+'_darwin_arm64.tar.gz'
+frp_url='https://github.com/fatedier/frp/releases/download/v'+frp_version+'/'+frp_archive
+frp_sha256='bce3badaf40cf5d3811c9eae593f3b24833bf7cb13b8b7c3f9453e94af45ded1'
 p=argparse.ArgumentParser();p.add_argument('--arch',choices=['arm64'],default='arm64');p.add_argument('--dotnet',default=str(root/'.local/dotnet/dotnet') if (root/'.local/dotnet/dotnet').is_file() else shutil.which('dotnet') or 'dotnet');p.add_argument('--output-dir',type=Path,default=root/'dist/macos');p.add_argument('--sign-identity',default='-');p.add_argument('--skip-dmg',action='store_true');p.add_argument('--work-dir',type=Path,default=Path.home()/'Library/Caches/SafeCode/Builds');a=p.parse_args()
 sdk=subprocess.check_output([a.dotnet,'--list-sdks'],text=True)
 if not any(line.startswith('10.') for line in sdk.splitlines()):raise SystemExit('需要 .NET 10 SDK；可用 --dotnet 指定 SDK 所在的 dotnet。')
@@ -14,6 +17,22 @@ web_pages=web/'web'
 for folder in [core,web_pages,macos]:folder.mkdir(parents=True)
 def run(args,**kwargs):subprocess.run([str(x) for x in args],check=True,cwd=root,**kwargs)
 run([a.dotnet,'publish','src/SafeCode.MacBackend','-c','Release','-r','osx-'+a.arch,'--self-contained','true','-o',core,'--nologo'])
+frp_download=work/frp_archive
+with urllib.request.urlopen(frp_url,timeout=120) as response:frp_data=response.read(32*1024*1024)
+if hashlib.sha256(frp_data).hexdigest()!=frp_sha256:raise RuntimeError('Mac FRP 安装包与固定的官方 SHA-256 不一致。')
+frp_download.write_bytes(frp_data)
+frp_payload=core/'Payloads'/'frp';frp_payload.mkdir(parents=True,exist_ok=True)
+frp_license=work/'frp-LICENSE'
+with tarfile.open(frp_download,'r:gz') as package:
+ for item in package.getmembers():
+  name=PurePosixPath(item.name).name
+  if name in ('frpc','LICENSE') and item.isfile():
+   source=package.extractfile(item)
+   if source is None:continue
+   (frp_payload/'frpc' if name=='frpc' else frp_license).write_bytes(source.read())
+frp_download.unlink()
+if not (frp_payload/'frpc').is_file() or not frp_license.is_file():raise RuntimeError('官方 FRP 安装包中缺少 Mac frpc 或许可证。')
+(frp_payload/'frpc').chmod(0o755)
 for path in core.glob('*.pdb'):path.unlink()
 run(['swiftc','-swift-version','5','-parse-as-library','-O','-target','arm64-apple-macos15.0',*sorted((root/'macos').glob('*.swift')),'-o',macos/'SafeCode','-framework','AppKit','-framework','WebKit','-framework','Security'])
 for name in ['index.html','styles.css','app.js','native.js','qrcode.min.js','gateway.html','gateway.css','gateway.js','gateway-charts.js','gateway-status.js']:shutil.copy2(root/'web'/name,web_pages/name)
@@ -29,7 +48,7 @@ info={'CFBundleIdentifier':'org.safecode.desktop','CFBundleName':'Safe Code','CF
 shutil.copy2(root/'LICENSE',resources/'LICENSE')
 shutil.copy2(root/'third_party'/'THIRD_PARTY_NOTICES.md',resources/'THIRD_PARTY_NOTICES.md')
 shutil.copy2(root/'docs/MACOS.md',resources/'使用说明.md')
-legal=resources/'licenses';legal.mkdir()
+legal=resources/'licenses';legal.mkdir();shutil.copy2(frp_license,legal/'FRP-0.65.0-LICENSE')
 # Preserve the license documents from the exact restored packages and bundled runtime.
 cache=Path(os.environ.get('NUGET_PACKAGES',str(Path.home()/'.nuget/packages')))
 assets=json.loads((root/'src/SafeCode.MacBackend/obj/project.assets.json').read_text());packages=set(assets.get('libraries',{}))
@@ -56,6 +75,7 @@ for folder in [resources]:
   if path.is_file():manifest['files'][path.relative_to(contents).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
 (resources/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
 run(['xattr','-cr',app])
+subprocess.run(['xattr','-xd','com.apple.FinderInfo',str(app)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 run(['codesign','--force','--sign',a.sign_identity,'--timestamp=none',app]);run(['codesign','--verify','--deep','--strict',app])
 if not a.skip_dmg:
  with tempfile.TemporaryDirectory(prefix='safecode-dmg-') as temp:

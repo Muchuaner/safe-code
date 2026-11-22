@@ -15,7 +15,10 @@ internal sealed class MacHostControl : IDisposable
     private readonly string directory,ssh,auth,owned,preferencePath;
     private volatile SshSession? session;
     private string client="";
-    public bool Enabled=>session?.HasHostControl==true;
+    private volatile bool deviceActive;
+    public bool Enabled=>deviceActive||session?.HasHostControl==true;
+    public string DefaultAlias=>"mac";
+    public bool IsEnabledFor(SshSession target)=>!deviceActive&&Enabled&&ReferenceEquals(session,target);
     public HostControlStatus Status=>session?.HostControlStatus??new(false,"disabled","","","未启用；需先开启系统远程登录");
     public MacHostControl(string directory)
     {
@@ -100,6 +103,23 @@ internal sealed class MacHostControl : IDisposable
             session=null;throw;
         }
     }
+    internal sealed record LocalSsh(int Port,string Username,string Sid,string HostKey);
+    internal async Task<LocalSsh> EnableDeviceAsync(string publicKey,CancellationToken ct)
+    {
+        if(Enabled)throw new InvalidOperationException("本机控制已启用，请先停用。");
+        using(var probe=new TcpClient())
+        {
+            using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            try{await probe.ConnectAsync("127.0.0.1",22,timeout.Token);}catch{throw new InvalidOperationException("请先在 macOS 系统设置 → 通用 → 共享中开启“远程登录”，并仅允许当前账户。Safe Code 不会自行开启系统 SSH 服务。");}
+        }
+        var hostKey=File.ReadAllText("/etc/ssh/ssh_host_ed25519_key.pub").Trim();
+        string uid=(await MacClients.Run("/usr/bin/id",["-u"],ct)).Trim();
+        if(!uint.TryParse(uid,out uint userId)||userId==0)throw new InvalidOperationException("不支持以 root 账户开放本机控制。");
+        client="device"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(publicKey)))[..14].ToLowerInvariant();
+        session=null;deviceActive=true;
+        try{Authorize(publicKey);return new(22,Environment.UserName,"macos:"+userId,hostKey);}
+        catch{RevokeLocal();deviceActive=false;throw;}
+    }
     private void ValidatePaths()
     {
         if(new DirectoryInfo(ssh).LinkTarget!=null||new FileInfo(auth).LinkTarget!=null)throw new InvalidOperationException("SSH 授权路径包含链接，请使用普通目录和文件后重试。");
@@ -136,7 +156,7 @@ internal sealed class MacHostControl : IDisposable
     }
     public async Task<HostControlStatus> SuspendAsync(CancellationToken ct)
     {
-        RevokeLocal();if(session!=null)await session.StopHostControlAsync(ct);var result=Status;session=null;return result;
+        RevokeLocal();if(session!=null)await session.StopHostControlAsync(ct);var result=Status;session=null;deviceActive=false;return result;
     }
     public void Dispose(){RevokeLocal();}
 }

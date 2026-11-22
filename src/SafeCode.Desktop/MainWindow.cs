@@ -385,8 +385,8 @@ public sealed class MainWindow : Window
         if(keyDeviceTunnel is { } tunnel)
         {
             keyDeviceTunnel=null;
-            await tunnel.DisposeAsync();
-            if(hostControl?.Enabled==true)await hostControl.DisableAsync();
+            try{await tunnel.DisposeAsync();}
+            finally{if(hostControl?.Enabled==true)await hostControl.DisableAsync();}
         }
         if(keyStartedHost is { } target)
         {
@@ -438,9 +438,8 @@ public sealed class MainWindow : Window
                 return keyDeviceTunnel?.Status(hostControl?.Enabled==true);
             case "desktopKey.disable":
                 pendingKeyDevice=null;
-                var disabledKey=await KeyAccess.DisableAsync(lifetime.Token);
-                await StopKeyDeviceAsync();
-                return disabledKey;
+                try{return await KeyAccess.DisableAsync(lifetime.Token);}
+                finally{await StopKeyDeviceAsync();}
             case "safeCodeApi.refreshSubscription":
                 return await RequireGatewaySession().RefreshPublicGatewaySubscriptionAsync(lifetime.Token);
             case "safeCodeApi.publicStatus":
@@ -496,8 +495,8 @@ public sealed class MainWindow : Window
                 if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
                 if(keyDeviceTunnel!=null)
                 {
-                    await KeyAccess.DisableAsync(lifetime.Token);
-                    await StopKeyDeviceAsync();
+                    try{await KeyAccess.DisableAsync(lifetime.Token);}
+                    finally{await StopKeyDeviceAsync();}
                 }
                 if(keyAccess?.ReusesHostControl==true)
                 {

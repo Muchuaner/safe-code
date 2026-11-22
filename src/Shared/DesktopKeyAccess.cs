@@ -107,6 +107,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         var c=new HttpClient(handler){BaseAddress=new Uri(t.Url),Timeout=TimeSpan.FromMinutes(11),MaxResponseContentBufferSize=1024*1024};
         c.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",t.Key);
         c.DefaultRequestHeaders.Add("X-SafeCode-Platform",OperatingSystem.IsMacOS()?"macos":"windows");
+        c.DefaultRequestHeaders.Add("X-SafeCode-Client","safecode-desktop");
         return c;
     }
 
@@ -548,7 +549,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private object Status(string? error=null)
     {
         bool disconnected=relay?.HostReady?.Invoke()==false;
-        return new{configured=Configured,running=relay!=null&&!disconnected,
+        var device=Configured?Load().Device:null;
+        return new{configured=Configured,running=relay!=null&&!disconnected,deviceAlias=device?.Alias,
             error=error??(disconnected?"已授权的本机远程控制暂不可用。请恢复本机控制或选择「重新启用」。":null)};
     }
     // The classifier accepts permission checks only. Publishing it as a chat model
@@ -582,40 +584,14 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             if(relay==null&&Configured)
             {
-                var trace=diagnostics?.BeginDiagnostic("desktop_key_restore",background:!interactive);
                 Exception? failure=null;
+                var trace=diagnostics?.BeginDiagnostic("desktop_key_restore",background:!interactive);
                 try
                 {
                     var saved=Load();
-                    if(saved.Device!=null)return Status("请重新启用本机远程控制，验证设备连接后恢复接入。");
-                    string lib=Library();
-                    var meta=ReadProfileMeta(lib);
-                    if((string?)meta["appliedId"]==saved.Profile)
-                    {
-                        var path=Path.Combine(lib,saved.Profile+".json");
-                        if(ReadOptionalFile(path)==null)
-                            return Status("Claude Desktop 的接入配置已被移除。请选择「重新启用」或「更换 Key」。");
-                        MigrateClassifier(path);
-                        var restored=await Listen(saved.Remote,saved.Local,saved.Port,ct);
-                        try
-                        {
-                            if(OperatingSystem.IsWindows())
-                            {
-                                var profile=JsonNode.Parse(File.ReadAllBytes(path))?.AsObject()??throw new IOException("无法读取 Claude 接入配置。");
-                                var (fields,changes)=PlanWindowsPolicy(profile,saved);
-                                var undoPolicy=ApplyWindowsPolicy(changes);
-                                try
-                                {
-                                    if(saved.WindowsPolicy==null||!ClaudeDesktopPolicy.MatchesWritten(fields,saved.WindowsPolicy)||saved.WindowsPolicy.Count!=fields.Count)
-                                        Save(saved with{WindowsPolicy=fields});
-                                }
-                                catch{undoPolicy();throw;}
-                            }
-                            relay=restored;
-                        }
-                        catch{await restored.DisposeAsync();throw;}
-                    }
-                    else if(OperatingSystem.IsWindows())RemoveWindowsPolicy(saved.WindowsPolicy);
+                    return Status(saved.Device==null
+                        ?"旧接入未绑定本机设备。为防止把 VPS 目录误认为你的电脑，请重新启用并完成本机授权。"
+                        :"请重新启用本机远程控制，验证设备连接后恢复接入。");
                 }
                 catch(Exception error)
                 {
@@ -625,7 +601,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 }
                 finally
                 {
-                    if(trace!=null&&(relay!=null||failure!=null))_=diagnostics!.SendDiagnosticAsync(trace,failure,ct);
+                    if(trace!=null&&failure!=null)_=diagnostics!.SendDiagnosticAsync(trace,failure,ct);
                 }
             }
             return Status();
@@ -658,7 +634,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                         return new DeviceSetup(t,replace,useSaved,null,deviceSession);
                     throw new InvalidOperationException("请连接签发此 Key 的 VPS，恢复已授权的本机远程控制。");
                 }
-                var capability=await RequestDeviceControlAsync(client,new{action="capability"},timeout.Token,optional:true);
+                var capability=await RequestDeviceControlAsync(client,new{action="capability"},timeout.Token);
                 if(capability is {} available)
                 {
                     if(!available.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)

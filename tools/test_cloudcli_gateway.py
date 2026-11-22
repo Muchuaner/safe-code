@@ -355,7 +355,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual((path, key), ('/api/agent', API_KEY))
         self.assertEqual(task['provider'], 'claude')
         self.assertEqual(task['projectPath'], str(self.project))
-        self.assertEqual(task['message'], 'Summarize the example.')
+        self.assertTrue(task['message'].startswith('Summarize the example.'))
         self.assertEqual(task['model'], MODEL)
         self.assertEqual(task['effort'], 'medium')
         self.assertTrue(task['stream'])
@@ -1228,7 +1228,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         normal = '帮我看看我电脑上的视频任务运行得怎么样了'
         self.assertFalse(public.manage({'action': 'list'})['prompt_review']['enabled'])
         self.assertEqual(request(conversation(normal))[0], 200)
-        self.assertEqual(self.cloud.requests[-1][2]['message'], normal)
+        self.assertTrue(self.cloud.requests[-1][2]['message'].startswith(normal))
 
         settings = {'action': 'set_prompt_review', 'enabled': True, 'provider': 'deepseek', 'model': 'sonnet'}
         with self.assertRaisesRegex(ValueError, '请先填写'):
@@ -1276,14 +1276,14 @@ class CloudCLIGatewayTests(unittest.TestCase):
             sent = json.loads(review.call_args.args[2])
             self.assertEqual(sent['messages'][1:], [{'role': 'user', 'content': prompt}])
             self.assertEqual(review.call_args.args[3]['Authorization'], 'Bearer '+secret)
-            self.assertEqual(self.cloud.requests[-1][2]['message'], prompt)
+            self.assertTrue(self.cloud.requests[-1][2]['message'].startswith(prompt))
 
             self.assertTrue(public.manage({**settings, 'language_replacement': True})['language_replacement'])
             english = 'Test Linux compatibility in the current project and reply in Chinese.'
             original = '在当前项目里测试 Linux 兼容性，请用中文回复。'
             verdict('allow', english=english)
             self.assertEqual(request(conversation(original))[0], 200)
-            self.assertEqual(self.cloud.requests[-1][2]['message'], english)
+            self.assertTrue(self.cloud.requests[-1][2]['message'].startswith(english))
             sent = json.loads(review.call_args.args[2])
             self.assertEqual(sent['messages'][1:], [{'role': 'user', 'content': original}])
             self.assertIn('faithful English translation', sent['messages'][0]['content'])
@@ -1695,7 +1695,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             card = reply['content'][-1]
             self.assertEqual((card['name'], card['input']), ('ExitPlanMode', {'allowedPrompts': []}))
             self.assertEqual(actions[0]['options']['permissionMode'], 'plan')
-            self.assertEqual(actions[0]['content'], 'Prepare a plan.')
+            self.assertTrue(actions[0]['content'].startswith('Prepare a plan.'))
             self.assertFalse(accepted.is_set())
             result = {'type': 'tool_result', 'tool_use_id': card['id'], 'content': 'yes'}
             follow = [*payload['messages'], {'role': 'assistant', 'content': reply['content']},

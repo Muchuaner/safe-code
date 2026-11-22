@@ -29,6 +29,9 @@ internal sealed class MacBackend : IDisposable
     private readonly ConcurrentDictionary<int,Task> tasks=new();
     private SshSession? session;
     private DesktopKeyAccess? keyAccess;
+    private DesktopKeyAccess.DeviceSetup? pendingKeyDevice;
+    private MacDeviceTunnel? keyDeviceTunnel;
+    private SshSession? keyStartedHost;
     private MacHostControl? hostControl;
     private CancellationTokenSource? connecting,browsing;
     private sealed record GatewayContext(SshSession Session, string Token);
@@ -59,7 +62,7 @@ internal sealed class MacBackend : IDisposable
         {
             using var doc=JsonDocument.Parse(line);var root=doc.RootElement;id=root.GetProperty("id").GetString()??"";operation=root.GetProperty("op").GetString()??"";var args=root.GetProperty("args");
             bool modifies=operation is "deploy" or "job.resume" or "mount.apply" or "mount.install" or "cloud.install" or "cloud.expose" or "ip.apply" or "terminal" or "desktop" or "desktop.resolution.save" or "host.enable" or "host.disable" or "app.shutdown" or "connection.reauthenticate"
-                or "desktopKey.enable" or "desktopKey.disable" or "desktopKey.refreshModels" or "safeCodeApi.enablePublic" or "safeCodeApi.install"
+                or "desktopKey.enable" or "desktopKey.disable" or "desktopKey.refreshModels" or "desktopKey.authorizeDevice" or "desktopKey.cancelDevice" or "safeCodeApi.enablePublic" or "safeCodeApi.install"
                 or "socks.probe" or "socks.enable" or "socks.disable";
             if(modifies){if(!await mutation.WaitAsync(0))throw new InvalidOperationException("已有任务正在执行，请等待完成。");gate=true;Interlocked.Increment(ref activeMutations);}
             var diagnosticOperation=offline||operation=="mount.reconnect"&&session?.HasMounts!=true?null:DiagnosticTrace.OperationFor(operation,args);
@@ -99,6 +102,85 @@ internal sealed class MacBackend : IDisposable
         }
     }
 
+    private async Task<object> AuthorizeKeyDeviceAsync(CancellationToken ct)
+    {
+        var setup=pendingKeyDevice??throw new InvalidOperationException("请重新验证接入 Key。");
+        var control=hostControl??=new MacHostControl(directory);
+        if(setup.HostSession is { } target)return await AuthorizeKeyHostControlAsync(setup,target,control,ct);
+        if(control.Enabled)throw new InvalidOperationException("本机已有控制通道，请先停用后再部署 Key 接入。");
+        await StopKeyDeviceAsync();
+        step="host_enable";
+        DesktopKeyAccess.DeviceBinding? device=setup.Existing;
+        MacDeviceTunnel? tunnel=null;
+        bool startedLocal=false;
+        try
+        {
+            device??=await MacDeviceTunnel.PrepareAsync(setup.Remote,ct);
+            var ssh=await control.EnableDeviceAsync(device.PublicKey,ct);
+            startedLocal=true;
+            tunnel=await MacDeviceTunnel.ConnectAsync(setup.Remote,device,ssh.Port,directory,ct);
+            await tunnel.VerifyAsync(ssh,ct);
+            var result=await KeyAccess().EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device);
+            keyDeviceTunnel=tunnel;tunnel=null;pendingKeyDevice=null;
+            return result;
+        }
+        catch
+        {
+            if(tunnel!=null)await tunnel.DisposeAsync();
+            if(startedLocal)await control.DisableAsync(CancellationToken.None);
+            if(setup.Existing==null&&device!=null)
+            {
+                try{await DesktopKeyAccess.DeviceControlAsync(setup.Remote,
+                    new{action="revoke",device.DeviceId,device.DeviceProof},CancellationToken.None);}
+                catch(Exception error)when(error is HttpRequestException or InvalidOperationException or OperationCanceledException){}
+            }
+            throw;
+        }
+        finally{step="";}
+    }
+
+    private async Task<object> AuthorizeKeyHostControlAsync(DesktopKeyAccess.DeviceSetup setup,SshSession target,
+        MacHostControl control,CancellationToken ct)
+    {
+        if(!ReferenceEquals(RequireSession(),target))throw new InvalidOperationException("SSH 会话已变更，请重新验证接入 Key。");
+        if(control.Enabled&&!control.IsEnabledFor(target))throw new InvalidOperationException("现有本机远程控制属于另一台 VPS。请先在本机远程控制中停用它。");
+        step="host_enable";
+        bool startedHere=false;
+        try
+        {
+            if(!await target.CanReuseHostControlForKeyAsync(setup.Remote,ct))throw new InvalidOperationException("该 Key 或网关的设备授权已变更，请重新验证接入 Key。");
+            if(!control.Enabled){await control.EnableAsync(target,control.DefaultAlias,ct);startedHere=true;}
+            else if(target.HostControlStatus.State!="connected")await target.MaintainHostControlForChatAsync(ct);
+            var leaseReady=target.CaptureVerifiedHostControl();
+            bool HostReady()=>ReferenceEquals(session,target)&&control.IsEnabledFor(target)&&leaseReady();
+            string hostname=Environment.MachineName.Length<=48?Environment.MachineName:Environment.MachineName[..48];
+            var binding=await target.BindPublicGatewayHostAsync(setup.Remote,hostname,ct);
+            var device=new DesktopKeyAccess.DeviceBinding(binding.GetProperty("deviceId").GetString()!,
+                binding.GetProperty("deviceProof").GetString()!,binding.GetProperty("alias").GetString()!,0,"");
+            var result=await KeyAccess().EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device,hostReady:HostReady);
+            if(startedHere)keyStartedHost=target;
+            pendingKeyDevice=null;
+            return result;
+        }
+        catch{if(startedHere)await control.DisableAsync(CancellationToken.None);throw;}
+        finally{step="";}
+    }
+
+    private async Task StopKeyDeviceAsync()
+    {
+        if(keyDeviceTunnel is { } tunnel)
+        {
+            keyDeviceTunnel=null;
+            try{await tunnel.DisposeAsync();}
+            finally{if(hostControl?.Enabled==true)await hostControl.DisableAsync(CancellationToken.None);}
+        }
+        if(keyStartedHost is { } target)
+        {
+            keyStartedHost=null;
+            if(hostControl?.IsEnabledFor(target)==true)await hostControl.DisableAsync(CancellationToken.None);
+        }
+    }
+
     private async Task<object?> HandleAsync(string op,JsonElement args,Action<Exception>? observeFailure=null)
     {
         string Read(string key,string fallback="")=>args.TryGetProperty(key,out var value)?value.GetString()??fallback:fallback;
@@ -114,9 +196,10 @@ internal sealed class MacBackend : IDisposable
             case "app.state":return new{busy=activeMutations>0,guarding=session?.HasMounts==true||hostControl?.Enabled==true||keyAccess?.Running==true};
             case "app.shutdown":
                 if(connectionPending!=0)throw new InvalidOperationException("正在连接，请先取消连接后退出。");
+                try{if(keyAccess!=null)await keyAccess.StopAsync();}
+                finally{await StopKeyDeviceAsync();}
                 if(hostControl?.Enabled==true)await hostControl.SuspendAsync(ct);
                 if(session?.HasMounts==true)await session.UnmountAsync(ct);
-                if(keyAccess!=null)await keyAccess.StopAsync();
                 return true;
             case "mount.reconnect":
                 if(session is {HasMounts:true} mountSession)
@@ -138,8 +221,26 @@ internal sealed class MacBackend : IDisposable
                 return await KeyAccess().RestoreAsync(ct,interactive:Flag("interactive"));
             case "desktopKey.enable":
                 _=LocalSecrets.RequireKey();
-                return await KeyAccess().EnableAsync(Read("key"),ct,replace:Flag("replace"),useSaved:Flag("useSaved"));
-            case "desktopKey.disable": return await KeyAccess().DisableAsync(ct);
+                if(keyDeviceTunnel!=null&&hostControl?.Enabled==true)throw new InvalidOperationException("请先停用当前 Key 接入，再更换 Key。");
+                pendingKeyDevice=null;
+                var keyResult=await KeyAccess().EnableAsync(Read("key"),ct,replace:Flag("replace"),useSaved:Flag("useSaved"),
+                    checkDevice:true,deviceSession:connectionPending==0&&session?.IsConnected==true&&session.Server!=null?session:null);
+                if(keyResult is not DesktopKeyAccess.DeviceSetup setup)return keyResult;
+                pendingKeyDevice=setup;
+                var keyHost=setup.HostSession;
+                bool existingControl=keyHost!=null&&hostControl?.IsEnabledFor(keyHost)==true;
+                return new{requiresDevice=true,reuseControl=keyHost!=null,existingControl,
+                    alias=existingControl?keyHost!.HostControlStatus.Alias:setup.Existing?.Alias};
+            case "desktopKey.authorizeDevice":
+                if(!Flag("riskAccepted"))throw new InvalidOperationException("请先阅读并同意本机远程控制权限说明。");
+                _=LocalSecrets.RequireKey();
+                return await AuthorizeKeyDeviceAsync(ct);
+            case "desktopKey.cancelDevice":pendingKeyDevice=null;return true;
+            case "desktopKey.deviceStatus":return keyDeviceTunnel?.Status(hostControl?.Enabled==true);
+            case "desktopKey.disable":
+                pendingKeyDevice=null;
+                try{return await KeyAccess().DisableAsync(ct);}
+                finally{await StopKeyDeviceAsync();}
             case "desktopKey.refreshModels": return await KeyAccess().RefreshModelsAsync(ct);
             case "desktopKey.balance": return await KeyAccess().ReadBalanceAsync(ct);
             case "safeCodeApi.refreshSubscription":
@@ -171,12 +272,23 @@ internal sealed class MacBackend : IDisposable
                 return await gatewaySession.ManagePublicGatewayAsync(request,ct);
             case "codex.open":return await MacClients.OpenLocalClientAsync("Codex",ct);
             case "claudeDesktop.open":return await MacClients.OpenLocalClientAsync("Claude",ct);
-            case "host.status":return hostControl?.Status??new(false,"disabled","","","未启用；需先开启 macOS 系统远程登录");
+            case "host.status":return keyDeviceTunnel?.Status(hostControl?.Enabled==true)??hostControl?.Status??new(false,"disabled","","","未启用；需先开启 macOS 系统远程登录");
             case "host.enable":
                 if(!Flag("riskAccepted"))throw new InvalidOperationException("请先阅读并确认本机远程控制权限说明。");
+                if(keyDeviceTunnel!=null||pendingKeyDevice!=null)throw new InvalidOperationException("请先完成或取消当前 Key 的本机授权。");
                 hostControl??=new(directory);return await hostControl.EnableAsync(RequireSession(),Read("alias","mac"),ct);
             case "host.disable":
                 if(connectionPending!=0)throw new InvalidOperationException("请等待当前服务器连接完成。");
+                if(keyDeviceTunnel!=null)
+                {
+                    try{await KeyAccess().DisableAsync(ct);}
+                    finally{await StopKeyDeviceAsync();}
+                }
+                if(keyAccess?.ReusesHostControl==true)
+                {
+                    await keyAccess.StopAsync();
+                    keyStartedHost=null;
+                }
                 return hostControl==null?new HostControlStatus(false,"disabled","","","未启用"):await hostControl.DisableAsync(ct);
             case "preview.begin":
                 if(activeMutations>0||connectionPending!=0||session?.HasMounts==true||hostControl?.Enabled==true)throw new InvalidOperationException("请先结束当前操作并安全卸载目录。");
@@ -349,7 +461,16 @@ internal sealed class MacBackend : IDisposable
         ? session : throw new InvalidOperationException("请先连接服务器。");
     private SshSession RequireSession()=>connectionPending==0&&session?.IsConnected==true&&session.Server!=null?session:throw new InvalidOperationException("SSH 已断开，请重新连接。");
     private DesktopKeyAccess KeyAccess()=>keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,
-        diagnostics:services,beforeMessages:ct=>hostControl?.MaintainForChatAsync(ct)??Task.CompletedTask);
+        diagnostics:services,beforeMessages:async ct=>
+        {
+            if(keyDeviceTunnel!=null)
+            {
+                if(keyDeviceTunnel.Status(hostControl?.Enabled==true).State!="connected")
+                    throw new InvalidOperationException("已授权的本机远程控制暂不可用。请在 SafeCode 恢复控制通道后再试。");
+                return;
+            }
+            if(hostControl!=null)await hostControl.MaintainForChatAsync(ct);
+        });
     private void Log(string operation,string line)
     {
         string diagnostic=operation=="folder"?"directory_list":string.IsNullOrEmpty(operation)?"connection":operation;
@@ -362,5 +483,10 @@ internal sealed class MacBackend : IDisposable
         using var timer=new PeriodicTimer(TimeSpan.FromSeconds(1));try{while(await timer.WaitForNextTickAsync(lifetime.Token))await EmitAsync(new{type="status",busy=activeMutations>0||connectionPending!=0,mount=session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),host=hostControl?.Status,desktopKeyRunning=keyAccess?.Running==true});}catch(OperationCanceledException){}
     }
     private async Task EmitAsync(object value){await writer.WaitAsync();try{await Console.Out.WriteLineAsync(JsonSerializer.Serialize(value,Json));await Console.Out.FlushAsync();}finally{writer.Release();}}
-    public void Dispose(){keyAccess?.Dispose();lifetime.Cancel();hostControl?.Dispose();session?.Dispose();services.Dispose();lifetime.Dispose();}
+    public void Dispose()
+    {
+        keyAccess?.Dispose();
+        if(keyDeviceTunnel!=null)keyDeviceTunnel.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        lifetime.Cancel();hostControl?.Dispose();session?.Dispose();services.Dispose();lifetime.Dispose();
+    }
 }
