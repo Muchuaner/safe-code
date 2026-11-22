@@ -33,6 +33,7 @@ public sealed class ServerInfo
     public bool CloudReady { get; set; }
     public bool MountReady { get; set; }
     public IpPolicySettings? IpPolicy { get; set; }
+    public SocksEgressStatus? SocksEgress { get; set; }
     public List<RemoteJob> ActiveJobs { get; set; } = [];
 }
 public sealed record DeploymentStep(string Id, string Title, string Description);
@@ -72,6 +73,9 @@ public static class JsonDefaults
 public sealed record IpPolicySettings(string IngressIp,string EgressIp,bool LockIngress,bool LockEgress,int SshPort=22);
 public sealed record IpPrepareResult(string Token,IpPolicySettings Policy);
 public sealed record IpCommitResult(IpPolicySettings Policy,string ObservedEgress,bool Committed);
+
+public sealed record SocksEgressStatus(bool Enabled, bool GuardActive, bool TunnelRunning, string? Endpoint, string? ObservedIp, string? Issue);
+public sealed record SocksEgressProbe(bool Tcp, bool Udp, string? ObservedIp, string? TcpMessage, string? UdpMessage);
 
 public sealed record RemoteJob(string JobId,string Operation);
 public sealed class JobPoll { public List<string> Lines{get;set;}=[]; public long NextOffset{get;set;} public bool Done{get;set;} public JsonElement? Value{get;set;} public string? Error{get;set;} public string? ErrorCode{get;set;} }

@@ -109,12 +109,18 @@ class Installation(unittest.TestCase):
             self.assertFalse((Path(d)/'system-prepared.json').exists())
     def test_background_job_schedules_install_instead_of_copying_a_payload(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d).resolve();scripts=root/'scripts';scripts.mkdir();(scripts/'agent.py').write_text('# fixture');(scripts/'network.py').write_text('# fixture')
+            root=Path(d).resolve();scripts=root/'scripts';scripts.mkdir()
+            modules={'agent.py','network.py','socks_egress.py'}
+            for module in modules:
+                (scripts/module).write_text('# '+module)
             with patch.object(a,'STATE',root/'state'),patch.object(a,'__file__',str(scripts/'agent.py')),patch.object(a,'run') as start,patch.object(a,'download_claude') as download:
                 result=a.start_job({'op':'claude','options':None,'background':True})
             directory=root/'state/jobs'/result['jobId'];request=json.loads((directory/'request.json').read_text())
             self.assertEqual(request,{'op':'claude','options':None,'background':False,'jobId':result['jobId']})
-            self.assertEqual({p.name for p in directory.iterdir()},{'agent.py','network.py','request.json','metadata.json','output.log'})
+            self.assertEqual({p.name for p in directory.iterdir()},modules|{'request.json','metadata.json','output.log'})
+            for module in modules:
+                self.assertEqual((directory/module).read_text(),(scripts/module).read_text())
+                self.assertEqual((directory/module).stat().st_mode&0o777,0o600)
             start.assert_called_once()
             self.assertEqual(start.call_args.args[0][-2:],[str(directory/'agent.py'),str(directory/'request.json')])
             download.assert_not_called()

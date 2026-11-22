@@ -8,7 +8,7 @@ import argparse
 import base64
 import binascii
 import copy
-from contextlib import contextmanager, closing
+from contextlib import contextmanager, closing, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
@@ -44,14 +44,27 @@ COUNT_TOKENS_PATH = MESSAGES_PATH + '/count_tokens'
 MODEL = re.compile(r'^(?:claude-[a-z0-9]+(?:-[a-z0-9]+)*|fable|opus|sonnet|haiku)(?:\[1m\])?$')
 EFFORTS = {'low', 'medium', 'high', 'xhigh', 'max'}
 EFFORT_ORDER = ('low', 'medium', 'high', 'xhigh', 'max')
+CLOUDCLI_EFFORTS = EFFORTS | {'ultracode'}
+CLOUDCLI_MODEL_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}(?:\[1m\])?')
+CLAUDE_MODEL_FAMILIES = ('opus', 'sonnet', 'haiku', 'fable', 'mythos')
+CLOUDCLI_MODEL_SELECTORS = ('default', 'best', 'opusplan')
+DESKTOP_MODEL_ALIAS_PREFIX = 'safecode-cloudcli-'
+DESKTOP_ULTRACODE_PREFIX = 'safecode-ultracode/'
 
 
-def native_model_catalog(home=None, timeout=25):
+def cloudcli_model_family(model):
+    base = model.removesuffix('[1m]')
+    return next((family for family in CLAUDE_MODEL_FAMILIES
+                 if base == family or base.startswith('claude-'+family+'-')), None)
+
+
+def native_model_catalog(home=None, timeout=25, *, include_options=False):
     """Read the installed CLI's initialize response, without sending a model prompt.
 
     Do not export account/identity data from that response. Versions and effort
     capabilities come from the CLI rather than a fixed list in the desktop app.
     """
+    # TODO: Remove this direct CLI probe once the gateway reads the catalog from CloudCLI.
     home = Path(home) if home is not None else Path.home()
     child = subprocess.Popen(
         [str(home/'.local/bin/claude'), '-p', '--input-format', 'stream-json',
@@ -81,7 +94,7 @@ def native_model_catalog(home=None, timeout=25):
                 response = event.get('response', {})
                 if event.get('type') == 'control_response' and response.get('request_id') == 'safe-code-models':
                     rows = response.get('response', {}).get('models', [])
-                    return model_catalog(rows, home)
+                    return model_catalog(rows, home, include_options=include_options)
         raise GatewayError('Native Claude Code model discovery did not complete')
     finally:
         if child.poll() is None:
@@ -92,14 +105,17 @@ def native_model_catalog(home=None, timeout=25):
         child.stdin.close();child.stdout.close()
 
 
-def model_catalog(rows, home):
+def model_catalog(rows, home, *, include_options=False):
     models = {}
     aliases = {}
     for row in rows:
+        if not isinstance(row, dict):continue
         identity = row.get('resolvedModel', '')
         if not isinstance(identity, str) or not identity.startswith('claude-') or not MODEL.fullmatch(identity):continue
         alias = row.get('value', '')
-        if alias == 'default' and any(r.get('resolvedModel') == identity and r.get('value') != 'default' for r in rows):continue
+        if not isinstance(alias, str):continue
+        if alias == 'default' and any(isinstance(r, dict) and r.get('resolvedModel') == identity
+                                      and r.get('value') != 'default' for r in rows):continue
         long_context = identity.endswith('[1m]') or alias.endswith('[1m]')
         identity = identity.removesuffix('[1m]')
         aliases[alias.removesuffix('[1m]')] = identity
@@ -117,6 +133,7 @@ def model_catalog(rows, home):
     try:extras = json.loads((Path(home)/'.claude.json').read_text()).get('additionalModelOptionsCache', []) or []
     except (OSError, ValueError):extras = []
     for row in extras:
+        if not isinstance(row, dict):continue
         identity = row.get('value', '')
         if not isinstance(identity, str) or not MODEL.fullmatch(identity):continue
         base = identity.removesuffix('[1m]')
@@ -127,9 +144,25 @@ def model_catalog(rows, home):
             models[identity] = {'id': identity, 'type': 'model', 'display_name': row.get('label', identity),
                                 'description': row.get('description', ''), 'supported_effort_levels': [],
                                 'anthropic_family_tier': None, 'is_family_default': False, 'supports_1m': identity.endswith('[1m]')}
-    if not models:raise GatewayError('Native Claude Code returned no model choices')
-    return {'data': list(models.values()), 'has_more': False,
-            'first_id': next(iter(models)), 'last_id': next(reversed(models))}
+    if not models and not include_options:raise GatewayError('Native Claude Code returned no model choices')
+    result = {'data': list(models.values()), 'has_more': False,
+              'first_id': next(iter(models), None), 'last_id': next(reversed(models), None)}
+    if include_options:
+        options = {}
+        for row in (*extras, *rows):
+            if not isinstance(row, dict):continue
+            model = row.get('value')
+            if not isinstance(model, str) or not CLOUDCLI_MODEL_ID.fullmatch(model):continue
+            option = {'label': row.get('displayName', row.get('label')), 'description': row.get('description')}
+            levels = row.get('supportedEffortLevels')
+            if isinstance(levels, list):
+                option['effort'] = {'values': [{'value': level} for level in levels if isinstance(level, str)]}
+            resolved = row.get('resolvedModel')
+            if isinstance(resolved, str) and resolved.startswith('claude-') and MODEL.fullmatch(resolved):
+                option['behaves_as'] = resolved.removesuffix('[1m]')
+            options[model] = option
+        result['options'] = options
+    return result
 
 
 REQUEST_DIAGNOSTIC = ContextVar('request_diagnostic', default=None)
@@ -187,6 +220,8 @@ class GatewayError(Exception):
 
 
 CLOUDCLI_CONFIG = Path('.config/safe-code/cloudcli-gateway.json')
+DEFAULT_CLOUDCLI_PROJECT = Path('.local/share/safe-code/cloudcli-workspace')
+DEFAULT_CLOUDCLI_MODELS = ('claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5')
 CLOUDCLI_REQUIRED = '请先在当前 VPS 配置 CloudCLI 后端。Safe Code 的 Claude Desktop 接入需要 CloudCLI。'
 CLOUDCLI_MCP_SCRIPT = '/opt/safe-code/desktop-api/host_control_mcp.py'
 CLOUDCLI_SESSION_ID = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}')
@@ -283,8 +318,7 @@ def cloudcli_config(value):
     if not isinstance(project, str) or not Path(project).is_absolute() or not Path(project).is_dir():
         raise ValueError()
     if not isinstance(models, list) or not 1 <= len(models) <= 32 or any(
-        not isinstance(model, str) or len(model) > 80 or not model.startswith('claude-')
-        or not MODEL.fullmatch(model) or model.endswith('[1m]') for model in models
+        not isinstance(model, str) or not CLOUDCLI_MODEL_ID.fullmatch(model) or model.endswith('[1m]') for model in models
     ) or len(set(models)) != len(models):
         raise ValueError()
     host = value.get('hostControl')
@@ -313,12 +347,21 @@ def cloudcli_config(value):
         if allow_ssh_shell:
             host['allowSshShell'] = True
     questions = value.get('desktopQuestions')
-    if questions is not None and (not isinstance(questions, dict)
-            or not all(isinstance(questions.get(field), str) and 0 < len(questions[field]) <= 512
-                       for field in ('username', 'password'))):
-        raise ValueError()
     if questions is not None:
-        questions = {field: questions[field] for field in ('username', 'password')}
+        if not isinstance(questions, dict):
+            raise ValueError()
+        if 'tokenFile' in questions:
+            if set(questions) != {'tokenFile'} or not isinstance(questions['tokenFile'], str):
+                raise ValueError()
+            token_file = PurePosixPath(questions['tokenFile'])
+            if token_file == PurePosixPath('/run') or not token_file.is_relative_to('/run') or '..' in token_file.parts:
+                raise ValueError()
+            questions = {'tokenFile': str(token_file)}
+        else:
+            if not all(isinstance(questions.get(field), str) and 0 < len(questions[field]) <= 512
+                       for field in ('username', 'password')):
+                raise ValueError()
+            questions = {field: questions[field] for field in ('username', 'password')}
     tool_approvals = value.get('desktopToolApprovals', False)
     if type(tool_approvals) is not bool or (tool_approvals and questions is None):
         raise ValueError('Desktop tool approvals require the authenticated CloudCLI connection.')
@@ -762,6 +805,25 @@ def cloudcli_web_login(port, credentials):
     raise CloudCliError('CloudCLI could not authenticate Desktop questions', 503)
 
 
+def cloudcli_local_token(path):
+    """Read a short-lived CloudCLI session issued by the local administrator."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                raise ValueError()
+            raw = stream.read(4097)
+        token = raw.decode('ascii').strip()
+        if len(raw) <= 4096 and re.fullmatch(r'[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', token):
+            claims = json.loads(base64.urlsafe_b64decode(token.split('.')[1]+'==='))
+            if isinstance(claims, dict) and type(claims.get('exp')) is int and 0 < claims['exp']-time.time() <= 300:
+                return token
+    except (OSError, ValueError, RecursionError):
+        pass
+    raise CloudCliError('CloudCLI desktop session token is unavailable or expired', 503)
+
+
 def cloudcli_websocket():
     try:
         from websocket import create_connection, WebSocketException
@@ -959,7 +1021,7 @@ class CloudCliPausedTurn:
 
 
 class CloudCliProgress:
-    """Render activity in Messages text and leave CloudCLI controls with their owner."""
+    """Send assistant text and native thinking, with brief summaries for remote activity."""
 
     def __init__(self, stream, web_origin, native_tools=(), model=None, tool_approvals=False):
         self.stream = stream
@@ -983,30 +1045,42 @@ class CloudCliProgress:
         self.parts = []
         self.pending = ''
         self.sent = 0
-        self.child_deltas = {}
         self.has_assistant_text = False
         self.notice_chars = {False: 0, True: 0}
+        self.thinking_chars = 0
         self.tools = {}
+        self.tool_failures = set()
+        self.tasks = {}
+        self.activity_reported = False
         self.permissions = {}
         self.questions = {}
-        self.thinking = set()
         self.unrecognized = set()
         self.context_budget = None
         self.model = model
+        self.reported_model = None
         self.other_models = set()
 
-    def write(self, text):
+    def write(self, text, kind='text'):
         if not text or self.output_closed:
             return
         if self.stream is not None:
             try:
-                self.stream.text(text)
+                if kind == 'thinking':
+                    self.stream.thinking(text)
+                else:
+                    self.stream.text(text)
             except ConnectionAbortedError:
                 if self.on_disconnect is None:
                     raise
                 self.on_disconnect(self.stream)
                 return
-        self.parts.append(text)
+        if self.parts and self.parts[-1]['type'] == kind:
+            self.parts[-1][kind] += text
+        else:
+            block = {'type': kind, kind: text}
+            if kind == 'thinking':
+                block['signature'] = ''
+            self.parts.append(block)
 
     def notice(self, title, output=None, *, action=None):
         body = '\n\n> **SafeCode** · '+title
@@ -1039,20 +1113,6 @@ class CloudCliProgress:
     @staticmethod
     def tool_name(name):
         return name if isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', name) else 'CloudCLI'
-
-    @staticmethod
-    def tool_output(content):
-        if isinstance(content, str) and content.startswith('['):
-            # CloudCLI serializes Claude's structured result blocks as JSON text.
-            try:
-                blocks = json.loads(content)
-            except (ValueError, RecursionError):
-                return content
-            if isinstance(blocks, list) and blocks and all(isinstance(block, dict) and block.get('type') in
-                    ('text', 'image', 'audio', 'document', 'resource', 'resource_link') for block in blocks):
-                return '\n'.join(block['text'] if block['type'] == 'text' and isinstance(block.get('text'), str)
-                                 else f'[{block["type"]} 内容可在 CloudCLI 原会话查看]' for block in blocks)
-        return content if isinstance(content, str) else ''
 
     def open_session(self):
         if self.web_origin and self.session:
@@ -1121,38 +1181,57 @@ class CloudCliProgress:
 
     def task(self, event):
         status = event.get('status') or event.get('event')
-        phase = {
-            'started': '已启动', 'progress': '进行中', 'completed': '已完成',
-            'failed': '失败', 'stopped': '已停止',
-        }.get(status if isinstance(status, str) else None, '状态更新')
-        details = [self.fields(event, {'taskId': '任务 ID', 'taskType': '类型', 'workflowName': '工作流',
-                                       'description': '说明', 'summary': '摘要',
-                                       'status': '状态', 'outputFile': '输出文件'}),
-                   self.fields(event.get('usage'), {'totalTokens': 'Token', 'toolUses': '工具次数',
-                                                    'durationMs': '耗时（毫秒）'})]
-        agents = event.get('agents')
-        if isinstance(agents, list):
-            details.extend(self.fields(agent, {'label': '子代理', 'phase': '阶段', 'state': '状态',
-                                               'lastToolName': '最近工具', 'lastToolSummary': '工具摘要',
-                                               'model': '模型', 'tokens': 'Token', 'resultPreview': '结果'})
-                           for agent in agents)
-        self.notice(f'后台任务{phase}', '\n'.join(filter(None, details)))
+        task = event.get('taskId')
+        self.tasks[task if isinstance(task, str) else None] = status
+        self.activity()
 
-    def child_text(self, parent, value):
-        self.notice(f'`{self.tools.get(parent, "Agent")}` 子代理消息', value)
-        self.thinking.discard(parent)
+    def activity(self):
+        if not self.activity_reported:
+            self.activity_reported = True
+            self.notice('CloudCLI 正在执行云端操作')
+
+    def summarize_activity(self):
+        if not self.activity_reported:
+            return
+        summary = []
+        if self.tools:
+            summary.append(f'工具调用 {len(self.tools)} 次')
+        if self.tasks:
+            summary.append(f'后台任务 {len(self.tasks)} 项')
+        failed = len(self.tool_failures) + sum(status == 'failed' for status in self.tasks.values())
+        if failed:
+            summary.append(f'报告失败 {failed} 项')
+        summary.append(self.open_session()+'查看过程详情')
+        self.notice(' · '.join(summary))
+
+    def report_thinking(self, content):
+        remaining = 64000 - self.thinking_chars
+        if remaining <= 0 or not isinstance(content, str) or not content:
+            return
+        if not content.strip() and (not self.parts or self.parts[-1]['type'] != 'thinking'):
+            return
+        # CloudCLI exposes a display excerpt, without a provider signature.
+        preview = ''.join(c if c.isprintable() or c in '\n\t' else ' ' for c in content[:remaining])
+        self.thinking_chars += len(preview)
+        self.write(preview, 'thinking')
 
     def assistant(self, event, parent):
         value = event.get('content')
         if not isinstance(value, str) or not value:
             return
         if parent:
-            self.child_deltas.pop(parent, None)
-            self.child_text(parent, value)
             return
         reported_model = event.get('model')
-        if (self.model and isinstance(reported_model, str) and reported_model.startswith('claude-')
-                and MODEL.fullmatch(reported_model) and reported_model.removesuffix('[1m]') != self.model.removesuffix('[1m]')):
+        if not (isinstance(reported_model, str) and reported_model.startswith('claude-')
+                and MODEL.fullmatch(reported_model)):
+            reported_model = None
+        if reported_model:
+            self.reported_model = reported_model
+        requested_model = self.model.removesuffix('[1m]') if self.model else None
+        if (reported_model and requested_model and requested_model not in CLOUDCLI_MODEL_SELECTORS
+                and reported_model.removesuffix('[1m]') != requested_model
+                and not (requested_model in CLAUDE_MODEL_FAMILIES
+                         and cloudcli_model_family(reported_model) == requested_model)):
             self.other_models.add(reported_model)
         if event.get('compact') or event.get('isCompactSummary') or event.get('isLocalCommandStdout'):
             title = '上下文压缩摘要' if event.get('isCompactSummary') else (
@@ -1168,7 +1247,6 @@ class CloudCliProgress:
             self.pending = ''
             self.sent = 0
             self.has_assistant_text |= bool(value.strip())
-        self.thinking.discard(None)
 
     def feed(self, event):
         kind = event.get('kind')
@@ -1179,7 +1257,6 @@ class CloudCliProgress:
             if not isinstance(delta, str) or not delta:
                 return
             if parent:
-                self.child_deltas[parent] = (self.child_deltas.get(parent, '')+delta)[:6001]
                 return
             self.pending += delta
             # A provider can surface an error as text before it identifies the error.
@@ -1194,16 +1271,13 @@ class CloudCliProgress:
             elif event.get('isLocalCommand') is True:
                 self.notice('本地命令', event.get('displayText') or event.get('content'))
         elif kind == 'thinking':
-            content = event.get('content')
-            if parent not in self.thinking or (isinstance(content, str) and content.strip()):
-                self.notice('子代理正在思考' if parent else 'Claude 正在思考', content)
-                self.thinking.add(parent)
+            if not parent:
+                self.report_thinking(event.get('content'))
         elif kind == 'tool_use':
             tool, identifier = self.tool_name(event.get('toolName')), event.get('toolId')
             if not isinstance(identifier, str) or identifier in self.tools:
                 return
             self.tools[identifier] = tool
-            self.thinking.discard(parent)
             data = event.get('toolInput')
             if tool == 'AskUserQuestion':
                 if tool in self.native_tools:
@@ -1213,24 +1287,16 @@ class CloudCliProgress:
             else:
                 if tool == 'ExitPlanMode' and isinstance(data, dict) and isinstance(data.get('plan'), str):
                     self.plan_candidate = data
-                detail = self.fields(data, {'description': '说明', 'command': '命令', 'file_path': '文件',
-                                            'pattern': '模式', 'query': '查询', 'url': '网址', 'plan': '计划',
-                                            'subagent_type': '子代理类型', 'prompt': '任务'})
-                title = '子代理正在运行' if parent else '正在运行'
-                self.notice(f'{title} `{tool}`', detail)
+                self.activity()
         elif kind == 'tool_result':
             identifier = event.get('toolId')
-            tool = self.tools.get(identifier, 'CloudCLI') if isinstance(identifier, str) else 'CloudCLI'
             result = event.get('toolResult')
             nested = result if isinstance(result, dict) else {}
-            failed = event.get('isError') is True or event.get('is_error') is True or nested.get('isError') is True
-            content = event.get('content', nested.get('content'))
-            detail = self.fields(event.get('toolUseResult', nested.get('toolUseResult')),
-                                 {'agentId': '子代理 ID', 'resolvedModel': '模型', 'filePath': '文件',
-                                  'description': '说明', 'status': '状态', 'totalTokens': 'Token',
-                                  'totalToolUseCount': '工具次数', 'totalDurationMs': '耗时（毫秒）'})
-            output = '\n'.join(filter(None, [detail, self.tool_output(content)]))
-            self.notice(f'`{tool}` {"失败" if failed else "已返回"}', output)
+            if isinstance(identifier, str):
+                self.tools.setdefault(identifier, 'CloudCLI')
+                if any(item.get(flag) is True for item in (event, nested) for flag in ('isError', 'is_error')):
+                    self.tool_failures.add(identifier)
+            self.activity()
         elif kind in ('permission_request', 'permission_resolved', 'permission_cancelled'):
             self.permission(event)
         elif kind in ('task_status', 'task_notification'):
@@ -1250,8 +1316,7 @@ class CloudCliProgress:
     def finish(self):
         for data in self.deferred_questions:
             self.question(data, 'tool_use', action='可以在当前 Desktop 对话中回复。')
-        for parent, value in self.child_deltas.items():
-            self.child_text(parent, value)
+        self.summarize_activity()
         if self.other_models:
             self.notice('CloudCLI 报告本轮使用了其他模型', '\n'.join(sorted(self.other_models)))
         if isinstance(self.context_budget, dict):
@@ -1266,9 +1331,8 @@ class CloudCliProgress:
         return self.take_content()
 
     def take_content(self):
-        text = ''.join(self.parts)
-        self.parts.clear()
-        return [{'type': 'text', 'text': text}] if text else []
+        content, self.parts = self.parts, []
+        return content
 
     def show_plan(self, approval):
         text = approval.plan
@@ -1375,7 +1439,8 @@ def cloudcli_events(response, progress, expected_session=None):
                 if progress.output_closed:
                     continue
                 paused = time.monotonic()
-                yield question
+                with response.keepalive() if isinstance(response, CloudCliSocketEvents) else nullcontext():
+                    yield question
                 deadline += time.monotonic() - paused
                 continue
         progress.feed(event)
@@ -1385,12 +1450,37 @@ def cloudcli_events(response, progress, expected_session=None):
 class CloudCliSocketEvents:
     """Expose the chat WebSocket's normalized turn events to the Messages adapter."""
 
-    def __init__(self, connection, session):
+    PAUSED_HEARTBEAT_SECONDS = 10
+
+    def __init__(self, connection, session, review_deadline=None):
         self.connection = connection
         self.session = session
+        self.review_deadline = review_deadline
         self.started = False
         self.complete = False
         self.first_frame = None
+
+    @contextmanager
+    def keepalive(self):
+        # CloudCLI checks for pong every 30 seconds. While the HTTP turn waits
+        # for a Desktop answer, no recv() is active to reply to its ping.
+        finished = threading.Event()
+
+        def send_pongs():
+            _, websocket_error = cloudcli_websocket()
+            while not finished.wait(self.PAUSED_HEARTBEAT_SECONDS):
+                try:
+                    self.connection.pong()
+                except (OSError, websocket_error):
+                    return
+
+        worker = threading.Thread(target=send_pongs, daemon=True)
+        worker.start()
+        try:
+            yield
+        finally:
+            finished.set()
+            worker.join(timeout=1)
 
     def readline(self, limit):
         if not self.started:
@@ -1408,6 +1498,11 @@ class CloudCliSocketEvents:
 
     def read_event(self, limit):
         for _ in range(50000):
+            if self.review_deadline is not None:
+                remaining = self.review_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise CloudCliError('CloudCLI prompt review timed out', 504)
+                self.connection.settimeout(remaining)
             line = self.connection.recv()
             if not line:
                 return b''
@@ -1419,6 +1514,9 @@ class CloudCliSocketEvents:
             kind, session = event.get('kind'), event.get('sessionId')
             if session and session != self.session:
                 continue
+            if self.review_deadline is not None and session == self.session and kind in (
+                    'tool_use', 'tool_result', 'permission_request', 'task_started'):
+                raise CloudCliError('CloudCLI prompt review attempted to use a tool')
             if kind == 'protocol_error':
                 code = event.get('code')
                 if code == 'RUN_IN_PROGRESS':
@@ -1494,6 +1592,34 @@ class CloudCliStopWatch:
             return
 
 
+_native_catalog_lock = threading.Lock()
+_native_catalog_options = {}
+_native_catalog_expires = 0.0
+
+
+def native_cloudcli_options():
+    """Read the work account's model choices without making a model request."""
+    global _native_catalog_options, _native_catalog_expires
+    with _native_catalog_lock:
+        if time.monotonic() >= _native_catalog_expires:
+            try:
+                catalog = native_model_catalog(timeout=5, include_options=True)
+                options = dict(catalog.get('options', {}))
+                for row in catalog['data']:
+                    model = row['id']
+                    option = {'label': row.get('display_name'), 'description': row.get('description'),
+                              'effort': {'values': [{'value': level} for level in row.get('supported_effort_levels', [])]}}
+                    options.setdefault(model, option)
+                    if row.get('supports_1m'):
+                        options.setdefault(model+'[1m]', option)
+                _native_catalog_options = options
+                retry = 600 if options else 60
+            except (GatewayError, OSError, ValueError, TypeError, AttributeError, KeyError):
+                retry = 60
+            _native_catalog_expires = time.monotonic()+retry
+        return _native_catalog_options
+
+
 class CloudCliBackend:
     project_lock = threading.Lock()
 
@@ -1508,7 +1634,10 @@ class CloudCliBackend:
         self.approval_token = None
         self.approval_expires = 0
         self.model_options_lock = threading.Lock()
-        self.model_options = {}
+        self.model_options = ({}, False)
+        self.automatic_models = (
+            config['hostControl'] is None and tuple(config['models']) == DEFAULT_CLOUDCLI_MODELS
+            and Path(config['projectPath']) == (Path.home()/DEFAULT_CLOUDCLI_PROJECT).resolve())
         self.model_options_expires = 0
         self.path = directory/'cloudcli-history.sqlite3'
         # Display and capability changes preserve existing session bindings.
@@ -1537,59 +1666,169 @@ class CloudCliBackend:
 
     def verified_model_options(self):
         if not self.config.get('desktopQuestions'):
-            return {}
+            return {}, False
         with self.model_options_lock:
             if time.monotonic() < self.model_options_expires:
                 return self.model_options
             try:
-                token = self.question_token()
-                with closing(HTTPConnection('127.0.0.1', self.config['port'], timeout=5)) as conn:
-                    conn.request('GET', '/api/providers/claude/models', headers={'Authorization': 'Bearer '+token})
-                    with conn.getresponse() as response:
-                        if response.status != 200:
-                            raise ValueError()
-                        body = json.loads(response.read(524288))
-                options = body['data']['models']['OPTIONS']
-                self.model_options = {entry['value']: entry for entry in options
-                                      if isinstance(entry, dict) and isinstance(entry.get('value'), str)}
+                body = self.fetch_model_options()
+                listing = body['data']['models']
+                options = {entry['value']: entry for entry in listing['OPTIONS']
+                           if isinstance(entry, dict) and isinstance(entry.get('value'), str)
+                           and CLOUDCLI_MODEL_ID.fullmatch(entry['value'])}
+                self.model_options = options, listing.get('CUSTOM_MODELS_ONLY') is True
                 self.model_options_expires = time.monotonic()+600
             except (CloudCliError, OSError, HTTPException, ValueError, TypeError, KeyError, RecursionError):
                 self.model_options_expires = time.monotonic()+60
             return self.model_options
 
-    def catalog(self):
-        data = []
+    def fetch_model_options(self):
+        for attempt in range(2):
+            token = self.question_token()
+            with closing(HTTPConnection('127.0.0.1', self.config['port'], timeout=5)) as conn:
+                conn.request('GET', '/api/providers/claude/models', headers={'Authorization': 'Bearer '+token})
+                with conn.getresponse() as response:
+                    if response.status == 200:
+                        return json.loads(response.read(524288))
+                    if response.status != 401 or attempt != 0:
+                        break
+            with self.approval_lock:
+                if self.approval_token == token:
+                    self.approval_token = None
+        raise ValueError('CloudCLI model catalog is unavailable')
+
+    def model_choices(self):
+        provider, custom_only = self.verified_model_options()
+        if not self.automatic_models:
+            choices = {model: provider.get(model, {}) for model in self.config['models']}
+        elif custom_only:
+            choices = dict(provider)
+        else:
+            native = native_cloudcli_options()
+            # CloudCLI supplies the current labels and effort options. Native discovery also supplies
+            # concrete IDs and capabilities when the account only has an Agent API Key.
+            choices = {model: {**native.get(model, {}), **option} for model, option in provider.items()}
+            for model, option in native.items():
+                choices.setdefault(model, option)
+            if not choices:
+                choices = dict.fromkeys(self.config['models'], {})
+            else:
+                # Existing Desktop profiles may still send the old concrete ID when CloudCLI
+                # advertises that model family by alias. Keep those IDs usable during refresh.
+                for model in self.config['models']:
+                    if cloudcli_model_family(model) in provider:
+                        choices.setdefault(model, {})
+            self.route_resolved_models(choices, native, provider)
+        for model in self.config.get('extendedContextModels', []):
+            if model in choices:
+                choices.setdefault(model+'[1m]', provider.get(model+'[1m]', choices[model]))
+        return choices
+
+    @staticmethod
+    def route_resolved_models(choices, native, provider):
+        # CloudCLI validates effort against its own model IDs. When native discovery
+        # proves which concrete version a family alias selects, use the CloudCLI alias
+        # for existing Desktop configs that still request that exact version.
+        for alias in CLAUDE_MODEL_FAMILIES:
+            resolved = native.get(alias, {}).get('behaves_as')
+            if alias not in choices or not resolved or resolved == alias:
+                continue
+            for suffix in ('', '[1m]'):
+                current, target = resolved+suffix, alias+suffix
+                if current in choices and current not in provider and target in choices:
+                    choices[current] = {**choices[current], 'route': target,
+                                        'effort': choices[target].get('effort', choices[current].get('effort'))}
+
+    @staticmethod
+    def supported_efforts(option):
+        effort = option.get('effort')
+        levels = effort.get('values') if isinstance(effort, dict) else None
+        return [level.get('value') for level in levels if isinstance(level, dict)] if isinstance(levels, list) else []
+
+    def catalog(self, allowed_models=None):
+        choices = self.model_choices()
+        if allowed_models is not None:
+            choices = {model: option for model, option in choices.items()
+                       if option.get('route', model) in allowed_models}
         families = set()
-        options = self.verified_model_options()
-        for model in self.config['models']:
-            family = model.split('-')[1]
-            recognized = family in ('opus', 'sonnet', 'haiku', 'fable', 'mythos')
-            default = recognized and family not in families
+        data = []
+        for model, option in choices.items():
+            base = model.removesuffix('[1m]')
+            if model != base and base in choices:
+                continue  # Desktop expands supports1m into a context variant in its picker.
+            family = cloudcli_model_family(model)
+            default = family is not None and family not in families
             families.add(family)
-            option = options.get(model, {})
             name = option.get('label')
             name = name if isinstance(name, str) and name.strip() and name.isprintable() else model
-            effort = option.get('effort')
-            levels = effort.get('values') if isinstance(effort, dict) else None
-            levels = [level.get('value') for level in levels if isinstance(level, dict)] if isinstance(levels, list) else []
-            data.append({'id': model, 'type': 'model', 'display_name': name[:160],
-                         'anthropic_family_tier': family if recognized else None,
-                         'is_family_default': default,
-                         'supported_effort_levels': [level for level in EFFORT_ORDER if level in levels],
-                         'supports_1m': model in self.config.get('extendedContextModels', [])})
-        return {'data': data, 'has_more': False, 'first_id': data[0]['id'], 'last_id': data[-1]['id']}
+            levels = self.supported_efforts(option)
+            extended_option = choices.get(model+'[1m]')
+            if extended_option is not None and not levels:
+                levels = self.supported_efforts(extended_option)
+            row = {'id': model, 'type': 'model', 'display_name': name[:160],
+                   'anthropic_family_tier': family, 'is_family_default': default,
+                   'supported_effort_levels': [level for level in EFFORT_ORDER+('ultracode',) if level in levels],
+                   'supports_1m': extended_option is not None or model != base}
+            description = option.get('description')
+            if isinstance(description, str) and description.isprintable():
+                row['description'] = description[:320]
+            resolved = option.get('behaves_as')
+            if isinstance(resolved, str) and resolved.startswith('claude-') and MODEL.fullmatch(resolved):
+                row['behaves_as'] = resolved
+            if model != base:
+                row['prefer_1m'] = True
+            if base in (*CLAUDE_MODEL_FAMILIES, *CLOUDCLI_MODEL_SELECTORS):
+                alias = DESKTOP_MODEL_ALIAS_PREFIX+model
+                if alias not in choices:
+                    row['desktop_model_id'] = alias
+            ultracode_id = DESKTOP_ULTRACODE_PREFIX+model
+            if 'ultracode' in levels and ultracode_id not in choices:
+                row['desktop_ultracode_model_id'] = ultracode_id
+                row['ultracode_supports_1m'] = model != base or (extended_option is not None
+                    and 'ultracode' in self.supported_efforts(extended_option))
+            data.append(row)
+        if not data and allowed_models is None:
+            raise CloudCliError('The configured CloudCLI provider has no model choices', 503)
+        return {'data': data, 'has_more': False, 'first_id': data[0]['id'] if data else None,
+                'last_id': data[-1]['id'] if data else None}
 
-    def model(self, requested, context_1m=False):
+    def managed_models(self):
+        models = {}
+        for choice, option in self.model_choices().items():
+            route = option.get('route', choice)
+            if route not in models or route == choice:
+                label = option.get('label')
+                models[route] = {'id': route, 'name': label[:160] if isinstance(label, str) and label.isprintable() else route}
+        return list(models.values())
+
+    def resolve_model(self, requested, context_1m=False, effort=None):
         base = requested.removesuffix('[1m]')
         extended = context_1m or base != requested
-        models = self.config['models']
-        if base in ('opus', 'sonnet', 'haiku', 'fable'):
-            base = next((model for model in models if model.startswith('claude-'+base+'-')), None)
-        if base not in models:
-            raise CloudCliError('The requested model is not configured for the CloudCLI gateway', 404)
-        if extended and base not in self.config.get('extendedContextModels', []):
+        if self.automatic_models or base.startswith(DESKTOP_ULTRACODE_PREFIX) or effort == 'ultracode':
+            choices = self.model_choices()
+        else:
+            choices = dict.fromkeys(self.config['models'], {})
+            choices.update(dict.fromkeys((model+'[1m]' for model in self.config.get('extendedContextModels', [])), {}))
+        if base not in choices and base+'[1m]' not in choices:
+            alias = base.removeprefix(DESKTOP_MODEL_ALIAS_PREFIX)
+            if (alias != base and alias in (*CLAUDE_MODEL_FAMILIES, *CLOUDCLI_MODEL_SELECTORS)
+                    and (alias in choices or alias+'[1m]' in choices)):
+                base = alias
+            elif base.startswith(DESKTOP_ULTRACODE_PREFIX):
+                base = base.removeprefix(DESKTOP_ULTRACODE_PREFIX)
+                effort = 'ultracode'
+        if base not in choices and base+'[1m]' not in choices:
+            if base in CLAUDE_MODEL_FAMILIES:
+                base = next((model.removesuffix('[1m]') for model in choices if cloudcli_model_family(model) == base), None)
+            if base is None or (base not in choices and base+'[1m]' not in choices):
+                raise CloudCliError('The requested model is not configured for the CloudCLI gateway', 404)
+        selected = base+'[1m]' if extended or base not in choices else base
+        if selected not in choices:
             raise CloudCliError('1M context is not enabled for the requested CloudCLI model', 400)
-        return base+'[1m]' if extended else base
+        target = choices[selected].get('route', selected)
+        if effort == 'ultracode' and effort not in self.supported_efforts(choices.get(target, {})):
+            raise CloudCliError('CloudCLI does not offer Ultracode for the requested model', 400)
+        return target, effort
 
     def default_project(self):
         host = self.config['hostControl']
@@ -1913,7 +2152,7 @@ class CloudCliBackend:
                        header={'Authorization': 'Bearer '+self.question_token()}, timeout=timeout,
                        suppress_origin=True, http_no_proxy=['127.0.0.1'])
 
-    def call_chat(self, payload, progress, attachments, plan_mode, edit=None, *, title_text):
+    def call_chat(self, payload, progress, attachments, plan_mode, edit=None, *, title_text, review=False):
         connect, websocket_error = cloudcli_websocket()
         session = payload.get('sessionId')
         try:
@@ -1923,7 +2162,7 @@ class CloudCliBackend:
                 if not head or head[-1].get('transcriptAnchorId') != edit[1]:
                     raise CloudCliError('CloudCLI history changed after the last Desktop turn', 409)
             descriptors = self.upload_attachments(attachments)
-            with closing(self.web_socket(connect, timeout=90)) as ws:
+            with closing(self.web_socket(connect, timeout=8 if review else 90)) as ws:
                 if progress.stream is not None and progress.stream.disconnected():
                     raise ConnectionAbortedError('Desktop disconnected before CloudCLI dispatch')
                 if session is None:
@@ -1939,9 +2178,12 @@ class CloudCliBackend:
                     session = created.get('data', {}).get('sessionId')
                     if not isinstance(session, str) or not CLOUDCLI_SESSION_ID.fullmatch(session):
                         raise CloudCliError('CloudCLI did not return an attachment session identifier')
-                permission = 'default' if progress.tool_approvals else 'bypassPermissions'
+                permission = 'default' if progress.native_tools or progress.tool_approvals else 'bypassPermissions'
                 options = {'model': payload['model'], 'attachments': descriptors, 'unattended': True,
                            'permissionMode': 'plan' if plan_mode else permission}
+                if review:
+                    options.update(permissionMode='dontAsk',
+                                   toolsSettings={'allowedTools': [], 'disallowedTools': ['*'], 'skipPermissions': False})
                 if 'effort' in payload:
                     options['effort'] = payload['effort']
                 if progress.stream is not None and progress.stream.disconnected():
@@ -1954,18 +2196,31 @@ class CloudCliBackend:
                     command.update(type='chat.edit-send', anchorId=edit[0])
                 ws.send(json.dumps(command, ensure_ascii=False))
                 diagnostic(stage='cloudcli_response')
-                source = CloudCliSocketEvents(ws, session)
-                with self.observe_turn(progress, dispatch_ms):
-                    return (yield from cloudcli_events(source, progress, session))
+                source = CloudCliSocketEvents(ws, session, time.monotonic()+20 if review else None)
+                try:
+                    with self.observe_turn(progress, dispatch_ms):
+                        return (yield from cloudcli_events(source, progress, session))
+                finally:
+                    if review and not source.complete:
+                        with suppress(OSError, websocket_error):
+                            ws.settimeout(2)
+                            ws.send(json.dumps({'type': 'chat.abort', 'sessionId': session}))
         except ConnectionAbortedError:
             raise
         except (OSError, ValueError, AttributeError, TypeError, websocket_error):
             raise CloudCliError('CloudCLI chat connection ended before a result was confirmed') from None
+        finally:
+            if review and isinstance(session, str) and CLOUDCLI_SESSION_ID.fullmatch(session):
+                with suppress(CloudCliError):
+                    self.web_request('DELETE', f'/api/providers/sessions/{session}?force=true&deletedFromDisk=true', timeout=3)
 
     def question_token(self):
+        authorization = self.config.get('desktopQuestions') or {}
+        if 'tokenFile' in authorization:
+            return cloudcli_local_token(authorization['tokenFile'])
         with self.approval_lock:
             if self.approval_token is None or time.monotonic() >= self.approval_expires:
-                self.approval_token = cloudcli_web_login(self.config['port'], self.config['desktopQuestions'])
+                self.approval_token = cloudcli_web_login(self.config['port'], authorization)
                 self.approval_expires = time.monotonic() + 86400
             return self.approval_token
 
@@ -2018,7 +2273,7 @@ class CloudCliBackend:
             self.abandon_question(turn)
             self.invalidate_edit(namespace, turn.question.session, turn.progress)
 
-    def answer(self, manager, data, messages, latest, namespace, stream):
+    def answer(self, manager, data, messages, latest, namespace, stream, check_model=None):
         answers = [part for part in latest if isinstance(part, dict) and part.get('type') == 'tool_result']
         if len(answers) != 1 or any(part is not answers[0] and (not isinstance(part, dict)
                 or part.get('type') != 'text' or not isinstance(part.get('text'), str)
@@ -2040,6 +2295,8 @@ class CloudCliBackend:
             if (turn is None or expected != turn.expected or data['model'] != turn.reply['model']
                     or answers[0].get('tool_use_id') != turn.question.block['id']):
                 raise CloudCliError('No matching pending question for this Desktop conversation', 409)
+            if check_model is not None:
+                check_model(turn.progress.model)
             action = turn.question.decision(answers[0])
             with self.active_lock:
                 if self.paused_turns.get(namespace) is not turn:
@@ -2102,7 +2359,7 @@ class CloudCliBackend:
                 db.execute('INSERT OR REPLACE INTO workspace_prompts VALUES (?, ?, ?, ?)',
                            (namespace, session, progress.turn_position, progress.workspace_prompt_fingerprint))
             db.execute('UPDATE requests SET reply=? WHERE identity=?', (json.dumps(result, ensure_ascii=False), identity))
-        model = self.model(data['model'])
+        model = progress.reported_model or progress.model
         manager.count_usage({'id': result['id'], 'model': model, 'usage': usage}, result['id'])
         return result
 
@@ -2188,10 +2445,16 @@ class CloudCliBackend:
                 raise CloudCliError('CloudCLI is busy; wait for the current operation to finish', 409) from None
             yield
 
-    def run(self, manager, data, context_1m, session_header, stream=None):
+    def run(self, manager, data, context_1m, session_header, stream=None, *, check_model=None):
         if not isinstance(data, dict) or not isinstance(data.get('model'), str):
             raise CloudCliError('A configured CloudCLI model is required', 400)
-        model = self.model(data['model'], context_1m)
+        effort = data.get('output_config', {})
+        effort = effort.get('effort') if isinstance(effort, dict) else None
+        if effort not in (None, 'default') and (not isinstance(effort, str) or effort not in CLOUDCLI_EFFORTS):
+            raise CloudCliError('Unsupported Claude effort', 400)
+        model, effort = self.resolve_model(data['model'], context_1m, effort)
+        if check_model is not None:
+            check_model(model)
         original = data.get('messages')
         if not isinstance(original, list) or any(not isinstance(m, dict) or m.get('role') not in ('system', 'user', 'assistant')
                                                   for m in original):
@@ -2205,7 +2468,7 @@ class CloudCliBackend:
         if any(isinstance(part, dict) and part.get('type') == 'tool_result' for part in latest):
             if not scope or self.config.get('desktopQuestions') is None:
                 raise CloudCliError('No matching pending question for this Desktop conversation', 409)
-            return self.answer(manager, data, messages, latest, namespace, stream)
+            return self.answer(manager, data, messages, latest, namespace, stream, check_model)
         texts, attachments = [], []
         for part in latest:
             if isinstance(part, dict) and part.get('type') == 'text' and isinstance(part.get('text'), str):
@@ -2237,13 +2500,11 @@ class CloudCliBackend:
             return self.local_reply(data['model'], '')
         if not chat_mode and webfetch_summary_request({**data, 'messages': messages}):
             raise CloudCliError('Desktop WebFetch helper has no matching CloudCLI tool', 400)
-        effort = data.get('output_config', {})
-        effort = effort.get('effort') if isinstance(effort, dict) else None
-        if effort is not None and (not isinstance(effort, str) or effort not in EFFORTS):
-            raise CloudCliError('Unsupported Claude effort', 400)
-        payload = {'provider': 'claude', 'message': task, 'model': model, 'stream': True}
-        diagnostic(stage='session_route', modelFamily=model.split('-')[1])
-        if effort is not None:
+        forwarded_task = manager.review_prompt(task) if task and manager.review_prompt is not None else task
+        payload = {'provider': 'claude', 'message': forwarded_task, 'model': model, 'stream': True}
+        family = cloudcli_model_family(model)
+        diagnostic(stage='session_route', **({'modelFamily': family} if family else {}))
+        if effort not in (None, 'default'):
             payload['effort'] = effort
         # Scope is only used as a local lookup key. Never use a Desktop ID as a
         # CloudCLI session ID. Per-key gateway directories isolate these tables.
@@ -2319,8 +2580,10 @@ class CloudCliBackend:
                                 workspace = routed_workspace
                 else:
                     project, workspace = self.project_for_directory(self.desktop_directory(data, scope))
-                chat_mode = chat_mode or edit is not None or tool_approvals
-                if native_tools or chat_mode:
+                # The Agent API runs unattended in bypassPermissions and can skip
+                # the permission event that carries a pending AskUserQuestion.
+                chat_mode = chat_mode or bool(native_tools) or edit is not None or tool_approvals
+                if chat_mode:
                     cloudcli_websocket()
                     self.question_token()
                 payload['projectPath'] = project
@@ -2332,7 +2595,7 @@ class CloudCliBackend:
                                        (namespace, payload.get('sessionId'), position, fingerprint)).fetchone()
                     if known is None:
                         # Keep the user's opening words available for the CloudCLI title.
-                        payload['message'] = task+'\n\n'+host_instruction
+                        payload['message'] = forwarded_task+'\n\n'+host_instruction
                         workspace_prompt_fingerprint = fingerprint
                 self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
@@ -2373,6 +2636,8 @@ class CloudCliBackend:
                                       dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0), 'end_turn')
 
 
+# TODO: Remove the legacy direct Claude Code backend (DESKTOP_LAUNCHER, Channel, and Conversation).
+# SafeCode API requests must go through CloudCliBackend so CloudCLI owns Claude Code execution.
 class Channel:
     """复用现有协议；新 clientId 保证不会接管 Codex 的连接或取消其任务。"""
     def __init__(self, manager, data, directory=None, client_id=None):
@@ -2669,8 +2934,9 @@ class Conversation:
 
 
 class Manager:
-    def __init__(self, directory, config, *, require_cloudcli=False):
+    def __init__(self, directory, config, *, require_cloudcli=False, review_prompt=None):
         self.directory, self.config = Path(directory), config
+        self.review_prompt = review_prompt
         settings = config['cloudcli'] if 'cloudcli' in config else load_cloudcli_config()
         if settings is not None:
             settings = cloudcli_config(settings)
@@ -2737,9 +3003,10 @@ class Manager:
             and any(call['name'].rsplit('__', 1)[-1] == name for call in c.pending.values())
         ), None)
 
-    def run(self, data, context_1m=False, session_header=None, stream=None):
+    def run(self, data, context_1m=False, session_header=None, stream=None, *, check_model=None):
         if self.cloudcli is not None:
-            return self.cloudcli.run(self, data, context_1m, session_header, stream)
+            return self.cloudcli.run(self, data, context_1m, session_header, stream, check_model=check_model)
+        # TODO: Delete this legacy branch. The API requires CloudCLI and returns an error if it is unavailable.
         requested_model = data.get('model') if isinstance(data, dict) else None
         data=validate_request(data)
         diagnostic(stage='cli_turn')
@@ -2823,6 +3090,8 @@ class CloudCliMessagesStream:
         self.model = model
         self.message_id = 'msg_'+uuid.uuid4().hex
         self.started = False
+        self.index = 0
+        self.open_kind = None
 
     def disconnected(self):
         connection = self.handler.connection
@@ -2842,6 +3111,12 @@ class CloudCliMessagesStream:
             return True
 
     def text(self, part):
+        self.write('text', part)
+
+    def thinking(self, part):
+        self.write('thinking', part)
+
+    def write(self, kind, part):
         if not part:
             return
         try:
@@ -2853,18 +3128,30 @@ class CloudCliMessagesStream:
                     'content': [], 'stop_reason': None, 'stop_sequence': None,
                     'usage': dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0),
                 }})
+            if self.open_kind != kind:
+                self.close_block()
+                block = {'type': kind, kind: ''}
+                if kind == 'thinking':
+                    block['signature'] = ''
                 self.handler.send_sse('content_block_start', {
-                    'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''},
+                    'type': 'content_block_start', 'index': self.index, 'content_block': block,
                 })
+                self.open_kind = kind
             self.handler.send_sse('content_block_delta', {
-                'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': part},
+                'type': 'content_block_delta', 'index': self.index, 'delta': {'type': kind+'_delta', kind: part},
             })
         except OSError:
             raise ConnectionAbortedError('Desktop disconnected during a CloudCLI stream') from None
 
+    def close_block(self):
+        if self.open_kind is not None:
+            self.handler.send_sse('content_block_stop', {'type': 'content_block_stop', 'index': self.index})
+            self.index += 1
+            self.open_kind = None
+
     def finish(self, response):
-        self.handler.send_sse('content_block_stop', {'type': 'content_block_stop', 'index': 0})
-        for index, block in enumerate(response['content'][1:], 1):
+        self.close_block()
+        for index, block in enumerate(response['content'][self.index:], self.index):
             for event, payload in sse_content_block(block, index):
                 self.handler.send_sse(event, payload)
         for event, payload in sse_tail(response):

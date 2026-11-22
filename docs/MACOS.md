@@ -22,9 +22,10 @@ SSH 终端调用 macOS 的 Terminal 和 SSH 客户端。登录信息与工作账
 
 ## Claude Desktop 接入
 
-要使用已签发的 Key，打开「Safe Code API 接入」，粘贴 Key 并点「验证并启用」。已保存的 Key 可以更换、重新启用或停用。操作完成后，请完全退出并重新打开 Claude Desktop。[网关与 Key 使用说明](https://github.com/Muchuaner/safe-code/blob/main/tools/desktop-api/README.md)
 
-若使用 SSH 接入，连接 VPS 后从维护模式打开「本地 Claude Desktop 接入」的设置，按提示启用。使用任一接入方式时请保持 Safe Code 运行。
+通过 SSH 登录 VPS 后，在维护模式打开 Claude Desktop 的「网关设置」，点击「启用」，再进入「管理网关」创建 API Key。
+
+回到 Safe Code 主界面或登录页，在「API Key 接入」粘贴完整密钥，点击「验证并启用」。已保存的 Key 可以更换、重新启用或停用。首次接入或修改配置后，请完全退出并重新打开 Claude Desktop。聊天期间请保持 Safe Code 运行。[网关与 Key 使用说明](https://github.com/Muchuaner/safe-code/blob/main/tools/desktop-api/README.md)
 
 ## 更新和反馈
 

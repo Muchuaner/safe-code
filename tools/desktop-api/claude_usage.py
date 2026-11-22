@@ -57,6 +57,7 @@ def usage_windows(text):
 
 
 def read_subscription(timeout=12):
+    # TODO: Replace this direct CLI probe with a CloudCLI-backed source and remove the launcher.
     if any(os.environ.get(name) for name in (
         'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
         'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY',

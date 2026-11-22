@@ -101,7 +101,8 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.server.model_requests.append(self.headers.get('Authorization'))
-        payload = json.dumps({'data': {'models': {'OPTIONS': self.server.model_options}}}).encode()
+        payload = json.dumps({'data': {'models': {'OPTIONS': self.server.model_options,
+                    'CUSTOM_MODELS_ONLY': self.server.custom_models_only}}}).encode()
         self.send_response(200)
         self.send_header('Content-Length', str(len(payload)))
         self.end_headers()
@@ -170,6 +171,10 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def do_DELETE(self):
+        self.server.deleted_sessions.append(self.path)
+        self.send_json({'success': True})
+
 
 class ChatSocketFixture:
     def __init__(self, send, events=()):
@@ -184,6 +189,9 @@ class ChatSocketFixture:
         return json.dumps(event) if event is not None else ''
 
     def close(self):
+        pass
+
+    def settimeout(self, _):
         pass
 
 
@@ -207,8 +215,10 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.cloud.logins = []
         self.cloud.model_requests = []
         self.cloud.model_options = []
+        self.cloud.custom_models_only = False
         self.cloud.uploads = []
         self.cloud.created_sessions = []
+        self.cloud.deleted_sessions = []
         self.cloud.registered_projects = []
         self.cloud.track_running = False
         self.cloud.track_history = False
@@ -361,7 +371,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.cloud.reply = (200, [
             {'type': 'session-id', 'sessionId': CLOUD_SESSION},
             {'kind': 'thinking', 'content': 'Reasoning excerpt from the fixture'},
-            {'kind': 'tool_use', 'toolName': 'Bash', 'toolId': 'upstream-tool'},
+            {'kind': 'tool_use', 'toolName': 'Bash', 'toolId': 'upstream-tool', 'toolInput': {'command': 'fixture command'}},
             {'kind': 'tool_result', 'toolId': 'upstream-tool', 'content': 'fixture command output'},
             {'kind': 'stream_delta', 'content': 'Fixture '},
             {'kind': 'stream_end'},
@@ -384,20 +394,24 @@ class CloudCLIGatewayTests(unittest.TestCase):
                             break
                 self.assertFalse(self.cloud.release_stream.is_set())
                 self.assertNotIn('message_stop', [event['type'] for event in decoded])
-                prefix = ''.join(event['delta']['text'] for event in decoded if event['type'] == 'content_block_delta')
-                self.assertIn('正在思考', prefix)
-                self.assertIn('正在运行 `Bash`', prefix)
-                self.assertIn('fixture command output', prefix)
-                self.assertIn('Reasoning excerpt from the fixture', prefix)
-                self.assertTrue(all(event['delta']['type'] == 'text_delta' for event in decoded
-                                    if event['type'] == 'content_block_delta'))
+                prefix = ''.join(event['delta'].get('text', '') for event in decoded if event['type'] == 'content_block_delta')
+                self.assertIn('CloudCLI 正在执行云端操作', prefix)
+                self.assertNotIn('fixture command', prefix)
+                self.assertNotIn('Reasoning excerpt from the fixture', prefix)
+                self.assertEqual([(event['index'], event['content_block']['type']) for event in decoded
+                                  if event['type'] == 'content_block_start'], [(0, 'text'), (1, 'thinking'), (2, 'text')])
+                thoughts = [event['delta']['thinking'] for event in decoded
+                            if event.get('delta', {}).get('type') == 'thinking_delta']
+                self.assertEqual(thoughts, ['Reasoning excerpt from the fixture'])
             finally:
                 self.cloud.release_stream.set()
             tail = [json.loads(line[6:]) for line in response.read().splitlines() if line.startswith(b'data: ')]
-        visible = prefix + ''.join(event['delta']['text'] for event in tail if event['type'] == 'content_block_delta')
+        visible = prefix + ''.join(event['delta'].get('text', '') for event in tail if event['type'] == 'content_block_delta')
         self.assertEqual(tail[-1]['type'], 'message_stop')
-        self.assertTrue(visible.endswith('Fixture reply'))
         self.assertEqual(visible.count('Fixture reply'), 1)
+        self.assertEqual(visible.count('工具调用 1 次'), 1)
+        self.assertIn(CLOUD_SESSION, visible)
+        self.assertEqual([event['index'] for event in decoded+tail if event['type'] == 'content_block_stop'], [0, 1, 2])
         self.assertEqual(self.request(conversation('unused', messages=[
             {'role': 'user', 'content': first_prompt}, {'role': 'assistant', 'content': visible},
             {'role': 'user', 'content': 'Follow up.'},
@@ -558,7 +572,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             {'value': MODEL, 'label': 'Fixture Haiku', 'effort': {'values': [
                 {'value': 'medium'}, {'value': 'low'}, {'value': 'ultracode'}, {'value': 'medium'},
             ]}},
-            {'value': 'claude-sonnet-4-6', 'label': 'Outside the gateway allowlist'},
+            {'value': 'claude-fable-5-1', 'label': 'Outside the gateway allowlist'},
         ]
         self.save_config()
         self.start_gateway()
@@ -566,10 +580,113 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(models['data']), 1)
         self.assertEqual(models['data'][0]['display_name'], 'Fixture Haiku')
-        self.assertEqual(models['data'][0]['supported_effort_levels'], ['low', 'medium'])
+        self.assertEqual(models['data'][0]['supported_effort_levels'], ['low', 'medium', 'ultracode'])
         self.assertEqual(self.request(path='/v1/models'), (200, models))
         self.assertFalse(self.cloud.requests)
         self.assertEqual(self.cloud.model_requests, ['Bearer fixture.web.token'])
+        self.assertNoNativeFallback()
+
+    def use_automatic_models(self, *, web_catalog=False):
+        project = self.home / gateway.DEFAULT_CLOUDCLI_PROJECT
+        project.mkdir(parents=True, exist_ok=True)
+        self.config.update(projectPath=str(project), models=list(gateway.DEFAULT_CLOUDCLI_MODELS))
+        if web_catalog:
+            self.config['desktopQuestions'] = {'username': 'fixture-user', 'password': 'fixture-password'}
+        self.save_config()
+        self.start_gateway()
+        self.use_patch(patch.object(gateway, '_native_catalog_expires', 0.0))
+        self.use_patch(patch.object(gateway, '_native_catalog_options', {}))
+
+    def test_automatic_agent_key_gateway_discovers_native_models_and_selectors(self):
+        self.use_automatic_models()
+        opus, fable = 'claude-opus-5-5', 'claude-fable-5-1'
+        self.native_catalog.return_value = gateway.model_catalog([
+            {'value': 'default', 'displayName': 'Default (recommended)'},
+            {'value': 'best', 'displayName': 'Best available'},
+            {'value': 'opusplan', 'displayName': 'Opus Plan'},
+            {'value': 'fable', 'resolvedModel': fable, 'displayName': 'Fable',
+             'supportedEffortLevels': ['low', 'high', 'max']},
+            {'value': 'opus[1m]', 'resolvedModel': opus+'[1m]', 'displayName': 'Opus (1M context)'},
+            {'value': 'opus', 'resolvedModel': opus, 'displayName': 'Opus', 'supportedEffortLevels': ['high', 'xhigh']},
+        ], self.home, include_options=True)
+
+        status, catalog = self.request(path='/v1/models')
+        self.assertEqual(status, 200)
+        models = {row['id']: row for row in catalog['data']}
+        self.assertEqual(list(models)[:3], ['default', 'best', 'opusplan'])
+        self.assertTrue(models['opus']['supports_1m'])
+        self.assertTrue(models[opus]['supports_1m'])
+        self.assertEqual(models['fable']['behaves_as'], fable)
+        self.assertEqual(models['fable']['supported_effort_levels'], ['low', 'high', 'max'])
+        self.assertIn(fable, models)
+        self.assertEqual(self.manager.cloudcli.resolve_model(fable)[0], 'fable')
+        self.assertEqual(self.manager.cloudcli.resolve_model(opus, True)[0], 'opus[1m]')
+        self.assertEqual(self.request(conversation('Fixture', model='opusplan'))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['model'], 'opusplan')
+        self.native_catalog.assert_called_once()
+        self.native_turn.assert_not_called()
+
+        self.native_catalog.return_value = {'data': [{'id': opus}]}
+        with patch.object(gateway, '_native_catalog_expires', 0.0):
+            status, catalog = self.request(path='/v1/models')
+            self.assertEqual(status, 200)
+            self.assertEqual([row['id'] for row in catalog['data']], [opus])
+            self.assertEqual(self.request(conversation('Unavailable fixture', model=fable))[0], 404)
+
+    def test_automatic_gateway_mirrors_cloudcli_choices_and_effort(self):
+        self.use_automatic_models(web_catalog=True)
+        choices = [
+            ('default', 'Default (recommended)'), ('best', 'Best available'), ('fable', 'Fable 5'),
+            ('sonnet', 'Sonnet'), ('sonnet[1m]', 'Sonnet (1M context)'),
+            ('opus', 'Opus'), ('opus[1m]', 'Opus (1M context)'),
+            ('haiku', 'Haiku'), ('opusplan', 'Opus Plan'), ('vendor/custom.model', 'Custom Model'),
+        ]
+        efforts = [{'value': effort} for effort in ('low', 'medium', 'high', 'xhigh', 'max', 'ultracode')]
+        self.cloud.model_options = [{'value': model, 'label': label, 'effort': {'values': efforts}}
+                                    for model, label in choices]
+        self.native_catalog.return_value = {'data': []}
+
+        status, catalog = self.request(path='/v1/models')
+        self.assertEqual(status, 200)
+        models = {row['id']: row for row in catalog['data']}
+        self.assertEqual(list(models)[:8], ['default','best','fable','sonnet','opus','haiku','opusplan','vendor/custom.model'])
+        self.assertTrue(models['opus']['supports_1m'])
+        self.assertTrue(models['sonnet']['supports_1m'])
+        self.assertEqual(models['opus']['supported_effort_levels'], [entry['value'] for entry in efforts])
+        self.assertEqual(models['best']['desktop_model_id'], 'safecode-cloudcli-best')
+        self.assertEqual(models['opus']['desktop_ultracode_model_id'], 'safecode-ultracode/opus')
+        self.assertTrue(models['opus']['ultracode_supports_1m'])
+
+        for model, beta, effort, expected, forwarded_effort in (
+                ('safecode-cloudcli-default', None, 'default', 'default', None),
+                ('safecode-cloudcli-best', None, 'default', 'best', None),
+                ('safecode-cloudcli-opusplan', None, 'medium', 'opusplan', 'medium'),
+                ('safecode-ultracode/opus', 'context-1m-2025-08-07', 'xhigh', 'opus[1m]', 'ultracode'),
+                ('opus', None, 'ultracode', 'opus', 'ultracode'),
+                ('safecode-cloudcli-sonnet[1m]', None, 'max', 'sonnet[1m]', 'max'),
+                ('vendor/custom.model', None, 'high', 'vendor/custom.model', 'high')):
+            with self.subTest(model=model):
+                status, _ = self.request(conversation('Fixture', model=model, output_config={'effort':effort}),
+                                         session=str(uuid.uuid4()), beta=beta)
+                self.assertEqual(status, 200)
+                task = self.cloud.requests[-1][2]
+                self.assertEqual(task['model'], expected)
+                self.assertEqual(task.get('effort'), forwarded_effort)
+        self.native_turn.assert_not_called()
+        self.assertEqual(self.cloud.model_requests, ['Bearer fixture.web.token'])
+
+    def test_custom_only_cloudcli_list_does_not_expose_native_choices(self):
+        self.use_automatic_models(web_catalog=True)
+        self.cloud.custom_models_only = True
+        self.cloud.model_options = [{'value': 'company/only-model[1m]', 'label': 'Company 1M'}]
+        status, catalog = self.request(path='/v1/models')
+        self.assertEqual(status, 200)
+        self.assertEqual([row['id'] for row in catalog['data']], ['company/only-model[1m]'])
+        self.assertEqual(self.request(conversation('Unavailable', model='claude-opus-5-5'))[0], 404)
+        self.assertEqual(self.request(conversation('Unsupported effort', model='company/only-model',
+            output_config={'effort':'ultracode'}))[0], 400)
+        self.assertEqual(self.request(conversation('Allowed', model='company/only-model'))[0], 200)
+        self.assertEqual([request[2]['model'] for request in self.cloud.requests], ['company/only-model[1m]'])
         self.assertNoNativeFallback()
 
     def test_extended_context_is_opt_in_and_keeps_existing_session_routing(self):
@@ -917,6 +1034,47 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
 
+    def test_local_desktop_question_token_is_private_short_lived_and_reloaded(self):
+        token_path = self.home/'question.jwt'
+        backend = self.manager.cloudcli
+        backend.config['desktopQuestions'] = {'tokenFile': str(token_path)}
+
+        def write_token(remaining):
+            claims = json.dumps({'exp': int(time.time())+remaining}).encode()
+            payload = base64.urlsafe_b64encode(claims).decode().rstrip('=')
+            token = 'header.'+payload+'.signature'
+            token_path.write_text(token+'\n')
+            token_path.chmod(0o600)
+            return token
+
+        with patch.object(gateway, 'cloudcli_web_login') as login:
+            token = write_token(90)
+            self.assertEqual(backend.question_token(), token)
+            replacement = write_token(120)
+            self.assertEqual(backend.question_token(), replacement)
+            for remaining in (-1, 600):
+                write_token(remaining)
+                with self.assertRaisesRegex(gateway.CloudCliError, 'unavailable or expired'):
+                    backend.question_token()
+            write_token(90)
+            token_path.chmod(0o644)
+            with self.assertRaises(gateway.CloudCliError):
+                backend.question_token()
+            original = self.home/'real.jwt'
+            token_path.chmod(0o600)
+            token_path.rename(original)
+            token_path.symlink_to(original)
+            with self.assertRaises(gateway.CloudCliError):
+                backend.question_token()
+            login.assert_not_called()
+
+        settings = {**self.config, 'desktopQuestions': {'tokenFile': '/run/cloudcli-fixture/session.jwt'},
+                    'desktopToolApprovals': True}
+        self.assertEqual(gateway.cloudcli_config(settings)['desktopQuestions'], settings['desktopQuestions'])
+        with patch.object(public_gateway, 'load_cloudcli_config', return_value=gateway.cloudcli_config(settings)):
+            with self.assertRaisesRegex(ValueError, 'Direct CloudCLI'):
+                public_gateway.PublicServer(self.home/'direct', {'bind': '0.0.0.0', 'port': 0})
+
     def test_unconfigured_gateway_refuses_models_and_messages_even_when_an_old_key_is_enabled(self):
         public_state = self.home / 'public-state'
         (public_state / 'keys').mkdir(parents=True)
@@ -929,14 +1087,14 @@ class CloudCLIGatewayTests(unittest.TestCase):
         # A legacy public gateway is upgraded before its operator configures CloudCLI.
         configured = self.config_path.read_text()
         self.config_path.unlink()
+        key = 'a' * 43
+        digest = hashlib.sha256(key.encode()).hexdigest()
+        (public_state/'keys'/digest).touch()
         with patch.object(public_gateway, 'load_cloudcli_config', return_value=None) as startup_config:
             with public_gateway.PublicServer(public_state, {'bind': '127.0.0.1', 'port': 0}) as public:
                 self.config_path.write_text(configured)
                 self.config_path.chmod(0o600)
                 self.assertIsNotNone(gateway.load_cloudcli_config())
-                key = 'a' * 43
-                digest = hashlib.sha256(key.encode()).hexdigest()
-                (public_state/'keys'/digest).touch()
                 (public_state/public_gateway.PUBLIC_ENABLED).touch()
                 worker = threading.Thread(target=public.serve_forever, daemon=True)
                 worker.start()
@@ -958,6 +1116,231 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 finally:
                     public.shutdown()
                     worker.join()
+        self.assertFalse(self.cloud.requests)
+        self.assertNoNativeFallback()
+
+    def test_public_key_model_permissions_expiry_and_renewal(self):
+        self.use_automatic_models(web_catalog=True)
+        self.native_catalog.return_value = {'data': []}
+        self.cloud.model_options = [{'value': name, 'label': label} for name, label in (
+            ('default', 'Default'), ('fable', 'Fable'), ('fable[1m]', 'Fable (1M)'), ('vendor/model', 'Custom Model'))]
+        state = self.home/'public-policy'
+        (state/'keys').mkdir(parents=True)
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                        '-subj', '/CN=Fixture', '-keyout', state/'key.pem', '-out', state/'cert.pem'],
+                       check=True, capture_output=True, timeout=5)
+        key, legacy = 'a'*43, 'b'*43
+        digest, legacy_digest = (hashlib.sha256(value.encode()).hexdigest() for value in (key, legacy))
+        (state/'keys'/legacy_digest).touch()
+        public = public_gateway.PublicServer(state, {'bind': '127.0.0.1', 'port': 0, 'publicOrigin': 'https://fixture.test'})
+        self.start(public)
+        public.manage({'action': 'enable_public', 'accepted': True})
+
+        def manage(action, **args):
+            return public.manage({'action': action, **args})
+
+        with patch.object(public_gateway, 'make_key', return_value=('sc2.fixture', digest)), \
+                patch.object(public_gateway, 'valid_activation_code', return_value=True):
+            with self.assertRaisesRegex(ValueError, '至少选择'):
+                manage('issue', allowed_models=[])
+            with self.assertRaisesRegex(ValueError, '失效时间'):
+                manage('issue', expires_at=True)
+            expiry = int(time.time())+3600
+            manage('issue', note='policy', expires_at=expiry, allowed_models=['fable', 'fable'])
+
+        def request(path, model=None, token=key, beta=None):
+            connection = http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=4,
+                                                     context=ssl._create_unverified_context())
+            with closing(connection):
+                headers = {'Authorization': 'Bearer '+token}
+                if beta:
+                    headers['anthropic-beta'] = beta
+                connection.request('GET' if model is None else 'POST', path,
+                                   json.dumps(conversation('Fixture request', model=model)) if model else None, headers)
+                reply = connection.getresponse()
+                return reply.status, json.loads(reply.read())
+
+        def listed(key_id=digest):
+            return next(row for row in manage('list')['keys'] if row['id'] == key_id)
+
+        self.assertEqual([m['id'] for m in manage('model_catalog')['models']],
+                         ['default', 'fable', 'fable[1m]', 'vendor/model'])
+        self.assertIsNone(listed(legacy_digest)['allowed_models'])
+        self.assertIsNone(listed(legacy_digest)['expires_at'])
+        self.assertEqual(listed()['allowed_models'], ['fable'])
+        manage('update', id=digest, note='renamed')
+        self.assertEqual(listed()['expires_at'], expiry)
+        self.assertEqual(len(request('/v1/models', token=legacy)[1]['data']), 3)
+        fable, = request('/v1/cloudcli/models')[1]['data']
+        self.assertEqual(fable['id'], 'fable')
+        self.assertFalse(fable['supports_1m'])
+        for model in ('default', 'vendor/model', 'fable[1m]'):
+            status, error = request('/v1/cloudcli/messages', model)
+            self.assertEqual((status, error['error']['type']), (403, 'permission_error'))
+        self.assertFalse(self.cloud.requests)
+        self.assertEqual(request('/v1/messages', 'safecode-cloudcli-fable')[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['model'], 'fable')
+        manage('update', id=digest, allowed_models=['fable[1m]'])
+        variant, = request('/v1/models')[1]['data']
+        self.assertTrue(variant['prefer_1m'])
+        self.assertEqual(request('/v1/messages', 'fable', beta='context-1m-2025-08-07')[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['model'], 'fable[1m]')
+
+        public.queue.resize(1)
+        with ThreadPoolExecutor(1) as pool, public.queue.slot(legacy_digest):
+            pending = pool.submit(request, '/v1/messages', 'fable[1m]')
+            deadline = time.monotonic()+2
+            while public.queue.snapshot()[1].get(digest, 0) == 0 and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual(public.queue.snapshot()[1][digest], 1)
+            manage('update', id=digest, expires_at=int(time.time())-1)
+            self.assertEqual(pending.result(timeout=2)[0], 401)
+        self.assertTrue(listed()['expired'])
+        self.assertTrue(manage('list')['activation_required'])
+        for path in ('/v1/models', '/v1/cloudcli/models', '/v1/key/balance'):
+            self.assertEqual(request(path)[0], 401)
+        self.assertEqual(request('/v1/messages', 'fable[1m]')[0], 401)
+        with self.assertRaisesRegex(ValueError, '先撤销'):
+            manage('delete', id=digest)
+        manage('update', id=digest, expires_at=None, allowed_models=None)
+        self.assertFalse(listed()['expired'])
+        self.assertEqual(request('/v1/messages', 'vendor/model')[0], 200)
+
+    def test_public_gateway_reviews_only_the_latest_user_prompt_before_dispatch(self):
+        state = self.home/'public-review'
+        (state/'keys').mkdir(parents=True)
+        key = 'a'*43
+        (state/'keys'/hashlib.sha256(key.encode()).hexdigest()).touch()
+        (state/public_gateway.PUBLIC_ENABLED).touch()
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048',
+                        '-nodes', '-days', '1', '-subj', '/CN=Fixture', '-keyout', state/'key.pem',
+                        '-out', state/'cert.pem'], check=True, capture_output=True, timeout=5)
+        public = public_gateway.PublicServer(state, {'bind': '127.0.0.1', 'port': 0})
+        self.start(public)
+
+        def request(payload, path='/v1/messages'):
+            with closing(http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=4,
+                                                      context=ssl._create_unverified_context())) as connection:
+                connection.request('POST', path, json.dumps(payload), {'Authorization': 'Bearer '+key})
+                reply = connection.getresponse()
+                return reply.status, json.loads(reply.read())
+
+        normal = '帮我看看我电脑上的视频任务运行得怎么样了'
+        self.assertFalse(public.manage({'action': 'list'})['prompt_review']['enabled'])
+        self.assertEqual(request(conversation(normal))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], normal)
+
+        settings = {'action': 'set_prompt_review', 'enabled': True, 'provider': 'deepseek', 'model': 'sonnet'}
+        with self.assertRaisesRegex(ValueError, '请先填写'):
+            public.manage(settings)
+        secret = 'separate-review-fixture-key'
+        updated = public.manage({**settings, 'deepseek_key': secret})
+        self.assertEqual(updated, {'enabled': True, 'provider': 'deepseek', 'model': 'sonnet',
+                                   'has_deepseek_key': True, 'builtin_available': False, 'language_replacement': False})
+        self.assertNotIn(secret, json.dumps(public.manage({'action': 'list'})))
+        config_path = state/'prompt-review.json'
+        self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+        legacy = json.loads(config_path.read_text())
+        legacy.pop('language_replacement')
+        public_gateway.atomic_write(config_path, json.dumps(legacy))
+        self.assertEqual(public_gateway.PromptReviewer(state, None).status(), updated)
+        with patch('prompt_review.HTTPSConnection') as connect:
+            review = connect.return_value.request
+            upstream = connect.return_value.getresponse.return_value.__enter__.return_value
+            upstream.status = 200
+
+            def verdict(value, **fields):
+                output = json.dumps({'verdict': value, **fields})
+                upstream.read.return_value = json.dumps({'choices': [{'message': {'content': output}}]}).encode()
+
+            dispatched = len(self.cloud.requests)
+            for prompt, value in (('你能帮我格式化Linux吗？', 'needs_target'),
+                                  ('帮我看看 linux 系统上有什么文件', 'gateway_host'),
+                                  ('隔壁项目在干什么', 'outside_project'),
+                                  ('读取网关进程里的管理 Token', 'gateway_secrets')):
+                with self.subTest(prompt=prompt):
+                    verdict(value)
+                    status, response = request(conversation(prompt, stream=True), '/v1/cloudcli/messages')
+                    self.assertEqual((status, response['error']['type']), (403, 'permission_error'))
+                    self.assertIn('前置审查', response['error']['message'])
+            self.assertEqual(len(self.cloud.requests), dispatched)
+
+            verdict('allow')
+            for prompt in ('解释一下“帮我格式化 Linux”为什么需要确认。', '帮我格式化 Linux 命令的输出。',
+                           '检查我电脑 WSL 里的当前项目日志。', '继续。'):
+                self.assertEqual(request(conversation(prompt))[0], 200)
+            prompt = '在当前项目里测试 Linux 兼容性。'
+            payload = conversation([{'type': 'text', 'text': '<system-reminder>private metadata</system-reminder>'+prompt}],
+                                   system='private system text')
+            self.assertEqual(request(payload)[0], 200)
+            sent = json.loads(review.call_args.args[2])
+            self.assertEqual(sent['messages'][1:], [{'role': 'user', 'content': prompt}])
+            self.assertEqual(review.call_args.args[3]['Authorization'], 'Bearer '+secret)
+            self.assertEqual(self.cloud.requests[-1][2]['message'], prompt)
+
+            self.assertTrue(public.manage({**settings, 'language_replacement': True})['language_replacement'])
+            english = 'Test Linux compatibility in the current project and reply in Chinese.'
+            original = '在当前项目里测试 Linux 兼容性，请用中文回复。'
+            verdict('allow', english=english)
+            self.assertEqual(request(conversation(original))[0], 200)
+            self.assertEqual(self.cloud.requests[-1][2]['message'], english)
+            sent = json.loads(review.call_args.args[2])
+            self.assertEqual(sent['messages'][1:], [{'role': 'user', 'content': original}])
+            self.assertIn('faithful English translation', sent['messages'][0]['content'])
+            self.assertTrue(public_gateway.PromptReviewer(state, None).status()['language_replacement'])
+
+            dispatched = len(self.cloud.requests)
+            verdict('outside_project')
+            self.assertEqual(request(conversation('隔壁项目在干什么'))[0], 403)
+            verdict('allow')
+            self.assertEqual(request(conversation(original))[0], 503)
+            upstream.read.return_value = b'{"choices":[]}'
+            self.assertEqual(request(conversation('查看项目状态'))[0], 503)
+            self.assertEqual(len(self.cloud.requests), dispatched)
+            connect.reset_mock()
+            saved = public.manage({**settings, 'enabled': False})
+            self.assertTrue(saved['has_deepseek_key'])
+            self.assertFalse(saved['language_replacement'])
+            self.assertEqual(request(conversation(normal))[0], 200)
+            connect.assert_not_called()
+        self.assertNoNativeFallback()
+
+    def test_builtin_prompt_review_uses_tool_denied_cloudcli_chat_and_cleans_up(self):
+        self.enable_cloudcli_web_fixture()
+        backend = self.manager.cloudcli
+        reviewer = public_gateway.PromptReviewer(self.working_state, backend.config)
+        actions = []
+
+        def run(model, frames, translate=False):
+            reviewer.update({'enabled': True, 'provider': 'builtin', 'model': model,
+                             'language_replacement': translate}, public_gateway.atomic_write)
+            events = ({**event, 'sessionId': CLOUD_SESSION} for event in frames)
+            with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                    lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
+                return reviewer('在当前项目运行测试。')
+
+        run('sonnet', [{'kind': 'text', 'role': 'assistant', 'content': '{"verdict":"allow"}'},
+                       {'kind': 'complete', 'exitCode': 0}])
+        message, = actions
+        self.assertEqual(message['options']['model'], 'sonnet')
+        self.assertEqual(message['options']['permissionMode'], 'dontAsk')
+        self.assertEqual(message['options']['toolsSettings'], {'allowedTools': [], 'disallowedTools': ['*'], 'skipPermissions': False})
+        self.assertEqual(message['options']['attachments'], [])
+        project = Path(self.cloud.created_sessions[0]['projectPath'])
+        self.assertEqual(json.loads((project/'.claude/settings.json').read_text())['permissions'], {'deny': ['*']})
+
+        english = 'Run tests in the current project.'
+        self.assertEqual(run('opus', [
+            {'kind': 'text', 'role': 'assistant', 'content': json.dumps({'verdict': 'allow', 'english': english})},
+            {'kind': 'complete', 'exitCode': 0},
+        ], translate=True), english)
+        self.assertEqual(actions[-1]['options']['model'], 'opus')
+        self.assertIn('faithful English translation', actions[-1]['content'])
+        with self.assertRaisesRegex(gateway.CloudCliError, '前置审查暂时不可用'):
+            run('opus', [{'kind': 'tool_use', 'toolName': 'FixtureTool'}])
+        self.assertEqual(actions[-2]['options']['model'], 'opus')
+        self.assertEqual(actions[-1], {'type': 'chat.abort', 'sessionId': CLOUD_SESSION})
+        self.assertEqual(self.cloud.deleted_sessions, [f'/api/providers/sessions/{CLOUD_SESSION}?force=true&deletedFromDisk=true'] * 3)
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
 
@@ -1083,35 +1466,46 @@ class CloudCLIGatewayTests(unittest.TestCase):
         ]}
         pending = {'requestId': 'fixture-approval', 'toolName': 'AskUserQuestion', 'input': questions,
                    'sessionId': CLOUD_SESSION}
-        self.cloud.pause_after_frame = 2
-        self.cloud.release_stream = threading.Event()
-        self.cloud.reply = (200, [
-            {'type': 'session-id', 'sessionId': CLOUD_SESSION},
-            {'kind': 'tool_use', 'toolName': 'AskUserQuestion', 'toolId': 'fixture-tool', 'toolInput': questions},
-            {'kind': 'permission_request', **pending},
-            {'kind': 'permission_resolved', 'requestId': pending['requestId']},
-            {'kind': 'text', 'role': 'assistant', 'content': 'Fixture selections accepted.'},
-            {'kind': 'complete', 'exitCode': 0}, {'type': 'done'},
-        ])
         actions = []
-        release = self.cloud.release_stream
-        self.addCleanup(release.set)
+        accepted = threading.Event()
+        heartbeat = threading.Event()
 
-        class Socket:
-            def send(self, raw):
-                command = json.loads(raw)
-                actions.append(command)
-                if command['type'] == 'chat.permission-response':
-                    release.set()
+        def on_send(command):
+            actions.append(command)
+            if command['type'] == 'chat.permission-response':
+                accepted.set()
 
-            def recv(self):
-                return json.dumps({'kind': 'chat_subscribed', 'sessionId': CLOUD_SESSION, 'isProcessing': True,
-                                   'pendingPermissions': [pending]})
+        def cloud_events():
+            # The Agent API and bypassPermissions WebSocket runs do not ask.
+            if actions[-1]['options']['permissionMode'] != 'default':
+                yield {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0}
+                return
+            yield {'kind': 'tool_use', 'sessionId': CLOUD_SESSION, 'toolName': 'AskUserQuestion',
+                   'toolId': 'fixture-tool', 'toolInput': questions}
+            yield {'kind': 'permission_request', **pending}
+            self.assertTrue(accepted.is_set())
+            yield {'kind': 'permission_resolved', 'sessionId': CLOUD_SESSION, 'requestId': pending['requestId']}
+            yield {'kind': 'text', 'sessionId': CLOUD_SESSION, 'role': 'assistant',
+                   'content': 'Fixture selections accepted.'}
+            yield {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0}
 
-            def close(self):
-                pass
+        class HeartbeatSocket(ChatSocketFixture):
+            def pong(self):
+                heartbeat.set()
 
-        with patch.object(gateway, 'cloudcli_websocket', return_value=(lambda *a, **kw: Socket(), OSError)):
+        def connect(*args, timeout, **kwargs):
+            if timeout != 90:
+                return ChatSocketFixture(on_send, [{'kind': 'chat_subscribed', 'sessionId': CLOUD_SESSION,
+                    'isProcessing': True, 'pendingPermissions': [pending]}])
+            if not actions:
+                return HeartbeatSocket(on_send, cloud_events())
+            return ChatSocketFixture(on_send, [
+                {'kind': 'text', 'sessionId': CLOUD_SESSION, 'role': 'assistant', 'content': 'Fixture follow-up.'},
+                {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0},
+            ])
+
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(connect, OSError)), \
+                patch.object(gateway.CloudCliSocketEvents, 'PAUSED_HEARTBEAT_SECONDS', .01):
             tools = [{'name': 'AskUserQuestion', 'input_schema': {'type': 'object'}}]
             first = conversation('Choose colors and style for the fixture.', stream=True, tools=tools)
             status, events = self.request(first)
@@ -1124,9 +1518,13 @@ class CloudCLIGatewayTests(unittest.TestCase):
             card = content[-1]
             self.assertEqual((card['type'], card['name'], card['input']), ('tool_use', 'AskUserQuestion', questions))
             self.assertNotIn('打开 CloudCLI', json.dumps(content, ensure_ascii=False))
-            self.assertFalse(release.is_set())
+            self.assertFalse(accepted.is_set())
+            self.assertTrue(heartbeat.wait(1), 'The upstream socket must stay alive while Desktop waits')
             self.assertEqual(self.request(first), (200, events))
             self.assertEqual(self.cloud.logins, [credentials])
+            dispatch, = actions
+            self.assertEqual(dispatch['type'], 'chat.send')
+            self.assertEqual(dispatch['sessionId'], CLOUD_SESSION)
             rendered = (f'Your questions have been answered: "{question}"="Blue, Green", '
                         f'"{second}"="Custom, with quotes \"yes\"". You can now continue with these answers in mind.'
                         '\n\n<system-reminder>filtered by the gateway</system-reminder>')
@@ -1136,27 +1534,27 @@ class CloudCLIGatewayTests(unittest.TestCase):
             second_request = conversation('unused', messages=follow_messages, tools=tools)
             self.assertEqual(self.request(second_request, session=str(uuid.uuid4()))[0], 409)
             self.assertEqual(self.request(conversation('Do something different.'))[0], 409)
-            self.assertEqual(len(self.cloud.requests), 1)
-            self.assertFalse(actions)
+            self.assertEqual(actions, [dispatch])
             status, reply = self.request(second_request)
             self.assertEqual(status, 200)
             self.assertIn('Fixture selections accepted.', reply['content'][0]['text'])
             self.assertEqual(self.request(second_request), (200, reply))
-            self.assertEqual(len(self.cloud.requests), 1)
             self.assertEqual(actions, [
+                dispatch,
                 {'type': 'chat.subscribe', 'sessions': [{'sessionId': CLOUD_SESSION}]},
                 {'type': 'chat.permission-response', 'allow': True, 'requestId': pending['requestId'],
                  'updatedInput': {**questions, 'answers': {question: 'Blue, Green', second: 'Custom, with quotes "yes"'}}},
             ])
-            self.cloud.pause_after_frame = None
-            self.cloud.reply = (200, cloud_turn('Fixture follow-up.'))
             follow_up = conversation('unused', messages=[*follow_messages, {'role': 'assistant', 'content': reply['content']},
                                                         {'role': 'user', 'content': 'Continue in the same chat.'}], tools=tools)
-            self.assertEqual(self.request(follow_up)[0], 200)
-            self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+            status, reply = self.request(follow_up)
+            self.assertEqual(status, 200)
+            self.assertIn('Fixture follow-up.', reply['content'][0]['text'])
+            self.assertEqual((actions[-1]['type'], actions[-1]['sessionId']), ('chat.send', CLOUD_SESSION))
+            self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
 
-    def test_status_tool_output_subagent_and_context_are_visible_without_streaming(self):
+    def test_status_and_compact_activity_without_streaming(self):
         first = 'Inspect sample data.'
         self.cloud.reply = (200, [
             {'type': 'session-id', 'sessionId': CLOUD_SESSION},
@@ -1172,13 +1570,13 @@ class CloudCLIGatewayTests(unittest.TestCase):
             {'kind': 'tool_result', 'toolId': 'reader', 'parentToolUseId': 'parent', 'content': json.dumps([
                 {'type': 'text', 'text': 'Sample file output'},
                 {'type': 'image', 'source': {'type': 'base64', 'data': 'opaque-fixture-image'}},
-            ])},
+            ]), 'isError': True},
             {'kind': 'stream_delta', 'parentToolUseId': 'parent', 'content': 'Sample agent answer'},
             {'kind': 'text', 'role': 'assistant', 'parentToolUseId': 'parent', 'content': 'Sample agent answer'},
             {'kind': 'stream_delta', 'parentToolUseId': 'parent', 'content': 'Another partial child reply'},
             {'kind': 'task_status', 'taskId': 'workflow-fixture', 'event': 'progress',
              'agents': [{'label': 'fixture agent', 'state': 'running', 'lastToolName': 'Read'}]},
-            {'kind': 'task_notification', 'status': 'completed', 'summary': 'Sample workflow finished'},
+            {'kind': 'task_notification', 'taskId': 'workflow-fixture', 'status': 'completed', 'summary': 'Sample workflow finished'},
             {'kind': 'status', 'text': 'token_budget', 'tokenBudget': {'used': 125, 'total': 1000, 'inputTokens': 100}},
             {'kind': 'different_new_event', 'content': 'Fixture opaque payload'},
             {'kind': 'stream_delta', 'content': 'Fixture reply'}, {'kind': 'stream_end'},
@@ -1190,14 +1588,15 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(reply['usage']['input_tokens'], 100)
         visible = reply['content'][0]['text']
         self.assertEqual(visible.count('Fixture reply'), 1)
-        self.assertEqual(visible.count('Sample agent answer'), 1)
+        self.assertEqual(visible.count('CloudCLI 正在执行云端操作'), 1)
         for expected in ('Earlier context was trimmed.', 'Provider setup complete', '/compact', 'Compaction started',
-                         'Command output', 'Sample subagent thought', 'sample.txt', 'Sample file output',
-                         'image 内容可在 CloudCLI 原会话查看', 'Another partial child reply',
-                         'fixture agent', 'Sample workflow finished', '125 / 1,000', 'different_new_event'):
+                         'Command output', '工具调用 2 次', '后台任务 1 项', '报告失败 1 项', '125 / 1,000',
+                         'different_new_event'):
             self.assertIn(expected, visible)
-        self.assertNotIn('Fixture opaque payload', visible)
-        self.assertNotIn('opaque-fixture-image', visible)
+        for detail in ('Sample subagent thought', 'sample.txt', 'Sample file output', 'Sample agent answer',
+                       'Another partial child reply', 'fixture agent', 'Sample workflow finished',
+                       'Fixture opaque payload', 'opaque-fixture-image'):
+            self.assertNotIn(detail, visible)
         self.cloud.reply = (200, cloud_turn('Follow-up reply'))
         self.assertEqual(self.request(conversation('unused', messages=[
             {'role': 'user', 'content': first}, {'role': 'assistant', 'content': reply['content']},
@@ -1498,6 +1897,23 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(decisions, [{'type': 'chat.permission-response', 'requestId': pending['requestId'],
                                      'allow': True, 'updatedInput': tool_input}])
         self.assertFalse(self.cloud.requests)
+
+    def test_desktop_tool_approval_is_explicit_and_denial_keeps_the_tool_blocked(self):
+        original = {'command': 'python3 --version', 'description': 'Read-only fixture'}
+        pending = {'requestId': 'fixture-tool-permission', 'sessionId': CLOUD_SESSION,
+                   'toolName': 'Bash', 'input': original}
+        self.assertIsNone(gateway.CloudCliApproval.read(pending, CLOUD_SESSION, {'AskUserQuestion'}, None))
+        self.assertIsNone(gateway.CloudCliApproval.read(pending, CLOUD_SESSION, set(), None, True))
+        approval = gateway.CloudCliApproval.read(pending, CLOUD_SESSION, {'AskUserQuestion'}, None, True)
+        question = approval.block['input']['questions'][0]['question']
+        content = (f'Your questions have been answered: "{question}"="拒绝". '
+                   'You can now continue with these answers in mind.')
+        for result in ({'content': content}, {'is_error': True, 'content': ''}):
+            with self.subTest(result=result):
+                decision = approval.decision(result)
+                self.assertEqual(decision['requestId'], pending['requestId'])
+                self.assertIs(decision['allow'], False)
+                self.assertNotIn('updatedInput', decision)
 
 
 if __name__ == '__main__':

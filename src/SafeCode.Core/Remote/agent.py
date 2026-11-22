@@ -201,20 +201,6 @@ if operation=='host_bridge':
         if proof.returncode or proof.stdout.strip()!=user_sid:raise ValueError('本机 Windows 账户身份与授权不匹配，未生成可用状态。')
     import shlex
     print(json.dumps({'command':'ssh -F '+shlex.quote(str(config))+' '+alias,'verified':True}));sys.exit(0)
-if operation=='desktop_gateway':
-    import base64,hashlib,re,subprocess
-    client=request.get('clientId','')
-    if not re.fullmatch('[a-f0-9]{32}',client) or relative!=pathlib.Path('.local/state/safe-code/desktop-gateway')/client:raise ValueError('Desktop 网关目录无效。')
-    data=base64.b64decode(request['source']);digest=hashlib.sha256(data).hexdigest()
-    library=base/'.local/share/safe-code/desktop-gateway';library.mkdir(parents=True,exist_ok=True,mode=0o700)
-    if not library.resolve().is_relative_to(base):raise ValueError('Desktop 网关程序路径越界。')
-    script=library/(digest+'.py')
-    if script.is_symlink():raise ValueError('Desktop 网关程序不能是链接。')
-    if script.exists() and script.read_bytes()!=data:raise ValueError('Desktop 网关文件已被修改。')
-    if not script.exists():script.write_bytes(data);script.chmod(0o600)
-    result=subprocess.run(['/usr/bin/python3','-B',str(script),'--manage',str(target)],input=json.dumps(request),text=True,capture_output=True,timeout=35)
-    if result.returncode:raise ValueError('VPS Desktop 网关启动/停止未确认；未返回配置或凭据。')
-    print(result.stdout.strip());sys.exit(0)
 if operation=='codex_bridge':
     import base64,fcntl,hashlib,re,shlex,socket,struct,subprocess,time
     if relative!=pathlib.Path('.local/state/safe-code/codex-bridge'):raise ValueError('适配器管理路径无效。')
@@ -519,6 +505,10 @@ def inspect():
     if policy and shutil.which('nft'):
         import network
         healthy=network.healthy(policy)
+    socks=None
+    if (STATE/'socks-egress.json').exists():
+        import socks_egress
+        socks=socks_egress.status()
     language=Path('/etc/default/locale').read_text() if Path('/etc/default/locale').exists() else ''
     match=re.search(r'(?m)^LANG="?([^\s"]+)',language)
     return {'osId':info.get('ID',''),'osName':info.get('PRETTY_NAME',''),'osVersion':info.get('VERSION_ID',''),
@@ -528,7 +518,7 @@ def inspect():
       'systemLocale':match[1] if match else '', 'ipPolicyHealthy':healthy,
       'claudeVersion':version(h/'.local/bin/claude'),'desktopReady':statuses['desktop'],
       'cloudReady':active('safe-code-cloudcli'),'mountReady':package_installed('davfs2'),
-      'ipPolicy':policy,'activeJobs':active_jobs() if os.geteuid()==0 else []}
+      'ipPolicy':policy,'socksEgress':socks,'activeJobs':active_jobs() if os.geteuid()==0 else []}
 
 def setup_account(options):
     existing=read_config()
@@ -1026,13 +1016,13 @@ def codex_bridge(options):
 API_DIRECTORY=Path('/opt/safe-code/desktop-api')
 API_UNIT=Path('/etc/systemd/system/safe-code-desktop-api.service')
 API_FILES={'install.sh','desktop_gateway.py','server.py','management.py','claude_usage.py',
-           'pricing.py','configure_cloudcli.py','host_control_mcp.py','device_bridge.py','codex_bridge.zip'}
+           'pricing.py','configure_cloudcli.py','host_control_mcp.py','device_bridge.py','prompt_review.py','codex_bridge.zip'}
 API_STATE='.local/state/safe-code-desktop-api'
 
 def safe_code_api(options):
     action=options.get('action')
     if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
-                      'ticket_endpoint','key_host_reuse','bind_ssh_device'):
+                      'ticket_endpoint','key_host_reuse','bind_ssh_device','model_catalog','set_prompt_review'):
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
@@ -1051,6 +1041,8 @@ def safe_code_api(options):
     if action == 'public_status':
         status = safe_code_api_admin(command, options)
         return {**status, 'cloudcliConfigured':(Path(entry.pw_dir)/'.config/safe-code/cloudcli-gateway.json').is_file()}
+    if action == 'model_catalog':
+        return safe_code_api_admin(command, options, timeout=27)
     if action in ('enable_public', 'issue', 'key_host_reuse', 'bind_ssh_device'):
         status = safe_code_api_admin(command, {'action':'public_status'})
         if status.get('backend') != 'cloudcli':
@@ -1095,7 +1087,7 @@ def gateway_public_origin(settings, hints):
         return settings['origin']
     bind = ipaddress.ip_address(settings['bind'])
     if bind.is_loopback:
-        raise ValueError('此 VPS 网关当前只监听本机回环地址。请通过 SSH 接入 Claude Desktop。')
+        raise ValueError('此 VPS 网关仅监听回环地址，请在网关设置中填写可从公网访问的 HTTPS 地址。')
     port = settings['port']
     hints = hints if isinstance(hints, dict) else {}
     resolved = hints.get('resolved')
@@ -1339,14 +1331,6 @@ def restart_safe_code_api(command, port):
         time.sleep(0.2)
     raise RuntimeError('Safe Code API 未在预期端口启动。')
 
-def desktop_gateway(options):
-    client=options.get('clientId','')
-    if not re.fullmatch('[a-f0-9]{32}',client):raise ValueError('Desktop 网关客户端标识无效。')
-    action=options.get('action','')
-    if action not in ['start','stop']:raise ValueError('Desktop 网关操作无效。')
-    if action=='start' and (not re.fullmatch('[A-Za-z0-9_-]{43}',options.get('token','')) or not re.fullmatch('[a-f0-9]{32}',options.get('instance',''))):raise ValueError('Desktop 本机通道凭据无效。')
-    return json.loads(user_files('desktop_gateway','.local/state/safe-code/desktop-gateway/'+client,**options).stdout)
-
 def host_bridge(options):
     client=options.get('clientId','');action=options.get('action','')
     if not re.fullmatch('[a-f0-9]{20}',client):raise RuntimeError('本机控制标识无效。')
@@ -1524,7 +1508,7 @@ def start_job(request):
     request={**request,'background':False,'jobId':job}
     write(directory/'request.json',json.dumps(request),0o600)
     write(directory/'metadata.json',json.dumps({'jobId':job,'operation':operation,'created':time.time()}),0o600)
-    for name in ['agent.py','network.py']:
+    for name in ['agent.py','network.py','socks_egress.py']:
         shutil.copy2(Path(__file__).parent/name,directory/name);(directory/name).chmod(0o600)
     write(directory/'output.log','',0o600)
     run(['systemd-run','--quiet','--collect','--unit=safe-code-job-'+job,'--property=Type=exec','--property=StandardOutput=append:'+str(directory/'output.log'),'--property=StandardError=append:'+str(directory/'output.log'),'/usr/bin/python3','-u',str(directory/'agent.py'),str(directory/'request.json')])
@@ -1582,11 +1566,20 @@ def main():
         request_path.unlink(missing_ok=True)
     if request.get('jobId'):JOB_DIR=job_directory(request['jobId'])
     op=request.get('op','inspect')
+    if op in ('socks_probe','socks_enable'):
+        Path(sys.argv[1]).unlink(missing_ok=True)
     if op=='inspect':result(inspect());return
     if op=='egress_probe':
         value=run(['curl','--noproxy','*','-4','-fsS','--connect-timeout','5','--max-time','12','https://api.ipify.org']).stdout.strip()
         result({'ip':str(ipaddress.IPv4Address(value))});return
     if os.geteuid()!=0:raise RuntimeError('安装需要 root 或免密 sudo 权限。')
+    if op=='socks_status':
+        import socks_egress
+        result(socks_egress.status());return
+    if op=='socks_probe':
+        import socks_egress
+        if socks_egress.load_state():raise RuntimeError('请先停用已配置的 SOCKS5 出口。')
+        result(socks_egress.probe(socks_egress.parse_proxy((request.get('options') or {}).get('proxyUrl'))));return
     if op=='account_info':result(account());return
     if op=='list_directories':result(list_directories(request.get('options') or {}));return
     if op=='create_directory':result(create_directory(request.get('options') or {}));return
@@ -1610,16 +1603,24 @@ def main():
         except BlockingIOError:raise OperationError('deployment_busy','另一个部署正在运行，请等待完成。')
         options=request.get('options') or {}
         if options.get('password'):REDACTIONS.append(options['password'])
+        if op in ('socks_enable','socks_disable'):
+            import network,socks_egress
+            with network.transaction_lock():
+                if op=='socks_enable':
+                    proxy=socks_egress.parse_proxy(options.get('proxyUrl'))
+                    if not shutil.which('nft'):apt(['nftables'])
+                    result(socks_egress.enable(proxy));return
+                result(socks_egress.disable());return
         if op.startswith('ip_'):
             import network
             if op=='ip_prepare':
+                if (STATE/'socks-egress.json').exists():raise RuntimeError('请先停用开发模式的 SOCKS5 出口，再更换已绑定的 IP。')
                 apt(['nftables','curl']);result(network.prepare(options));return
             if op=='ip_apply':result(network.schedule_apply(options['token']));return
             if op=='ip_commit':result(network.commit(options['token']));return
             if op=='ip_rollback':result(network.rollback(options['token']));return
             raise RuntimeError('未知网络操作。')
         if op=='codex_bridge':result(codex_bridge(options));return
-        if op=='desktop_gateway':result(desktop_gateway(options));return
         if op=='host_bridge':result(host_bridge(options));return
         if op=='mount_apply':result(apply_mounts(options));return
         if op=='mount_recover':result(apply_mounts(options,recover=True));return

@@ -11,13 +11,6 @@ public sealed record DesktopResolution(int Width=1280,int Height=800);
 internal sealed class ClientPreferences(string directory)
 {
     internal static readonly DesktopResolution[] Resolutions=[new(1024,768),new(1280,800),new(1366,768),new(1600,900),new(1920,1080),new(2560,1440),new(2560,1600)];
-    private string ClaudeDesktopWarningPath=>Path.Combine(directory,"claude-desktop-warning-accepted-v1");
-    public bool ClaudeDesktopWarningAccepted=>File.Exists(ClaudeDesktopWarningPath);
-    public void AcceptClaudeDesktopWarning()
-    {
-        Directory.CreateDirectory(directory);
-        using var marker=new FileStream(ClaudeDesktopWarningPath,FileMode.OpenOrCreate,FileAccess.Write,FileShare.ReadWrite);
-    }
     private string DraftPath(SshSession session)=>Path.Combine(directory,"account-drafts",Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(session.Host+":"+session.Port+":"+session.Fingerprint)))+(OperatingSystem.IsMacOS()?".aes":".dpapi"));
     private string DeploymentLocalePath(SshSession session)=>DraftPath(session)+".locale";
     public DeploymentChoices ReadDeploymentChoices(SshSession session)

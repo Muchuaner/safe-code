@@ -119,39 +119,27 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     {
         using var client=Remote(ticket);
         client.Timeout=TimeSpan.FromSeconds(15);
+        return (await RequestDeviceControlAsync(client,request,ct))!.Value;
+    }
+
+    private static async Task<JsonElement?> RequestDeviceControlAsync(HttpClient client,object request,CancellationToken ct,bool optional=false)
+    {
         using var body=new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(request,Json));
         body.Headers.ContentType=new MediaTypeHeaderValue("application/json");
         using var response=await client.PostAsync("/v1/device-control",body,ct).ConfigureAwait(false);
         if(!response.IsSuccessStatusCode)
+        {
+            if(optional&&response.StatusCode==HttpStatusCode.NotFound)return null;
+            if(optional&&response.StatusCode==HttpStatusCode.Forbidden)
+            {
+                using var error=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
+                if(error.RootElement.TryGetProperty("error",out var details)&&details.TryGetProperty("message",out var message)
+                    &&message.GetString()=="Device control is unavailable for this Key")return null;
+            }
             throw new InvalidOperationException("网关未能完成本机远程控制操作（HTTP "+(int)response.StatusCode+"）。请检查该 Key 的设备授权与 FRP 状态。");
+        }
         using var document=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
         return document.RootElement.Clone();
-    }
-
-    internal async Task<DeviceSetup> VerifyDeviceGatewayAsync(string code,bool replace,bool useSaved,SshSession? ssh,CancellationToken ct)
-    {
-        await gate.WaitAsync(ct);
-        try
-        {
-            var saved=Configured?Load():null;
-            if(useSaved&&saved==null)throw new InvalidOperationException("没有保存的接入 Key。");
-            if(saved!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」。");
-            var ticket=useSaved?saved!.Remote:Ticket.Parse(code.Trim());
-            using var client=Remote(ticket);
-            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
-            deadline.CancelAfter(TimeSpan.FromSeconds(20));
-            using var response=await VerifyRemoteAsync(client,deadline.Token);
-            if(response.StatusCode==HttpStatusCode.Unauthorized)throw new InvalidOperationException("Key 无效或已撤销。");
-            response.EnsureSuccessStatusCode();
-            if(ssh!=null&&await ssh.CanReuseHostControlForKeyAsync(ticket,ct))
-                return new(ticket,replace,useSaved,null,ssh);
-            var capabilities=await DeviceControlAsync(ticket,new{action="capability"},deadline.Token);
-            if(!capabilities.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)
-                throw new InvalidOperationException("此网关尚未支持通过 HTTPS 建立本机远程控制。");
-            return new(ticket,replace,useSaved,saved?.Remote==ticket&&saved.Device is { } previous&&
-                !previous.DeviceId.StartsWith("ssh-",StringComparison.Ordinal)?previous:null);
-        }
-        finally{gate.Release();}
     }
 
     private async Task Forward(HttpContext ctx,HttpClient client,string token,Func<bool>? hostReady)
@@ -297,6 +285,53 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(meta?["entries"] is not JsonArray)throw new IOException("Claude 配置列表无法读取。");
         return meta;
     }
+    private sealed record LegacyMacProfile(string Id,string Token,int Port);
+
+    internal void RemoveLegacyMacProfiles(JsonObject meta,string library)
+    {
+        if(meta["hybridPointer"]!=null)return;
+        var entries=meta["entries"]!.AsArray();
+        foreach(var entry in entries.OfType<JsonObject>().Where(entry=>ProfileText(entry,"name")=="SafeCode SSH").ToArray())
+        {
+            var id=ProfileText(entry,"id");
+            if(!Guid.TryParseExact(id,"D",out _))continue;
+            var path=Path.Combine(library,id+".json");
+            var data=ReadOptionalFile(path);
+            if(data==null||!OwnsLegacyMacProfile(id!,data))continue;
+            entries.Remove(entry);
+            if(ProfileText(meta,"appliedId")==id)meta["appliedId"]="";
+        }
+    }
+
+    private bool OwnsLegacyMacProfile(string id,byte[] data)
+    {
+        try{return JsonNode.Parse(data) is JsonObject profile&&MatchesLegacyMacProfile(id,profile);}
+        catch(Exception error)when(error is JsonException or CryptographicException){return false;}
+    }
+
+    private bool MatchesLegacyMacProfile(string id,JsonObject profile)
+    {
+        var url=ProfileText(profile,"inferenceGatewayBaseUrl");
+        if(!Uri.TryCreate(url,UriKind.Absolute,out var endpoint)||endpoint.Port is <1024 or >65535
+            ||url!="http://127.0.0.1:"+endpoint.Port)return false;
+        var credential=ProfileText(profile,"inferenceGatewayApiKey");
+        if(credential is {Length:>14}&&credential.StartsWith("__sealed__:v1:",StringComparison.Ordinal)
+            &&ProfileText(profile,"inferenceProvider")=="gateway"&&ProfileText(profile,"inferenceGatewayAuthScheme")=="bearer"
+            &&ProfileText(profile,"inferenceCredentialKind")=="static"&&ProfileText(profile,"deploymentDisplayName")=="SafeCode")return true;
+        var encrypted=ReadOptionalFile(Path.Combine(dataDirectory,"desktop-ssh.aes"));
+        if(encrypted==null)return false;
+        byte[] plain=unprotect(encrypted);
+        try
+        {
+            var state=JsonSerializer.Deserialize<LegacyMacProfile>(plain);
+            return state!=null&&state.Id==id&&state.Port==endpoint.Port&&state.Token==credential;
+        }
+        finally{CryptographicOperations.ZeroMemory(plain);}
+    }
+
+    private static string? ProfileText(JsonObject obj,string name)=>
+        obj[name] is JsonValue value&&value.TryGetValue<string>(out var text)?text:null;
+
     private Saved Load()=>JsonSerializer.Deserialize<Saved>(unprotect(File.ReadAllBytes(StatePath)),Json)??throw new IOException("无法读取保存的接入配置。");
     private void Save(Saved value)
     {
@@ -421,6 +456,37 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
     }
 
+    private sealed record LegacyWindowsPolicy(int Version,Dictionary<string,PolicyValue> Written,Dictionary<string,PolicyValue?> Original);
+
+    [SupportedOSPlatform("windows")]
+    private Action? RemoveLegacyWindowsPolicy()
+    {
+        var directory=Path.Combine(dataDirectory,"ClaudeDesktop");
+        var encrypted=ReadOptionalFile(Path.Combine(directory,"backup.dpapi"));
+        if(encrypted==null)return null;
+        byte[] plain=unprotect(encrypted);
+        LegacyWindowsPolicy? backup;
+        try{backup=JsonSerializer.Deserialize<LegacyWindowsPolicy>(plain);}
+        finally{CryptographicOperations.ZeroMemory(plain);}
+        if(backup is not {Version:2})return null;
+        using var policy=OpenWindowsPolicy(Registry.CurrentUser);
+        var current=backup.Written.Where(pair=>MatchesPolicyValue(ReadPolicyValue(policy,pair.Key),pair.Value))
+            .ToDictionary(pair=>pair.Key,pair=>pair.Value);
+        // The URL and token together identify the legacy relay, even if other settings changed.
+        if(!current.ContainsKey("inferenceGatewayBaseUrl")||!current.ContainsKey("inferenceGatewayApiKey"))
+            return null;
+        var changes=ClaudeDesktopPolicy.Restore(current,backup.Written,backup.Original)
+            .ToDictionary(pair=>pair.Key,pair=>new PolicyChange(current[pair.Key],pair.Value));
+        return ApplyWindowsPolicy(changes);
+    }
+
+    private void RestoreLegacyWindowsPermissions()
+    {
+        var settings=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".claude","settings.json");
+        var backup=Path.Combine(dataDirectory,"ClaudeDesktop","permissions-backup.json");
+        new ClaudePermissionSettings(settings,backup).Restore();
+    }
+
     [SupportedOSPlatform("windows")]
     private Action RemoveWindowsPolicy(IReadOnlyDictionary<string,PolicyValue>? fields)
     {
@@ -509,7 +575,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
     }
 
-    internal async Task<object> RestoreAsync(CancellationToken ct,bool interactive=false,bool requireDevice=false)
+    internal async Task<object> RestoreAsync(CancellationToken ct,bool interactive=false)
     {
         await gate.WaitAsync(ct);
         try
@@ -521,7 +587,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 try
                 {
                     var saved=Load();
-                    if(requireDevice||saved.Device!=null)return Status("请重新启用本机远程控制，验证设备连接后恢复接入。");
+                    if(saved.Device!=null)return Status("请重新启用本机远程控制，验证设备连接后恢复接入。");
                     string lib=Library();
                     var meta=ReadProfileMeta(lib);
                     if((string?)meta["appliedId"]==saved.Profile)
@@ -566,7 +632,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         finally{gate.Release();}
     }
-    internal async Task<object> EnableAsync(string code,CancellationToken ct,bool replace=false,bool useSaved=false,DeviceSetup? verified=null,DeviceBinding? device=null,Func<bool>? hostReady=null)
+    internal async Task<object> EnableAsync(string code,CancellationToken ct,bool replace=false,bool useSaved=false,DeviceSetup? verified=null,DeviceBinding? device=null,Func<bool>? hostReady=null,
+        bool checkDevice=false,SshSession? deviceSession=null)
     {
         await gate.WaitAsync(ct);
         try
@@ -581,32 +648,37 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 throw new InvalidOperationException("接入配置已变更，请重新验证设备。");
             using var client=Remote(t);using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(45));
-            using var result=await VerifyRemoteAsync(client, timeout.Token);
-            if(result.StatusCode==HttpStatusCode.Unauthorized)throw new InvalidOperationException("Key 无效或已撤销。");
-            result.EnsureSuccessStatusCode();
-            var catalog=JsonNode.Parse(await result.Content.ReadAsStringAsync(ct))?["data"]?.AsArray()??throw new IOException("模型列表无效。");
-            var models=new JsonArray();string? classifier=null;
-            foreach(var m in catalog.OrderByDescending(m=>(string?)m?["anthropic_family_tier"]=="opus"))
+            var (models,classifier)=await FetchModelCatalogAsync(client,timeout.Token);
+            if(checkDevice)
             {
-                string? id=(string?)m?["id"];if(id==null||!Regex.IsMatch(id,@"\Aclaude-[a-z0-9-]+\z"))continue;
-                if((bool?)m?["auto_mode_classifier"]==true){classifier=id;continue;}
-                var entry=new JsonObject{["name"]=id,["labelOverride"]=(string?)m?["display_name"]??id};
-                foreach(var (src,dst) in new[]{("supports_1m","supports1m"),("anthropic_family_tier","anthropicFamilyTier"),("is_family_default","isFamilyDefault")})
-                    if(m?[src] is {} value)entry[dst]=value.DeepClone();
-                if(m?["supported_effort_levels"] is JsonArray levels && levels.Count>0)entry["maxEffort"]=levels[^1]?.DeepClone();
-                models.Add(entry);
+                var priorDevice=previous?.Remote==t?previous.Device:null;
+                if(priorDevice?.DeviceId.StartsWith("ssh-",StringComparison.Ordinal)==true)
+                {
+                    if(deviceSession!=null&&await deviceSession.CanReuseHostControlForKeyAsync(t,timeout.Token))
+                        return new DeviceSetup(t,replace,useSaved,null,deviceSession);
+                    throw new InvalidOperationException("请连接签发此 Key 的 VPS，恢复已授权的本机远程控制。");
+                }
+                var capability=await RequestDeviceControlAsync(client,new{action="capability"},timeout.Token,optional:true);
+                if(capability is {} available)
+                {
+                    if(!available.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)
+                        throw new InvalidOperationException("此网关尚未支持通过 HTTPS 建立本机远程控制。");
+                    return new DeviceSetup(t,replace,useSaved,priorDevice);
+                }
+                if(priorDevice!=null)throw new InvalidOperationException("该 Key 的设备授权已不可用，请联系网关管理员。");
             }
-            if(models.Count==0)throw new IOException("远端 CLI 未提供可用模型。");
             string lib=Library(),profileId=previous?.Profile??Guid.NewGuid().ToString();
             string metaPath=Path.Combine(lib,"_meta.json"),profilePath=Path.Combine(lib,profileId+".json");
             byte[]? originalMeta=ReadOptionalFile(metaPath),originalProfile=ReadOptionalFile(profilePath);
-            var meta=ParseProfileMeta(originalMeta);var entries=meta["entries"]!.AsArray();
+            var meta=ParseProfileMeta(originalMeta);
+            if(OperatingSystem.IsMacOS())RemoveLegacyMacProfiles(meta,lib);
+            var entries=meta["entries"]!.AsArray();
             string applied=(string?)meta["appliedId"]??"";
             bool wasApplied=previous!=null&&applied==profileId;
             string local=previous?.Local??Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             if(hostReady?.Invoke()==false)throw new InvalidOperationException("本机远程控制连接已中断，请重新验证。");
             var next=await Listen(t,local,0,ct,device,hostReady);
-            Action? undoPolicy=null;
+            Action? undoPolicy=null,undoLegacyPolicy=null;
             bool profileWritten=false,metaWritten=false;
             try
             {
@@ -619,6 +691,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 if(classifier!=null)SetClassifier(profile,classifier);
                 if(OperatingSystem.IsWindows())
                 {
+                    undoLegacyPolicy=RemoveLegacyWindowsPolicy();
                     var (owned,changes)=PlanWindowsPolicy(profile,s,previous?.WindowsPolicy);
                     undoPolicy=ApplyWindowsPolicy(changes);
                     s=s with{WindowsPolicy=owned};
@@ -630,6 +703,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 meta["appliedId"]=profileId;meta.Remove("hybridPointer");
                 WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
                 metaWritten=true;
+                if(undoLegacyPolicy!=null)RestoreLegacyWindowsPermissions();
                 Save(s);
             }
             catch
@@ -637,11 +711,15 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 try{undoPolicy?.Invoke();}
                 finally
                 {
-                    try{if(metaWritten)RestoreFile(metaPath,originalMeta);}
+                    try{undoLegacyPolicy?.Invoke();}
                     finally
                     {
-                        try{if(profileWritten)RestoreFile(profilePath,originalProfile);}
-                        finally{await next.DisposeAsync();}
+                        try{if(metaWritten)RestoreFile(metaPath,originalMeta);}
+                        finally
+                        {
+                            try{if(profileWritten)RestoreFile(profilePath,originalProfile);}
+                            finally{await next.DisposeAsync();}
+                        }
                     }
                 }
                 throw;
@@ -652,6 +730,98 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}
         finally{gate.Release();}
+    }
+
+    internal async Task<object> RefreshModelsAsync(CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            if(relay==null||!Configured)throw new InvalidOperationException("请先启用 API Key 接入。");
+            var saved=Load();
+            using var client=Remote(saved.Remote);
+            using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(20));
+            var (models,classifier)=await FetchModelCatalogAsync(client,timeout.Token);
+
+            string library=Library(), path=Path.Combine(library,saved.Profile+".json");
+            var original=File.ReadAllBytes(path);
+            var profile=JsonNode.Parse(original) as JsonObject;
+            if((string?)ReadProfileMeta(library)["appliedId"]!=saved.Profile||
+                (string?)profile?["inferenceGatewayBaseUrl"]!="http://127.0.0.1:"+saved.Port)
+                throw new InvalidOperationException("Claude Desktop 已切换接入配置，请重新启用 Safe Code API Key。");
+
+            profile!["inferenceModels"]=models;
+            profile.Remove("autoModeClassifierModel");
+            if(classifier!=null)SetClassifier(profile,classifier);
+            else if(profile["claudeCodeSettings"]?["env"] is JsonObject env)
+                env.Remove("CLAUDE_CODE_AUTO_MODE_MODEL");
+            Action? undoPolicy=null;
+            bool profileWritten=false;
+            try
+            {
+                if(OperatingSystem.IsWindows())
+                {
+                    var (owned,changes)=PlanWindowsPolicy(profile,saved);
+                    undoPolicy=ApplyWindowsPolicy(changes);
+                    saved=saved with{WindowsPolicy=owned};
+                }
+                WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
+                profileWritten=true;
+                if(undoPolicy!=null)Save(saved);
+            }
+            catch
+            {
+                try{if(profileWritten)WriteProfileFile(path,original);}
+                finally{undoPolicy?.Invoke();}
+                throw;
+            }
+            return Status();
+        }
+        catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}
+        finally{gate.Release();}
+    }
+
+    private static async Task<(JsonArray Models,string? Classifier)> FetchModelCatalogAsync(HttpClient client,CancellationToken ct)
+    {
+        using var response=await VerifyRemoteAsync(client,ct);
+        if(response.StatusCode==HttpStatusCode.Unauthorized)throw new InvalidOperationException("Key 无效、已过期或已撤销。");
+        response.EnsureSuccessStatusCode();
+        var catalog=JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))?["data"]?.AsArray()
+            ??throw new IOException("模型列表无效。");
+        return ReadModelCatalog(catalog);
+    }
+
+    private static readonly Regex ModelId=new(@"\A[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}(?:\[1m\])?\z");
+    private static readonly string[] EffortDescending=["max","xhigh","high","medium","low"];
+    internal static (JsonArray Models,string? Classifier) ReadModelCatalog(JsonArray catalog)
+    {
+        var models=new JsonArray();string? classifier=null;
+        foreach(var m in catalog)
+        {
+            string? id=(string?)m?["id"];if(id==null||!ModelId.IsMatch(id))continue;
+            if((bool?)m?["auto_mode_classifier"]==true){classifier=id;continue;}
+            string label=(string?)m?["display_name"]??id;
+            string? alias=(string?)m?["desktop_model_id"];
+            var entry=new JsonObject{["name"]=alias!=null&&ModelId.IsMatch(alias)?alias:id,["labelOverride"]=label};
+            foreach(var (src,dst) in new[]{("supports_1m","supports1m"),("prefer_1m","prefer1m"),("anthropic_family_tier","anthropicFamilyTier"),("is_family_default","isFamilyDefault"),("behaves_as","behavesAs")})
+                if(m?[src] is {} value)entry[dst]=value.DeepClone();
+            if(m?["supported_effort_levels"] is JsonArray levels &&
+                Array.Find(EffortDescending,effort=>levels.Any(level=>level is JsonValue value&&
+                    value.TryGetValue<string>(out var supported)&&supported==effort)) is {} maximum)
+                entry["maxEffort"]=maximum;
+            models.Add(entry);
+            if((string?)m?["desktop_ultracode_model_id"] is {} ultracode&&ModelId.IsMatch(ultracode))
+            {
+                var workflow=new JsonObject{["name"]=ultracode,["labelOverride"]=label+" · Ultracode",["maxEffort"]="xhigh"};
+                if(m?["ultracode_supports_1m"] is {} extended)workflow["supports1m"]=extended.DeepClone();
+                if(entry["prefer1m"] is {} preferred)workflow["prefer1m"]=preferred.DeepClone();
+                if(entry["behavesAs"] is {} resolved)workflow["behavesAs"]=resolved.DeepClone();
+                models.Add(workflow);
+            }
+        }
+        if(models.Count==0)throw new IOException("远端 CLI 未提供可用模型。");
+        return (models,classifier);
     }
 
     private static bool IsProfileAccessError(Exception error)=>error is UnauthorizedAccessException or SecurityException or DirectoryNotFoundException or FileNotFoundException;

@@ -70,7 +70,7 @@ internal sealed class DiagnosticTrace(string operation,int generation,bool backg
             "desktop"=>"desktop_launch", "desktop.resolution.save"=>"desktop_display",
             "resources"=>"resource_stats", "environment.assess"=>"environment_assessment",
             "bridge.start"=>"codex_bridge_start", "bridge.stop"=>"codex_bridge_stop", "codex.open"=>"codex_launch",
-            "claudeDesktop.start"=>"claude_desktop_start", "claudeDesktop.stop"=>"claude_desktop_stop", "claudeDesktop.open"=>"claude_desktop_launch",
+            "claudeDesktop.open"=>"claude_desktop_launch",
             "desktopKey.enable"=>"desktop_key_enable", "desktopKey.disable"=>"desktop_key_disable",
             "safeCodeApi.enablePublic"=>"gateway_enable", "safeCodeApi.context" or "window.gateway.open"=>"gateway_open",
             "safeCodeApi.manage"=>GatewayOperation(args), "login.restoreSaved"=>"login_restore",

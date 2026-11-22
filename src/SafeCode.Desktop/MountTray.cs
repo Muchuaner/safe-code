@@ -15,8 +15,8 @@ internal sealed class MountTray : IDisposable
     private readonly Window panel;
     private readonly Button exitButton;
     private readonly TextBlock status=new(),summary=new(),duration=new(),sent=new(),received=new(),files=new();
-    private readonly TextBlock codexState=new(),codexDuration=new(),codexDetail=new(),desktopState=new(),desktopDuration=new(),desktopDetail=new();
-    private readonly Border codexPanel,desktopPanel;
+    private readonly TextBlock codexState=new(),codexDuration=new(),codexDetail=new();
+    private readonly Border codexPanel;
     private readonly Button keyBalance=new(){Content="查询 Key 余额",MinHeight=30,FontSize=MediumText,Margin=new Thickness(0,8,0,0),Visibility=Visibility.Collapsed};
     private readonly TextBlock keyBalanceText=new(){TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,4,0,0),
         FontSize=SmallText,Visibility=Visibility.Collapsed};
@@ -28,15 +28,14 @@ internal sealed class MountTray : IDisposable
     private readonly Action<MountStatus> publish;
     private readonly Func<HostControlStatus?>? readHost;
     private readonly Func<ClaudeCodexStatus?>? readCodex;
-    private readonly Func<ClaudeDesktopStatus?>? readDesktop;
     private readonly Func<bool> keyActive;
     private readonly Func<Task<DesktopKeyAccess.KeyBalance>> readKeyBalance;
     private readonly System.Drawing.Icon appIcon;
     public MountTray(Window owner,Func<MountStatus> read,Action show,Func<Task> retry,Action exit,Action<MountStatus> publish,
-        Func<HostControlStatus?> readHost,Func<ClaudeCodexStatus?> readCodex,Func<ClaudeDesktopStatus?> readDesktop,
+        Func<HostControlStatus?> readHost,Func<ClaudeCodexStatus?> readCodex,
         Func<bool> keyActive,Func<Task<DesktopKeyAccess.KeyBalance>> readKeyBalance)
     {
-        this.read=read;this.publish=publish;this.readHost=readHost;this.readCodex=readCodex;this.readDesktop=readDesktop;
+        this.read=read;this.publish=publish;this.readHost=readHost;this.readCodex=readCodex;
         this.keyActive=keyActive;this.readKeyBalance=readKeyBalance;
         string path=Path.Combine(AppContext.BaseDirectory,"Icons","safe-code-shortcut.ico");
         appIcon=File.Exists(path)?new System.Drawing.Icon(path):new System.Drawing.Icon(System.Drawing.SystemIcons.Shield,32,32);
@@ -63,8 +62,7 @@ internal sealed class MountTray : IDisposable
         }
         content.Children.Add(new Border{Child=metrics,Background=Brush("#f5f8f4"),CornerRadius=new CornerRadius(5)});
         codexPanel=BuildIntegrationPanel("Codex 接入",codexState,codexDuration,codexDetail);
-        desktopPanel=BuildIntegrationPanel("Claude Desktop 接入",desktopState,desktopDuration,desktopDetail);
-        content.Children.Add(codexPanel);content.Children.Add(desktopPanel);
+        content.Children.Add(codexPanel);
         StyleAction(keyBalance,false);
         keyBalance.Click+=async (_,_)=>await RefreshKeyBalanceAsync();
         content.Children.Add(keyBalance);
@@ -179,10 +177,8 @@ internal sealed class MountTray : IDisposable
         sent.ToolTip="发送到服务器："+value.BytesToServer.ToString("N0")+" 字节";received.ToolTip="接收到本机："+value.BytesToLocal.ToString("N0")+" 字节";files.ToolTip="完成文件读写："+value.CompletedFiles.ToString("N0")+" 次"+(value.ActiveTransfers>0?"；正在传输 "+value.ActiveTransfers+" 个":"");
         var host=readHost?.Invoke();
         var codex=readCodex?.Invoke();
-        var desktop=readDesktop?.Invoke();
-        bool codexActive=codex?.Running==true,desktopActive=desktop?.Active==true;
+        bool codexActive=codex?.Running==true,desktopActive=keyActive();
         UpdateCodex(codex);
-        UpdateDesktop(desktop);
         var usingKey=keyActive();
         keyBalance.Visibility=usingKey?Visibility.Visible:Visibility.Collapsed;
         if(!usingKey)keyBalanceText.Visibility=Visibility.Collapsed;
@@ -190,7 +186,6 @@ internal sealed class MountTray : IDisposable
         if(host?.Enabled==true){status.Text=host.State=="connected"?"本机控制开":host.State=="attention"?"本机需处理":"本机重连中";tooltip+="\n"+host.Message;status.Foreground=Brush(host.State=="connected"?"#2f7158":"#a57430");}
         else if(codexActive||desktopActive){status.Text="接入运行中";status.Foreground=Brush("#2f7158");}
         if(codexActive)tooltip+="\nCodex 接入：通道"+(codex!.Connected?"已连接":"重连中")+"；模型调用需由 Codex 发起";
-        if(desktopActive)tooltip+="\nClaude Desktop 接入：VPS Claude Code 通道已连接";
         status.ToolTip=tooltip;
         string iconText=usingKey?"Safe Code · API Key 接入": "Safe Code · "+value.Count+" 个目录 · "+(value.State=="connected"?"守护中":value.State=="reconnecting"?"重连中":value.State=="attention"?"需要处理":"未挂载")+(host?.Enabled==true?" · 本机控制已启用":"")+(codexActive||desktopActive?" · 接入运行中":"");
         icon.Text=iconText.Length>63?iconText[..63]:iconText;
@@ -202,14 +197,6 @@ internal sealed class MountTray : IDisposable
         if(!section.Visible)return;
         codexState.Text=section.State;codexState.Foreground=Brush(codexState.Text=="通道已连接"?"#2f7158":"#a57430");
         codexDuration.Text=section.Duration;codexDetail.Text=section.Detail;codexDetail.ToolTip=section.Tooltip;
-    }
-    private void UpdateDesktop(ClaudeDesktopStatus? desktop)
-    {
-        var section=IntegrationTrayPresenter.Desktop(desktop?.Active==true,desktop?.StartedAt,desktop?.StoppedAt,desktop?.Usage,desktop?.UsageSource??"",DateTimeOffset.UtcNow);
-        desktopPanel.Visibility=section.Visible?Visibility.Visible:Visibility.Collapsed;
-        if(!section.Visible)return;
-        desktopState.Text=section.State;desktopState.Foreground=Brush("#2f7158");
-        desktopDuration.Text=section.Duration;desktopDetail.Text=section.Detail;desktopDetail.ToolTip=section.Tooltip;
     }
     private static string FormatBytes(long bytes)=>bytes>=1024L*1024*1024?(bytes/(1024d*1024*1024)).ToString("0.00")+" GB":bytes>=1024*1024?(bytes/(1024d*1024)).ToString("0.0")+" MB":bytes>=1024?(bytes/1024d).ToString("0.0")+" KB":bytes+" B";
     public void Dispose(){if(disposed)return;disposed=true;timer.Stop();dismissTimer.Stop();icon.Visible=false;icon.Dispose();appIcon.Dispose();panel.Close();}

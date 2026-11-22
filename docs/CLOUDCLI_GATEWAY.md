@@ -1,12 +1,20 @@
 # Claude Desktop 经 CloudCLI 访问 Mac
 
-CloudCLI 模式把 Claude Desktop 当作聊天界面。SafeCode 收到 Messages 请求后，从最后一条用户消息提取任务，再以 CloudCLI Key 调用同一台 VPS 上的 `POST /api/agent`。CloudCLI 自己启动 Claude Code，构建原生系统提示并加载项目工具。对于已绑定的本机目录，SafeCode 在会话首轮附加设备、项目根目录和现有执行通道的说明。续聊使用同一 CloudCLI 会话和原有上下文。已有会话升级后会在下一轮补发一次。若编辑历史删掉了携带说明的消息，网关会在替换消息中补回当前说明。
+## 网关架构约束
+
+API Key 接入的唯一模型调用链路是 **SafeCode 网关 → CloudCLI → Claude Code**。由 CloudCLI 启动 Claude Code。CloudCLI 使用独立发布的上游版本，网关安全改动由 SafeCode 的请求处理、设备授权和部署配置实现。CloudCLI 不可用时，网关直接返回错误。
+
+旧后端的 `DESKTOP_LAUNCHER`、`Channel`、`Conversation` 及 `Manager` 中的直启分支都标记为**待删除**。禁止恢复、扩展或将它们用作兼容回退。网关内直接启动 CLI 的模型目录和订阅用量探测也待迁移并删除。
+
+## 请求链路
+
+CloudCLI 模式把 Claude Desktop 当作聊天界面。SafeCode 收到 Messages 请求后，从最后一条用户消息提取任务，再交给同一台 VPS 上的 CloudCLI。CloudCLI 自己启动 Claude Code，构建原生系统提示并加载项目工具。对于已绑定的本机目录，SafeCode 在会话首轮附加设备、项目根目录和现有执行通道的说明。续聊使用同一 CloudCLI 会话和原有上下文。已有会话升级后会在下一轮补发一次。若编辑历史删掉了携带说明的消息，网关会在替换消息中补回当前说明。
 
 Claude Desktop 的系统提示、客户端工具定义、模型输出预算、全量历史和授权资料不随这条请求转发。SafeCode 在本地处理 Desktop 的网关连通性探测、起名和分支名建议。探测只验证 Desktop 到 SafeCode 的连通性。CloudCLI 用首条消息的开头生成会话标题，因此 SafeCode 将实际任务放在设备说明之前。短任务的标题仍可能带上部分设备说明。
 
 ## CloudCLI 功能清单与 Desktop 适配
 
-以下是 CloudCLI 自托管 1.37.8 的功能和 SafeCode Beta-0.4.4.23的适配情况。部分功能需要先开启网关与 CloudCLI 的已认证连接。对话流使用 Messages SSE，工具输出采用有长度限制的预览。
+以下是 CloudCLI 自托管 1.37.8 的功能和 SafeCode 的适配情况。部分功能需要先开启网关与 CloudCLI 的已认证连接。对话流使用 Messages SSE，执行详情可在 CloudCLI 原会话查看。
 
 ### 对话与执行
 
@@ -15,9 +23,9 @@ Claude Desktop 的系统提示、客户端工具定义、模型输出预算、�
 | 文本聊天、流式输出和续聊 | **已接通。** 保留助手输出顺序和 CloudCLI 会话绑定，区分完成、上游失败和取消 |
 | 项目归类、工作目录和设备隔离 | **已接通。** 按 Desktop 工作目录归到对应的 CloudCLI 项目，同名目录按设备隔离 |
 | 会话标题、分支名建议和连通性探测 | **已接通。** 网关本地处理 Desktop 起名与探测，普通对话的 CloudCLI 标题取首条任务开头。建议回复当前返回空结果 |
-| 模型目录、同会话切换、推理强度和 1M 上下文 | **已接通。** 网关使用允许列表。已认证的会话切换通过 CloudCLI 聊天接口更新同一会话的模型。精确匹配的 CloudCLI 目录条目补充推理强度，已开通的型号可单独启用 1M |
-| 思考状态、上下文压缩和截断 | **文本显示。** 显示 CloudCLI 上报的思考和压缩事件。原生思考块需要上游签名 |
-| 工具执行、子代理、后台任务和工作流 | **文本显示。** 显示部分参数、输出、进度和用量。结构化工具卡片、完整工作流日志和停止单个后台任务目前在 CloudCLI |
+| 模型目录、同会话切换、推理强度和 1M 上下文 | **已接通。** 自动配置的网关读取 CloudCLI 模型目录及其档位和 1M 选项，手动配置使用管理员指定的模型范围。已认证的会话切换通过 CloudCLI 聊天接口更新同一会话的模型 |
+| 思考状态、上下文压缩和截断 | CloudCLI 上报的主助手思考以原生 Messages 思考块显示，压缩和截断以文字提示 |
+| 工具执行、子代理、后台任务和工作流 | Desktop 显示简短的运行提示和汇总。完整参数、输出、逐项折叠及停止单个后台任务在 CloudCLI 原会话中处理 |
 | 选择题 `AskUserQuestion` | **原生接通。** 单选、多选、自定义答案和跳过回到 CloudCLI 当前待答的执行 |
 | 计划模式和 `ExitPlanMode` | **原生接通。** Desktop 进入计划模式后，CloudCLI 也以计划模式执行。网关收到完整计划正文后，先呈现正文，再用 Desktop 的原生确认接收批准或拒绝 |
 | 工具审批、记住许可和 MCP 表单 | **部分接通。** 开启一次性授权后，CloudCLI 发来的工具审批会在 Desktop 展示真实参数，并提供允许一次或拒绝。持久许可和 MCP 表单由 CloudCLI 管理 |
@@ -43,7 +51,7 @@ Claude Desktop 的系统提示、客户端工具定义、模型输出预算、�
 | Cursor、Codex、OpenCode、多端界面、CloudCLI 插件和可选 TaskMaster | CloudCLI 功能。SafeCode 的 Claude Desktop 接入使用 Claude Code 提供方 |
 | 账户登录、凭据、实例配置和 CLI 更新 | 由 CloudCLI 管理。Claude 官方账号的跨设备历史与账号偏好仍由 Claude 账户服务管理 |
 
-普通纯文本任务使用 CloudCLI 的 Agent API。附件和 Desktop 的计划模式通过 CloudCLI 已认证的聊天接口进入同一项目和会话。SafeCode 利用 CloudCLI 的已认证控制通道提交选择、计划确认及停止指令。审批需要和同一轮里的待处理请求匹配，附件保存在 CloudCLI 的上传目录。
+启用原生选择题后，支持选择题的 Desktop 会话通过 CloudCLI 已认证的聊天接口运行，纯文本消息也可以弹出选择框。附件与计划模式同样使用这个接口。其他普通纯文本请求继续使用 CloudCLI 的 Agent API。SafeCode 利用 CloudCLI 的已认证控制通道提交选择、计划确认及停止指令。审批需要和同一轮里的待处理请求匹配，附件保存在 CloudCLI 的上传目录。
 
 ## 准备
 
@@ -72,17 +80,19 @@ Claude Desktop 的系统提示、客户端工具定义、模型输出预算、�
 
 按提示输入已有的 **CloudCLI 网页账户**。SafeCode 通过本机 CloudCLI 登录接口换取短期会话令牌，登录资料保存在 VPS 工作账户权限为 `0600` 的网关配置中。Desktop 用户照常使用原有 SafeCode API Key。重新加载网关后，用户可以在 Desktop 直接完成选择和计划审批。待答请求最多保留五分钟。计划正文缺失或超过完整呈现上限时，可到 CloudCLI 查看并处理对应请求。用 `--no-desktop-questions` 清除此配置。
 
+使用回环监听的自管网关也可以由服务器管理员提供短期 CloudCLI 会话令牌。将网关配置的 `desktopQuestions` 设为 `{"tokenFile":"/run/safe-code-cloudcli-session/session.jwt"}`。令牌文件由网关工作账户持有，权限为 `0600`，有效期不超过五分钟，由本机受信服务在到期前原子替换。SafeCode 只将它发送到本机 CloudCLI。公网直连模式不接受这项配置。
+
 同会话切换模型和编辑重发也使用此认证。可编辑的消息需要在已启用认证的网关上完成并记录锚点。编辑仅调整对话历史，文件或终端产生的变更按其各自的操作处理。
 
 ### 开启一次性工具授权
 
-需要在 Desktop 审批 CloudCLI 的远端工具时，可用同一个 VPS 工作账户启用 CloudCLI 标准权限模式。
+原生选择题和工具审批可以分别启用。若 Claude Desktop 已能点选普通题目，但 Bash、读文件等工具请求仍在 CloudCLI 等待，可用同一个 VPS 工作账户开启逐次审批。网关可复用已配置的短期会话令牌。
 
 ```sh
 /usr/bin/python3 /opt/safe-code/desktop-api/configure_cloudcli.py --desktop-tool-approvals
 ```
 
-Desktop 会先显示待执行工具的参数，再通过原生选择框接收「允许一次」或「拒绝」。按 CloudCLI 自身设置直接允许或禁止的操作继续遵循该设置。用 `--no-desktop-tool-approvals` 关闭此功能。
+重新启动 SafeCode API 服务后，在 Claude Desktop 发起新请求。Desktop 会先显示待执行工具的参数，再通过原生选择框接收「允许一次」或「拒绝」。CloudCLI 1.37.8 的普通工具授权默认等待 60 秒，超时后可重新发起请求。按 CloudCLI 自身设置直接允许或禁止的操作继续遵循该设置。用 `--no-desktop-tool-approvals` 关闭此功能。
 
 ### 启用 1M 上下文
 
@@ -96,7 +106,7 @@ Desktop 会先显示待执行工具的参数，再通过原生选择框接收「
 
 可通过 `--web-origin https://cloud.example.com` 指定 CloudCLI 网页的 HTTPS 地址，供计划确认、工具审批以及较旧客户端的提示打开原会话。省略该选项时，提示显示会话 ID。
 
-配置完成后，重新开启 SafeCode 的 Claude Desktop SSH 接入。使用独立 SafeCode API 服务时，还要重启该服务。准备阶段会通过已授权通道检查一次目标目录的读取权限，不发模型消息。CloudCLI 模式启用后，CloudCLI 或 Mac 控制连接出错会直接返回失败。
+配置完成后，重启 SafeCode API 服务，再使用 API Key 接入 Claude Desktop。准备阶段会通过已授权通道检查一次目标目录的读取权限，不发模型消息。CloudCLI 模式启用后，CloudCLI 或 Mac 控制连接出错会直接返回失败。
 
 ## Mac 文件权限
 

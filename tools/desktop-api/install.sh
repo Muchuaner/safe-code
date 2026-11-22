@@ -16,11 +16,11 @@ if [[ ${SAFECODE_INITIAL_API_INSTALL:-} == 1 ]]; then
         exit 1
     }
 fi
-for file in desktop_gateway.py server.py management.py claude_usage.py pricing.py configure_cloudcli.py host_control_mcp.py device_bridge.py codex_bridge.zip; do
+for file in desktop_gateway.py server.py management.py claude_usage.py pricing.py configure_cloudcli.py host_control_mcp.py device_bridge.py prompt_review.py codex_bridge.zip; do
     [[ -f "$dir/$file" ]] || { printf 'Missing SafeCode gateway component: %s\n' "$file" >&2; exit 1; }
 done
 install -d -m 755 "$app"
-install -m 644 "$dir"/{desktop_gateway,server,management,claude_usage,pricing}.py "$app/"
+install -m 644 "$dir"/{desktop_gateway,server,management,claude_usage,pricing,prompt_review}.py "$app/"
 install -m 644 "$dir"/{configure_cloudcli,host_control_mcp,device_bridge}.py "$app/"
 python3 - "$dir/codex_bridge.zip" "$app" <<'PY'
 import hashlib,sys,zipfile

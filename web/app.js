@@ -45,7 +45,7 @@ function showScreen(name) {
   appWindow.classList.toggle('wide',name==='workspace');
 }
 function stopWork(){for(const timer of advancedTimers)clearTimeout(timer);advancedTimers.clear();if(ipQueryController)ipQueryController.abort();clearTimeout(connectionTimer);runToken++;busy=false;}
-function exit(){stopWork();$('#login-form').reset();appWindow.hidden=true;$('#restore-window').hidden=true;$('#ip-policy-dialog').close();$('#localization-dialog').close();$('#mount-dialog').close();$('#maintenance-result').close();$('#result-body').replaceChildren();$('#client-window').close();$('#client-frame').removeAttribute('src');document.title='Safe Code · 已退出';}
+function exit(){stopWork();$('#login-form').reset();appWindow.hidden=true;$('#restore-window').hidden=true;$('#ip-policy-dialog').close();$('#socks-dialog').close();$('#localization-dialog').close();$('#mount-dialog').close();$('#maintenance-result').close();$('#result-body').replaceChildren();$('#client-window').close();$('#client-frame').removeAttribute('src');document.title='Safe Code · 已退出';}
 $('#close').onclick=exit;
 $('#exit').onclick=exit;
 $('#minimize').onclick=()=>{appWindow.hidden=true;$('#restore-window').hidden=false;};
@@ -342,15 +342,18 @@ for(const holder of document.querySelectorAll('[data-ip-picker]')){
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('.ip-picker'))closeIpPickers();});
 $('#ip-policy-dialog').addEventListener('close',closeIpPickers);
 syncIpPickers();
-function openIpPolicy(change=false){
-  $('#ip-policy-title').textContent=change?'更换入口与出口 IP':'出入口 IP 锁定设置';
+function openIpPolicy(){
+  $('#ip-policy-title').textContent='更换入口与出口 IP';
   $('#ingress-ip-input').value=serverConnection.ingressIp;$('#egress-ip-input').value=serverConnection.egressIp;
   $('#lock-ingress').checked=ipPolicy.lockIngress;$('#lock-egress').checked=ipPolicy.lockEgress;
   for(const id of ['ingress-ip-input','egress-ip-input'])$('#'+id).setCustomValidity('');
   syncIpPickers();$('#ip-policy-dialog').showModal();
 }
-$('#lock-ips').onclick=()=>openIpPolicy();$('#change-ips').onclick=()=>openIpPolicy(true);
+$('#change-ips').onclick=()=>openIpPolicy();
 $('#close-ip-policy').onclick=()=>$('#ip-policy-dialog').close();
+$('#socks-experimental').onclick=()=>$('#socks-dialog').showModal();
+$('#socks-close').onclick=()=>$('#socks-dialog').close();
+$('#socks-form').onsubmit=event=>event.preventDefault();
 for(const id of ['ingress-ip-input','egress-ip-input'])$('#'+id).oninput=()=>$('#'+id).setCustomValidity('');
 $('#ip-policy-form').onsubmit=e=>{
   e.preventDefault();

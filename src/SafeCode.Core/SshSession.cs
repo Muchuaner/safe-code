@@ -80,13 +80,7 @@ public sealed partial class SshSession : IDisposable
             remoteDirectory = (await ExecuteTextAsync("mktemp -d /tmp/safe-code.XXXXXXXX", cancellationToken)).Trim();
             Log?.Invoke("准备远端部署模块…");
             using var sftp = MakeSftp(); await sftp.ConnectAsync(cancellationToken);
-            using var agent = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.agent.py") ?? throw new FileNotFoundException("缺少 Ubuntu 部署模块。");
-            await sftp.UploadFileAsync(agent, remoteDirectory + "/agent.py",cancellationToken); sftp.ChangePermissions(remoteDirectory + "/agent.py", 600);
-            using var network = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.network.py")!;
-            await sftp.UploadFileAsync(network, remoteDirectory + "/network.py",cancellationToken); sftp.ChangePermissions(remoteDirectory + "/network.py", 600);
-            using var usage = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.PublicApi.claude_usage.py")!;
-            await sftp.UploadFileAsync(usage, remoteDirectory + "/claude_usage.py", cancellationToken);
-            sftp.ChangePermissions(remoteDirectory + "/claude_usage.py", 600);
+            await UploadManagementModulesAsync(sftp, remoteDirectory, cancellationToken);
             WriteKnownHost();
             Log?.Invoke("部署模块已就绪，检查服务器环境…");
             Server = await RequestAsync<ServerInfo>("inspect", null, cancellationToken);
@@ -97,6 +91,41 @@ public sealed partial class SshSession : IDisposable
         catch { DisposeMountResource(client); client = null;if(trustRequired!=null)throw trustRequired;throw; }
     }
     public static Dictionary<string,string> ParseOsRelease(string input) => input.Split('\n').Where(x => x.Contains('=')).Select(x => x.Split('=', 2)).ToDictionary(x => x[0].Trim(), x => x[1].Trim().Trim('"'));
+
+    private static async Task UploadManagementModulesAsync(SftpClient sftp, string directory, CancellationToken ct)
+    {
+        foreach (var name in new[] { "agent.py", "network.py", "socks_egress.py" })
+        {
+            using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote." + name)
+                ?? throw new FileNotFoundException("缺少 Ubuntu 部署模块。", name);
+            string path = directory + "/" + name;
+            await sftp.UploadFileAsync(resource, path, ct);
+            sftp.ChangePermissions(path, 600);
+        }
+        using var usage = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.PublicApi.claude_usage.py")!;
+        await sftp.UploadFileAsync(usage, directory + "/claude_usage.py", ct);
+        sftp.ChangePermissions(directory + "/claude_usage.py", 600);
+    }
+
+    public Task<SocksEgressProbe> ProbeSocksEgressAsync(string proxyUrl, CancellationToken ct = default) =>
+        RequestAsync<SocksEgressProbe>("socks_probe", new { proxyUrl }, ct);
+
+    public async Task<ServerInfo> SetSocksEgressAsync(string? proxyUrl, CancellationToken ct = default)
+    {
+        var server = Server ?? throw new InvalidOperationException("尚未连接服务器。");
+        var status = proxyUrl == null
+            ? await RequestAsync<SocksEgressStatus>("socks_disable", null, ct)
+            : await RequestAsync<SocksEgressStatus>("socks_enable", new { proxyUrl }, ct);
+        server.SocksEgress = status;
+        observedEgressIp = status.ObservedIp ?? "";
+        if (!status.Enabled)
+        {
+            try { observedEgressIp = (await RequestAsync<EgressProbe>("egress_probe", null, ct)).Ip; }
+            catch (RemoteOperationException) { Log?.Invoke("出口 IP 暂未确认。"); }
+        }
+        server.ObservedEgressIp = observedEgressIp;
+        return server;
+    }
     private bool VerifyOrConfirm(ConnectionSettings settings, string fingerprint, Func<HostKeyInfo,bool> confirm)
     {
         var store=new HostTrustStore(dataDirectory);var key=store.Describe(settings.Host,settings.Port,fingerprint);
@@ -146,7 +175,7 @@ public sealed partial class SshSession : IDisposable
     {
         var status = await ReadPublicGatewayAsync(false, ct);
         if (!status.TryGetProperty("enabled", out var enabled) || enabled.ValueKind != JsonValueKind.True)
-            throw new InvalidOperationException("请先在 Safe Code 中确认「保证自用」并启用公网。");
+            throw new InvalidOperationException("请先在 Safe Code 的公网网关设置中点击「启用」。");
     }
 
     public async Task<T> RequestAsync<T>(string operation, object? options = null, CancellationToken ct = default)

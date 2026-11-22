@@ -20,13 +20,12 @@ with sync_playwright() as p:
           if(m.op==='services.preferences')result={enabled:false,diagnosticsEnabled:false,confirmed:true};
           if(m.op==='notice.state')result={accepted:fixture.notice};
           if(m.op==='login.load')result=saved;
-          if(m.op==='desktopKey.status')result={configured:false,running:false};
+          if(m.op==='desktopKey.status')result={configured:fixture.remembered,running:fixture.remembered};
           if(m.op==='gateways.resume-settings')result=fixture.remembered?saved:null;
           if(m.op==='connect'){
             if(fixture.failure)error='fixture SSH unavailable';
-            else result={server:{osVersion:'24.04',statuses:{account:true},assignedIps:[],observedEgressIp:''},gatewayWarnings:fixture.warning?['Claude 网关恢复失败：fixture']:[]};
+            else result={server:{osVersion:'24.04',statuses:{account:true},assignedIps:[],observedEgressIp:''},gatewayWarnings:fixture.warning?['Codex 网关恢复失败：fixture']:[]};
           }
-          if(m.op==='claudeDesktop.status')result={active:!fixture.warning,managed:true,installed:true,state:fixture.warning?'attention':'active'};
           if(m.op==='bridge.status')result={running:!fixture.warning,connected:!fixture.warning,configuration:fixture.warning?'':'fixture'};
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result,error}));
         }}};
@@ -38,16 +37,16 @@ with sync_playwright() as p:
                 page.wait_for_selector('#app-message-dialog[open]')
                 assert 'SSH unavailable' in page.locator('#app-message-dialog').inner_text()
             else:
-                page.wait_for_function("calls.includes('claudeDesktop.status')&&calls.includes('bridge.status')")
+                page.wait_for_function("calls.includes('bridge.status')")
                 if warning:page.wait_for_selector('#app-message-dialog[open]')
             enabled=not failure and not warning
-            assert page.locator('#claude-gateway-status').inner_text()=='Claude网关'+('已启用' if enabled else '未启用')
+            assert page.locator('#claude-gateway-status').inner_text()=='Claude 已接入'
             assert page.locator('#codex-gateway-status').inner_text()=='Codex网关'+('已启用' if enabled else '未启用')
         else:
             page.wait_for_timeout(120)
             assert 'connect' not in page.evaluate('calls')
-            assert page.locator('#claude-gateway-status').inner_text()=='Claude网关未启用'
-        assert not set(page.evaluate('calls')) & {'claudeDesktop.start','bridge.start'},'frontend must never forge fresh consent for restore'
+            assert page.locator('#claude-gateway-status').inner_text()==('Claude 已接入' if remembered else 'Claude 未接入')
+        assert not set(page.evaluate('calls')) & {'claudeDesktop.start','claudeDesktop.status','bridge.start'},'frontend must never forge fresh consent for restore'
         assert not errors,errors
         context.close()
     browser.close()

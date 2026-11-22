@@ -47,8 +47,10 @@ class KeyRegistry:
                 CREATE INDEX IF NOT EXISTS request_log_key ON request_log(key_id, at, id);
             """)
             db.execute('BEGIN IMMEDIATE')
-            if 'budget_nanos' not in {row['name'] for row in db.execute('PRAGMA table_info(keys)')}:
-                db.execute('ALTER TABLE keys ADD COLUMN budget_nanos INTEGER')
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(keys)')}
+            for column, kind in (('budget_nanos', 'INTEGER'), ('expires_at', 'INTEGER'), ('allowed_models', 'TEXT')):
+                if column not in columns:
+                    db.execute(f'ALTER TABLE keys ADD COLUMN {column} {kind}')
             if 'cost_nanos' not in {row['name'] for row in db.execute('PRAGMA table_info(usage)')}:
                 db.execute('ALTER TABLE usage ADD COLUMN cost_nanos INTEGER NOT NULL DEFAULT 0')
                 db.execute('ALTER TABLE usage ADD COLUMN unpriced_tokens INTEGER NOT NULL DEFAULT 0')
@@ -71,27 +73,44 @@ class KeyRegistry:
         finally:
             db.close()
 
-    def enabled(self, key_id):
+    def has_marker(self, key_id):
         return (self.root/'keys'/key_id).is_file()
+
+    def active_policy(self, key_id):
+        if not self.has_marker(key_id):
+            return None
+        with self.connect() as db:
+            return db.execute('SELECT allowed_models FROM keys WHERE id=? AND revoked=0 '
+                              'AND (expires_at IS NULL OR expires_at>?)', (key_id, time.time())).fetchone()
+
+    def enabled(self, key_id):
+        return self.active_policy(key_id) is not None
+
+    def model_policy(self, key_id):
+        policy = self.active_policy(key_id)
+        if policy is None:
+            raise GatewayError('API Key has expired or been revoked', 401)
+        return None if policy['allowed_models'] is None else frozenset(json.loads(policy['allowed_models']))
 
     def register(self, key_id, note='', rpm=0, budget_nanos=None):
         with self.connect() as db:
             db.execute('INSERT OR IGNORE INTO keys(id,note,rpm,created,budget_nanos) VALUES(?,?,?,?,?)',
                        (key_id, note, rpm, int(time.time()), budget_nanos))
 
-    def issue(self, key_id, note='', rpm=0, budget_nanos=None, *, activated=False):
+    def issue(self, key_id, note='', rpm=0, budget_nanos=None, *, activated=False,
+              expires_at=None, allowed_models=None):
         marker = self.root/'keys'/key_id
         created = False
         try:
             with self.connect() as db:
                 db.execute('BEGIN IMMEDIATE')
                 ids = db.execute('SELECT id FROM keys').fetchall()
-                if not activated and any(self.enabled(row['id']) for row in ids):
+                if not activated and any(self.has_marker(row['id']) for row in ids):
                     raise ValueError('添加更多 API Key 需要正确的激活码。')
                 if len(ids) >= 500:
                     raise ValueError('Key 记录已达到 500 条上限。')
-                db.execute('INSERT INTO keys(id,note,rpm,created,budget_nanos) VALUES(?,?,?,?,?)',
-                           (key_id, note, rpm, int(time.time()), budget_nanos))
+                db.execute('INSERT INTO keys(id,note,rpm,created,budget_nanos,expires_at,allowed_models) VALUES(?,?,?,?,?,?,?)',
+                           (key_id, note, rpm, int(time.time()), budget_nanos, expires_at, allowed_models))
                 marker.touch(mode=0o600, exist_ok=False)
                 created = True
         except BaseException:
@@ -120,12 +139,13 @@ class KeyRegistry:
         return {'budget_nanos': budget, 'used_nanos': used,
                 'remaining_nanos': None if budget is None else max(0, budget-used)}
 
-    def update(self, key_id, note, rpm, *, budget_nanos=...):
+    def update(self, key_id, note, rpm, *, budget_nanos=..., expires_at=..., allowed_models=...):
         with self.connect() as db:
             if not db.execute('UPDATE keys SET note=?, rpm=? WHERE id=?', (note,rpm,key_id)).rowcount:
                 raise ValueError('找不到该 Key。')
-            if budget_nanos is not ...:
-                db.execute('UPDATE keys SET budget_nanos=? WHERE id=?', (budget_nanos, key_id))
+            for column, value in (('budget_nanos', budget_nanos), ('expires_at', expires_at), ('allowed_models', allowed_models)):
+                if value is not ...:
+                    db.execute(f'UPDATE keys SET {column}=? WHERE id=?', (value, key_id))
 
     def revoke(self, key_id):
         with self.connect() as db:
@@ -136,7 +156,7 @@ class KeyRegistry:
     def delete(self, key_id):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            if self.enabled(key_id):
+            if self.has_marker(key_id):
                 raise ValueError('请先撤销密钥，再彻底删除。')
             db.execute('DELETE FROM request_log WHERE key_id=?', (key_id,))
             db.execute('DELETE FROM usage WHERE key_id=?', (key_id,))
@@ -181,7 +201,7 @@ class KeyRegistry:
     def list(self):
         with self.connect() as db:
             rows = db.execute('''
-                SELECT k.id,k.note,k.rpm,k.created,k.budget_nanos,
+                SELECT k.id,k.note,k.rpm,k.created,k.budget_nanos,k.expires_at,k.allowed_models,k.revoked,
                        COALESCE(SUM(u.cost_nanos),0) AS cost_nanos,
                        COALESCE(SUM(u.unpriced_tokens),0) AS unpriced_tokens,
                        COALESCE(SUM(u.requests),0) AS requests,COALESCE(SUM(u.failures),0) AS failures,
@@ -190,7 +210,17 @@ class KeyRegistry:
                 FROM keys k LEFT JOIN usage u ON u.key_id=k.id GROUP BY k.id
                 ORDER BY k.created DESC,k.id
             ''').fetchall()
-        return [{**dict(row),'enabled':self.enabled(row['id'])} for row in rows]
+        now = time.time()
+        keys = []
+        for row in rows:
+            key = dict(row)
+            enabled = not key.pop('revoked') and self.has_marker(key['id'])
+            key['enabled'] = enabled
+            key['expired'] = enabled and key['expires_at'] is not None and key['expires_at'] <= now
+            if key['allowed_models'] is not None:
+                key['allowed_models'] = json.loads(key['allowed_models'])
+            keys.append(key)
+        return keys
 
     def usage(self, key_id):
         with self.connect() as db:
@@ -341,7 +371,7 @@ class RequestQueue:
                 while True:
                     now = time.monotonic()
                     if not self.registry.enabled(key):
-                        raise GatewayError('API Key was revoked', 401)
+                        raise GatewayError('API Key has expired or been revoked', 401)
                     if disconnected():
                         raise ConnectionAbortedError()
                     if now>=deadline:
@@ -402,11 +432,11 @@ def send_admin(root, request):
         raise ValueError('管理请求过长。')
     try:
         with socket.socket(socket.AF_UNIX) as connection:
-            connection.settimeout(8)
+            connection.settimeout(25)
             connection.connect(str(Path(root)/'admin.sock'))
             connection.sendall(request.rstrip(b'\n')+b'\n')
             with connection.makefile('rb') as stream:
-                response=stream.readline(2*1024*1024)
+                response=stream.readline(6*1024*1024)
     except OSError as error:
         raise ValueError('无法连接 Safe Code API 管理服务。请确认该 VPS 已更新并启动 Safe Code API。') from error
     if not response.endswith(b'\n'):

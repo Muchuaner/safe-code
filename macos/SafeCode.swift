@@ -3,7 +3,7 @@ import WebKit
 import Security
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "Beta-0.4.4.32"
+private let safeCodeVersion = "Beta-0.4.4.33"
 private enum AppError: LocalizedError {
     case message(String)
     case keychainCancelled
@@ -17,7 +17,6 @@ private enum AppError: LocalizedError {
 private enum NativeDiagnosticOperation: String {
     case loginRestore="login_restore", accountCustomization="account_customization"
     case desktopKeyEnable="desktop_key_enable", desktopKeyDisable="desktop_key_disable", desktopKeyRestore="desktop_key_restore"
-    case claudeDesktopStart="claude_desktop_start", claudeDesktopStop="claude_desktop_stop"
     case desktopLaunch="desktop_launch"
 }
 private func json(_ value: Any) -> String {
@@ -74,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var directory = URL(fileURLWithPath:NSHomeDirectory()).appendingPathComponent("Library/Application Support/Safe Code", isDirectory:true)
     private var resources: URL { Bundle.main.resourceURL! }
     private var index: URL { resources.appendingPathComponent("Web/web/index.html") }
+    private func isAppPage(_ url: URL) -> Bool {
+        url.isFileURL && url.standardizedFileURL.path == index.standardizedFileURL.path
+    }
     private var smokeOutput: URL?
     private var captureSmokeScreenshots: Bool { ProcessInfo.processInfo.arguments.contains("--smoke-screenshots") }
     private var servicesWindow: NSWindow?
@@ -220,8 +222,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         do {guard backend?.isRunning==true,let stdin=stdin else{throw AppError.message("客户端核心未运行。")};try stdin.write(contentsOf:Data((json(message)+"\n").utf8))}
         catch {if let id=message["id"] as? String {if let reply=completions.removeValue(forKey:id){reply(.failure(error))}else{answer(id,error:error.localizedDescription)}}}
     }
-    private func request(_ op:String,_ args:[String:Any]=[:],completion:@escaping(Result<Any,Error>)->Void) {
+    private func request(_ op:String,_ args:[String:Any]=[:],deadline:(seconds:TimeInterval,message:String)?=nil,completion:@escaping(Result<Any,Error>)->Void) {
         let id="native-"+UUID().uuidString;completions[id]=completion;send(["id":id,"op":op,"args":args])
+        if let deadline {
+            DispatchQueue.main.asyncAfter(deadline:.now()+deadline.seconds){[weak self] in
+                self?.completions.removeValue(forKey:id)?(.failure(AppError.message(deadline.message)))
+            }
+        }
     }
     private func receive(_ data:Data) {
         readBuffer.append(data)
@@ -249,8 +256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         (view ?? web).evaluateJavaScript("window.safeCodeNativeResponse?.("+json(response)+")",completionHandler:nil)
     }
     func userContentController(_ userContentController: WKUserContentController,didReceive message:WKScriptMessage) {
-        guard message.frameInfo.isMainFrame,let source=message.frameInfo.request.url,source.isFileURL,let body=message.body as? [String:Any] else{return}
-        guard source.standardizedFileURL.path==index.path,let id=body["id"] as? String,let op=body["op"] as? String,let args=body["args"] as? [String:Any] else{return}
+        guard message.frameInfo.isMainFrame,let source=message.frameInfo.request.url,isAppPage(source),let body=message.body as? [String:Any] else{return}
+        guard let id=body["id"] as? String,let op=body["op"] as? String,let args=body["args"] as? [String:Any] else{return}
         if let view=message.webView,view===servicesWeb {
             let allowed=["services.preferences","services.consent","diagnostics.consent","updates.check","updates.download","updates.install","feedback.send"]
             guard allowed.contains(op) else{return}
@@ -270,14 +277,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                     self.withUnlockedSecrets(replyID:id,diagnostic:.accountCustomization){self.request(op,args,completion:$0)}
                 }else{self.answer(id,with:result)}
             }
-        case "claudeDesktop.start":
-            guard !hasDesktopKey else{answer(id,error:"请先停用 API Key 接入，再启用 SSH 接入。");return}
-            guard args["accepted"] as? Bool == true else{answer(id,error:"请先确认 SSH 接入说明。");return}
-            withUnlockedSecrets(replyID:id,diagnostic:.claudeDesktopStart){self.request(op,args,completion:$0)}
-        case "claudeDesktop.stop" where hasLocalFile("desktop-ssh.aes"):
-            withUnlockedSecrets(replyID:id,diagnostic:.claudeDesktopStop){self.request(op,args,completion:$0)}
         case "account.draft.save","desktopKey.enable":
             withUnlockedSecrets(replyID:id,diagnostic:op=="desktopKey.enable" ? .desktopKeyEnable : .accountCustomization){self.request(op,args,completion:$0)}
+        case "desktopKey.status" where smokeOutput != nil:
+            answer(id,["configured":false,"running":false])
         case "desktopKey.status","desktopKey.disable":
             if hasDesktopKey && (op=="desktopKey.disable" || args["interactive"] as? Bool == true) {
                 withUnlockedSecrets(replyID:id,diagnostic:op=="desktopKey.disable" ? .desktopKeyDisable : .desktopKeyRestore){self.request(op,args,completion:$0)}
@@ -373,6 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let shared=zip(dialogWindows,requestedDialogs).prefix(while:{$0.id==$1.id}).count
         guard shared != dialogWindows.count || shared != requestedDialogs.count else{return}
         let previous=dialogHost
+        let focusGateway=requestedDialogs.isEmpty && dialogWindows.last?.id=="claude-desktop-dialog" && gatewayWindow?.isVisible==true
         let previousRemains=shared==dialogWindows.count
         if previousRemains {
             // A snapshot stays only in memory and does not take focus or receive input.
@@ -410,8 +414,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         active.ignoresMouseEvents=false
         let front=dialogWindows.last?.id ?? ""
         web.evaluateJavaScript("window.safeCodePresentNativeDialog?.("+jsString(front)+")",completionHandler:nil)
-        active.makeKeyAndOrderFront(nil)
-        active.makeFirstResponder(web)
+        if focusGateway { gatewayWindow?.makeKeyAndOrderFront(nil) }
+        else {
+            active.makeKeyAndOrderFront(nil)
+            active.makeFirstResponder(web)
+        }
     }
     private func answer(_ id:String,with result:Result<Any,Error>) {
         switch result {
@@ -473,10 +480,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     private func openGateway(_ id:String) {
         if let panel=gatewayWindow {panel.makeKeyAndOrderFront(nil);answer(id,true);return}
-        guard !gatewayOpening else{answer(id,true);return}
+        guard !gatewayOpening else{answer(id,error:"网关管理正在打开，请稍候。");return}
         if smokeOutput != nil {presentGateway(context:nil);answer(id,true);return}
         gatewayOpening=true
-        request("safeCodeApi.context"){[weak self] result in
+        request("safeCodeApi.context",deadline:(33,"打开网关管理超时。")){[weak self] result in
             guard let self=self else{return}
             self.gatewayOpening=false
             switch result {
@@ -519,7 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 let event: [String: Any] = ["key_id":key["id"] ?? "", "model":"claude-example", "at":1795225500,
                     "outcome":"success", "status":200, "wait_ms":82, "duration_ms":1600, "tokens":18]
                 let model: [String: Any] = ["model":"claude-example", "requests":42, "failures":2, "tokens":243810, "cost_nanos":104_300_000]
-                var fixture: [String: Any] = ["keys":[key],"active_count":0,"waiting":0,"concurrency":0,"concurrency_text":"0",
+                var fixture: [String: Any] = ["keys":[key],"key_policy_supported":true,"active_count":0,"waiting":0,"concurrency":0,"concurrency_text":"0",
                     "billing":["cost_nanos":104_300_000],"origin":"https://gateway.example.test","recent":[event],"models":[model]]
                 if let period=args["analytics"] as? String {
                     let step=["1h":300,"24h":3600,"7d":86400][period] ?? 300
@@ -542,7 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
         guard let context=gatewayContext else{reply(.failure(AppError.message("SSH 会话已变更，请重新打开网关管理。")));return}
         guard !gatewayMutationPending else{reply(.failure(AppError.message("请等待当前网关操作完成。")));return}
-        let modifies=["issue","update","revoke","delete","set_port","set_origin","set_concurrency","refresh_ticket"].contains(action)
+        let modifies=["issue","update","revoke","delete","set_port","set_origin","set_concurrency","set_prompt_review","refresh_ticket"].contains(action)
         if modifies {gatewayMutationPending=true}
         var options=args
         options["action"]=action
@@ -555,10 +562,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func inspectGatewayWindow(_ id:String,args:[String:Any]) {
         guard let panel=gatewayWindow,let content=gatewayPanel else{answer(id,["visible":false]);return}
         if args["close"] as? Bool == true {panel.performClose(nil);answer(id,gatewayWindow==nil);return}
+        if args["createKey"] as? Bool == true {content.createKey()}
+        if args["cancelKey"] as? Bool == true,let sheet=panel.attachedSheet {panel.endSheet(sheet,returnCode:.alertSecondButtonReturn)}
         let previous=dialogHost.frame
         let gatewayOrigin=panel.frame.origin
         if args["move"] as? Bool == true {panel.setFrameOrigin(NSPoint(x:panel.frame.minX+20,y:panel.frame.minY))}
-        answer(id,["visible":panel.isVisible,"ready":content.ready,
+        answer(id,["visible":panel.isVisible,"ready":content.ready,"keyEditor":panel.attachedSheet != nil,
                    "native":panel.styleMask.contains(.titled)&&panel.isMovable&&panel.contentViewController===content,
                    "landscape":panel.frame.width>panel.frame.height,"moved":panel.frame.origin != gatewayOrigin,
                    "parentUnmoved":dialogHost.frame==previous])
@@ -695,7 +704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             updateStatusSize()
             if running && popover.isShown {refreshKeyBalance()}
         }
-        guarding=count>0 || (host["enabled"] as? Bool ?? false) || running || (message["desktopSshRunning"] as? Bool ?? false)
+        guarding=count>0 || (host["enabled"] as? Bool ?? false) || running
         stateText.stringValue=(host["enabled"] as? Bool ?? false) ? "本机控制已启用":mount["message"] as? String ?? "未挂载目录"
         let seconds=Int((mount["durationSeconds"] as? Double ?? 0));durationText.stringValue="\(count) 个目录  ·  \(seconds/3600):\(String(format:"%02d",seconds/60%60)):\(String(format:"%02d",seconds%60))"
         values[0].stringValue=bytes(mount["bytesToServer"] as? Double ?? 0);values[1].stringValue=bytes(mount["bytesToLocal"] as? Double ?? 0);values[2].stringValue="\(mount["completedFiles"] as? Int ?? 0) 次"
@@ -706,8 +715,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func fail(_ message:String){if let smoke=smokeOutput {try? Data(json(["success":false,"error":message]).utf8).write(to:smoke);return};let alert=NSAlert();alert.messageText="Safe Code";alert.informativeText=message;alert.alertStyle = .warning;alert.runModal()}
     func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         guard let url=action.request.url else{decisionHandler(.cancel);return}
-        let expected=index
-        if url.isFileURL && url.standardizedFileURL.path==expected.path {decisionHandler(.allow)}else{decisionHandler(.cancel);if action.navigationType == .linkActivated{openURL(url.absoluteString)}}
+        if isAppPage(url) {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.cancel)
+            if action.navigationType == .linkActivated { openURL(url.absoluteString) }
+        }
     }
     func webView(_ webView:WKWebView,createWebViewWith configuration:WKWebViewConfiguration,for navigationAction:WKNavigationAction,windowFeatures:WKWindowFeatures)->WKWebView?{if let url=navigationAction.request.url{openURL(url.absoluteString)};return nil}
     func webView(_ webView:WKWebView,didStartProvisionalNavigation navigation:WKNavigation!) {
@@ -844,7 +857,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           document.querySelector('#update-login-password').hidden=false;
           document.querySelector('#host-state').textContent='已连接';
           document.querySelector('#claude-desktop-state').textContent='已接入';
-          document.querySelector('#claude-gateway-status').textContent='Claude网关已启用';
+          document.querySelector('#claude-gateway-status').textContent='Claude 已接入';
           document.querySelector('#claude-gateway-status').classList.remove('inactive');
           await waitFor(()=>innerWidth===740,'home window width');
           if(getComputedStyle(document.querySelector('.window'),'::after').content!=='none')throw Error('Duplicate macOS border shown');
@@ -857,23 +870,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           await rpc('window.smoke.screenshot',{name:'homepage'});
         }
         const desktopDialog=document.querySelector('#claude-desktop-dialog');
+        const gatewayForm=document.querySelector('#safe-code-api-form');
+        const gatewayButtons=[...gatewayForm.querySelectorAll('.config-footer button')];
+        if(gatewayButtons.map(button=>button.textContent.trim()).join(',')!=='启用,管理网关')
+          throw Error('Unexpected gateway actions');
         if(capture){
-          document.querySelector('#claude-desktop-key-note').textContent='本机只保存回环通道凭据。已有的 Claude Desktop 配置会保留，启用前需先停用当前接入。';
-          document.querySelector('#claude-desktop-progress').textContent='请先停用 API Key 接入，再启用 SSH 接入。';
-          const status=document.querySelector('#safe-code-api-progress');
-          status.textContent='正在读取公网状态…';status.hidden=false;
-          document.querySelector('#claude-desktop-install').hidden=true;
-          document.querySelector('#claude-desktop-open').hidden=false;
+          gatewayForm.querySelector('#claude-desktop-dialog-state').textContent='公网已启用';
+          gatewayForm.querySelector('#safe-code-api-progress').textContent='点击「管理网关」创建 API Key，再回到主界面粘贴。';
+          gatewayButtons[0].textContent='已启用';
+          gatewayButtons[0].disabled=true;
+          gatewayButtons[1].disabled=false;
         }
         desktopDialog.showModal();
         await waitPanel('claude-desktop-dialog',1);
         await waitFor(async()=>{
           const state=await rpc('window.smoke.dialog');
-          return Math.abs(state.contentHeight-Math.max(120,Math.ceil(document.querySelector('#claude-desktop-form').getBoundingClientRect().height)))<=1;
-        },'Claude Desktop window content height');
+          return Math.abs(state.contentHeight-Math.max(120,Math.ceil(gatewayForm.getBoundingClientRect().height)))<=1;
+        },'Public gateway window content height');
         if(capture)await rpc('window.smoke.screenshot',{name:'desktop-access'});
         await rpc('window.gateway.open');
         await waitFor(async()=>{const state=await rpc('window.smoke.gateway');return state.ready&&state.visible;},'gateway window');
+        await rpc('window.smoke.gateway',{createKey:true});
+        await waitFor(async()=>{const state=await rpc('window.smoke.gateway');return state.keyEditor;},'gateway key editor');
+        await rpc('window.smoke.gateway',{cancelKey:true});
+        await waitFor(async()=>{const state=await rpc('window.smoke.gateway');return !state.keyEditor;},'gateway key editor closed');
         if(capture){
           await rpc('window.smoke.screenshot',{name:'gateway'});
           await rpc('window.smoke.gatewayTab',{index:1});

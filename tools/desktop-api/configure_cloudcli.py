@@ -17,7 +17,8 @@ import stat
 import sys
 import tempfile
 
-from desktop_gateway import (CLOUDCLI_CONFIG, GatewayError, cloudcli_config, cloudcli_extended_context,
+from desktop_gateway import (CLOUDCLI_CONFIG, CLOUDCLI_MODEL_ID, DEFAULT_CLOUDCLI_MODELS, DEFAULT_CLOUDCLI_PROJECT, GatewayError,
+                             cloudcli_config, cloudcli_extended_context,
                              cloudcli_web_login, cloudcli_web_origin, cloudcli_websocket,
                              load_cloudcli_config, verify_cloudcli_agent)
 from host_control_mcp import ToolError, bridge_arguments, call_tool, mac_workspace_path
@@ -25,7 +26,6 @@ from host_control_mcp import ToolError, bridge_arguments, call_tool, mac_workspa
 
 COMPONENT = '/opt/safe-code/desktop-api/host_control_mcp.py'
 SERVER_NAME = 'safecode_host'
-MODEL_ID = re.compile(r'claude-[a-z0-9]+(?:-[a-z0-9]+)*')
 CLIENT_ID = re.compile(r'[a-f0-9]{20}')
 MAX_SETTINGS_BYTES = 16 * 1024 * 1024
 
@@ -161,8 +161,9 @@ def prepare_public_gateway(home, state, options):
     generated = None
     with setup_lock(config_path.parent):
         config = load_cloudcli_config(home)
+        questions = config['desktopQuestions'] if config else None
         trusted_ingress = config and (config['hostControl'] or (
-            config['desktopQuestions'] and not config['desktopToolApprovals']))
+            questions and ('tokenFile' in questions or not config['desktopToolApprovals'])))
         bind = listener.get('bind', '127.0.0.1' if trusted_ingress else '0.0.0.0')
         direct = not ipaddress.ip_address(bind).is_loopback
         if config is None:
@@ -173,13 +174,13 @@ def prepare_public_gateway(home, state, options):
                     return {'cloudcliKeyRequired': True}
                 cloudcli_websocket()
                 key, generated = provision_cloudcli_key(pending_path, needs_setup)
-            project = home/'.local/share/safe-code/cloudcli-workspace'
+            project = home/DEFAULT_CLOUDCLI_PROJECT
             if not project.resolve().is_relative_to(home):
                 raise ValueError('CloudCLI 项目目录必须位于 VPS 工作账户的主目录内。')
             project.mkdir(mode=0o700, parents=True, exist_ok=True)
             config = {
                 'apiKey': key, 'projectPath': str(project), 'port': 3001,
-                'models': ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
+                'models': list(DEFAULT_CLOUDCLI_MODELS),
             }
             if generated:
                 config.update(desktopQuestions=generated, desktopToolApprovals=True)
@@ -215,7 +216,7 @@ def setup_lock(directory):
 def configure(args, home, config_path):
     original_config, old_config = read_object(config_path, allow_missing=True)
     origin = cloudcli_web_origin(args.web_origin if args.web_origin is not None else old_config.get('webOrigin'))
-    default_project = home/'.local/share/safe-code/cloudcli-workspace'
+    default_project = home/DEFAULT_CLOUDCLI_PROJECT
     project = args.project or default_project
     if not project.is_absolute():
         raise ValueError('Use an absolute CloudCLI project directory on the VPS.')
@@ -229,7 +230,7 @@ def configure(args, home, config_path):
                                       or any(ord(char) < 32 for char in root) for root in roots):
         raise ValueError('Use an absolute folder on the Mac, such as /Users/example/Desktop.')
     models = list(dict.fromkeys(args.models))
-    if not 1 <= args.port <= 65535 or not 1 <= len(models) <= 32 or any(not MODEL_ID.fullmatch(model) or len(model) > 80 for model in models):
+    if not 1 <= args.port <= 65535 or not 1 <= len(models) <= 32 or any(not CLOUDCLI_MODEL_ID.fullmatch(model) or model.endswith('[1m]') for model in models):
         raise ValueError('Provide valid CloudCLI port and explicit Claude model IDs.')
     previous = old_config.get('hostControl')
     prior_project = old_config.get('projectPath')

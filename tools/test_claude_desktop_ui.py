@@ -1,29 +1,18 @@
 """Claude Desktop 接入卡片/弹窗夹具；不读写真实注册表，不发模型请求。"""
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 root=Path(__file__).resolve().parents[1]
-secret='sk-fixture-never-in-dom-9f3c'
-base={"active":False,"managed":False,"configured":True,"installed":True,"state":"configured",
-      "message":"已识别现有官方网关配置，可接管而无需重新填写密钥",
-      "endpoint":"https://gateway.example/anthropic","model":"claude-sonnet-4-5-20250929","display":"Opus",
-      "credentialPresent":True,"takeover":False,"startedAt":None,"stoppedAt":None,
-      "usage":{"available":True,"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0,"note":None},
-      "usageSource":"Claude Desktop 官方本地会话"}
-active={**base,"active":True,"managed":True,"state":"active","takeover":True,"startedAt":"2026-11-17T01:00:00Z",
-        "usage":{"available":True,"input":100,"output":10,"cacheRead":900,"cacheWrite":50,"total":1060,"note":None}}
-base.update(model='claude-opus-5-5',endpoint='',state='unconfigured')
-active.update(model='claude-opus-5-5',endpoint='http://127.0.0.1:18899',takeover=False,
-              message='SSH 网关已连接，可在 Claude Desktop 中开始对话')
 with sync_playwright() as p:
     browser=p.chromium.launch(executable_path='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless=True)
     page=browser.new_page(viewport={'width':1000,'height':900});errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
     page.add_init_script('''
-      window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;window.claudeStartCalls=[];window.claudeStopCalls=0;window.clientOpenCalls=[];window.clientOpenError=null;
-      window.claudeWarningAccepts=0;window.keyEnableCalls=[];window.keyDisableCalls=0;
+      window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;window.calls=[];window.clientOpenCalls=[];window.clientOpenError=null;
+      window.keyEnableCalls=[];window.keyDisableCalls=0;
       window.keyAuthorizations=[];window.keyCanceled=0;
       const hostDisabled={enabled:false,state:'disabled',alias:'mac',command:'',message:'未启用'};
       window.hostState=hostDisabled;window.hostEnableCalls=[];window.hostEnableError=null;
       window.chrome={webview:{postMessage(m){
+        calls.push(m);
         if(m.op==='connect'){
           const server={statuses:{account:true},osVersion:'24.04',assignedIps:[],observedEgressIp:''};
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{server}}));return;
@@ -38,13 +27,14 @@ with sync_playwright() as p:
         if(m.op==='host.status'||m.op==='host.enable'){
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.hostState}));return;
         }
-        if(m.op==='notice.claudeDesktop.accept'){
-          window.claudeWarningAccepts++;
-          localStorage.setItem('claude-desktop-warning-fixture','accepted');
-        }
-        if(m.op.startsWith('notice.claudeDesktop.')){
-          const accepted=localStorage.getItem('claude-desktop-warning-fixture')==='accepted';
-          queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:accepted}));return;
+        if(m.op==='safeCodeApi.publicStatus'&&window.holdGatewayStatus){window.heldGatewayStatus=m.id;return;}
+        if(m.op==='safeCodeApi.install'&&window.holdGatewayInstall){window.heldGatewayInstall=m.id;return;}
+        if(m.op==='window.gateway.open'&&window.holdGatewayManagement)return;
+        if(m.op==='safeCodeApi.publicStatus'||m.op==='safeCodeApi.enablePublic'){
+          if(m.op==='safeCodeApi.enablePublic')window.gatewayEnabled=true;
+          const result=window.gatewayMissing?{installed:false,enabled:false}:
+            {enabled:!!window.gatewayEnabled,backend:'cloudcli',gatewayRevision:10};
+          queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result}));return;
         }
         if(m.op.startsWith('desktopKey.')){
           if(m.op==='desktopKey.status'&&window.keyStatusFailure){
@@ -69,10 +59,7 @@ with sync_playwright() as p:
           if(m.op==='desktopKey.disable'){window.keyDisableCalls++;window.keyConfigured=false;window.keyRunning=false;}
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{configured:!!window.keyConfigured,running:!!window.keyRunning}}));return;
         }
-        if(m.op==='claudeDesktop.start'){window.claudeStartCalls.push(m);queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.__claudeActive}));return;}
-        if(m.op==='claudeDesktop.stop'){window.claudeStopCalls++;queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.__claudeStopped}));return;}
         if(m.op==='claudeDesktop.open'||m.op==='codex.open'){window.clientOpenCalls.push(m.op);queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:'已请求打开客户端。',error:window.clientOpenError}));return;}
-        if(m.op==='claudeDesktop.status'){queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.__claudeStatus}));return;}
         const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:m.op==='notice.state'?{accepted:false}:null;
         queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result}));
       }}};
@@ -97,6 +84,10 @@ with sync_playwright() as p:
     assert page.locator('#desktop-key-form .config-description br').count()==1
     assert page.locator('#desktop-key-progress').inner_text().startswith('已启用。\n首次接入')
     assert page.locator('#desktop-key-open').inner_text()=='打开\nClaude Desktop'
+    page.locator('#desktop-key-refresh').click()
+    expect(page.locator('#desktop-key-progress')).to_contain_text('模型列表已更新')
+    assert page.evaluate("calls.filter(m=>m.op==='desktopKey.refreshModels').map(m=>m.args)")==[{}]
+    assert page.evaluate("window.keyEnableCalls.length===1 && window.keyDisableCalls===0")
     page.locator('#desktop-key-close').click()
     page.evaluate("showScreen('workspace');switchMode('maintenance')")
     page.evaluate("window.keyRunning=false;window.keyStatusFailure={result:{configured:true,running:false,error:'本机策略无法访问'}}")
@@ -178,17 +169,22 @@ with sync_playwright() as p:
     assert 'Claude Desktop 接入' in page.locator('.claude-desktop-card h3').inner_text()
     # The client launch controls follow active integration status.
     for card,launch in [('.claude-desktop-card','#claude-desktop-launch'),('.bridge-card','#codex-launch')]:
-        assert page.locator(card+' .bridge-card-actions button').all_text_contents()==['打开客户端','设置']
+        settings='网关设置' if card=='.claude-desktop-card' else '设置'
+        assert page.locator(card+' .bridge-card-actions button').all_text_contents()==['打开客户端',settings]
         assert page.locator(card+' .client-logo').evaluate('e=>e.complete&&e.naturalWidth>0')
         assert page.locator(launch).is_disabled()
     assert page.locator('.claude-desktop-card .client-card-heading #desktop-key-settings').is_visible()
     assert '使用 API Key 或 SSH' not in page.locator('.claude-desktop-card').inner_text()
-    page.evaluate("status=>window.safeCodeClaudeDesktopStatus(status)",active)
+    workspace_key.click()
+    page.locator('#desktop-key-input').fill('sc1.fixture')
+    page.locator('#desktop-key-enable').click()
+    expect(page.locator('#desktop-key-open')).to_be_visible()
+    page.locator('#desktop-key-close').click()
+    expect(page.locator('#claude-gateway-status')).to_have_text('Claude 已接入')
     page.evaluate("window.safeCodeClaudeBridgeStatus({running:true,connected:true,configuration:'fixture'})")
     for launch in ['#claude-desktop-launch','#codex-launch']:page.locator(launch).click()
     page.wait_for_function('window.clientOpenCalls.length===2')
     assert page.evaluate('window.clientOpenCalls')==['claudeDesktop.open','codex.open']
-    assert not page.evaluate('window.claudeStartCalls.length')
     page.evaluate("window.clientOpenError='未检测到 Codex，请先安装官方客户端。'")
     page.locator('#codex-launch').click()
     page.wait_for_selector('#app-message-dialog[open]')
@@ -197,127 +193,80 @@ with sync_playwright() as p:
     page.evaluate('window.clientOpenError=null')
     # The outline covers the viewport but does not intercept client controls.
     assert page.locator('.window').evaluate("e=>{const s=getComputedStyle(e,'::after');return s.borderTopWidth==='1px'&&s.pointerEvents==='none'&&s.position==='fixed'}")
-    page.evaluate("status=>window.__claudeStatus=status",base)
-    page.evaluate("window.safeCodeClaudeDesktopStatus(window.__claudeStatus)")
-    assert page.locator("#claude-gateway-status").inner_text()=="Claude网关未启用"
-    assert "inactive" in page.locator("#claude-gateway-status").get_attribute("class")
+    page.clock.install()
+    page.evaluate("window.holdGatewayStatus=true")
     page.evaluate("showScreen('login');document.querySelector('#ip').value='192.0.2.42';document.querySelector('#username').value='fixture';document.querySelector('#login-form').onsubmit({preventDefault(){}})")
     page.wait_for_function("!document.querySelector('#claude-desktop-manage').disabled")
     page.evaluate("switchMode('maintenance')")
-    def open_desktop_settings():
-        page.evaluate("() => { window.settingsAction=document.querySelector('#claude-desktop-manage').onclick(); }")
-    for dismiss in ('#app-message-cancel','#app-message-dialog [data-dialog-dismiss]','escape'):
-        open_desktop_settings()
-        page.wait_for_selector('#app-message-dialog[open]')
-        assert page.locator('#app-message-cancel').inner_text()=='我手滑了'
-        assert page.locator('#app-message-confirm').inner_text()=='我知道我在做什么'
-        assert page.locator('#app-message-body').inner_text()=='⚠️本功能未经过大范围验证，如果担心你的账户安全，请不要启用，除非您有非用不可桌面端的需求，否则请使用CloudCLI 网页界面'
-        assert not page.locator('#claude-desktop-dialog').is_visible()
-        if dismiss=='escape':page.keyboard.press('Escape')
-        else:page.locator(dismiss).click()
-        page.evaluate('window.settingsAction')
-        assert page.evaluate('window.claudeWarningAccepts')==0
-        assert not page.locator('#claude-desktop-dialog').is_visible()
-    open_desktop_settings()
-    page.wait_for_selector('#app-message-dialog[open]')
-    page.locator('#app-message-confirm').click()
-    page.locator('#host-dialog').wait_for()
-    assert not page.locator('#host-risk').is_checked()
-    assert page.locator('#host-enable').is_disabled()
-    assert not page.locator('#claude-desktop-dialog').is_visible()
-    assert page.evaluate('window.claudeStartCalls.length')==0
-    page.locator('#host-close').click()
-    page.evaluate('window.settingsAction')
-    assert not page.locator('#claude-desktop-dialog').is_visible()
-    open_desktop_settings()
-    page.locator('#host-dialog').wait_for()
-    page.evaluate("window.hostEnableError='本机登录未验证'")
-    page.locator('#host-risk').check()
-    page.locator('#host-enable').click()
-    page.get_by_text('本机登录未验证',exact=True).wait_for()
-    assert not page.locator('#host-risk').is_checked()
-    assert page.evaluate('window.claudeStartCalls.length')==0
-    page.evaluate("window.hostEnableError=null")
-    page.locator('#host-risk').check()
-    page.locator('#host-enable').click()
-    page.locator('#claude-desktop-dialog').wait_for()
-    page.evaluate('window.settingsAction')
-    assert page.evaluate('window.claudeWarningAccepts')==1
-    assert page.evaluate('window.hostEnableCalls.every(call=>call.riskAccepted===true)')
-    assert not page.locator('#host-dialog').is_visible()
-    assert page.evaluate('window.claudeStartCalls.length')==0
-    page.wait_for_function("document.querySelector('#claude-desktop-dialog').open")
-    assert page.locator('#claude-desktop-gateway').count()==0
-    assert page.locator('#claude-desktop-key').count()==0
-    assert page.locator('#claude-desktop-model, #claude-desktop-display').count()==0
-    assert 'Claude 模型标识' not in page.locator('#claude-desktop-form').inner_text()
-    assert 'VPS' in page.locator('#claude-desktop-existing').inner_text()
-    assert page.locator('#claude-desktop-start').inner_text()=='部署并启用'
-    page.evaluate("status=>window.__claudeActive=status",active)
-    page.locator('#claude-desktop-consent').check()
-    page.locator('#claude-desktop-start').click()
-    page.wait_for_function('window.claudeStartCalls.length===1')
-    call=page.evaluate('window.claudeStartCalls[0]')
-    assert call['args']=={'accepted':True},call
-    assert page.locator('#claude-gateway-status').inner_text()=='Claude网关已启用'
-    assert 'inactive' not in page.locator('#claude-gateway-status').get_attribute('class')
-    assert page.locator('#claude-desktop-stop').is_visible()
-    assert page.locator('#claude-desktop-consent').is_disabled()
-    assert page.locator('#claude-desktop-stop').inner_text()=='停止桥接'
-    assert '127.0.0.1' in page.locator('#claude-desktop-existing').inner_text()
-    assert 'Opus' not in page.locator('#claude-desktop-existing').inner_text()
-    assert '模型权限' not in page.locator('.claude-desktop-card').inner_text()
-    evidence=root/'.local/evidence/claude-desktop-scroll'
-    evidence.mkdir(parents=True,exist_ok=True)
+    page.locator('#claude-desktop-manage').click()
+    settings=page.locator('#claude-desktop-dialog')
+    footer=settings.locator('.config-footer')
+    expect(footer.locator('button')).to_have_text(['启用','管理网关'])
+    progress=page.locator('#safe-code-api-progress')
+    close_settings=page.locator('#claude-desktop-close')
+    enable_gateway=page.locator('#safe-code-api-enable')
+    manage_gateway=page.locator('#safe-code-api-manage')
+    expect(progress).to_contain_text('正在读取公网网关状态')
+    expect(manage_gateway).to_be_disabled()
+    expect(close_settings).to_be_enabled()
+    close_settings.click()
+    expect(settings).to_be_hidden()
+    page.locator('#claude-desktop-manage').click()
+    page.wait_for_function('!!window.heldGatewayStatus')
+    page.clock.fast_forward(13000)
+    expect(progress).to_contain_text('读取公网网关状态超时')
+    expect(progress).to_contain_text('点击「启用」重试')
+    expect(enable_gateway).to_be_enabled()
+    page.evaluate("""safeCodeNativeResponse({
+        id:heldGatewayStatus,result:{enabled:true,backend:'cloudcli',gatewayRevision:10}
+    });window.holdGatewayStatus=false;window.gatewayMissing=true;window.holdGatewayInstall=true""")
+    expect(enable_gateway).to_be_enabled()
+    expect(manage_gateway).to_be_disabled()
+    enable_gateway.click()
+    expect(progress).to_contain_text('正在准备 CloudCLI 并部署公网网关')
+    expect(progress).to_contain_text('可以关闭此窗口')
+    close_settings.click()
+    expect(settings).to_be_hidden()
+    expect(workspace_key).to_be_enabled()
+    page.locator('#claude-desktop-manage').click()
+    expect(progress).to_contain_text('正在准备 CloudCLI 并部署公网网关')
+    expect(enable_gateway).to_be_disabled()
+    assert page.evaluate("calls.filter(m=>m.op==='safeCodeApi.install').length===1")
+    page.evaluate("""window.gatewayMissing=false;
+        safeCodeNativeResponse({id:heldGatewayInstall,error:'测试部署失败。'})""")
+    expect(progress).to_contain_text('测试部署失败。')
+    expect(enable_gateway).to_be_enabled()
+    enable_gateway.click()
+    expect(page.locator('#safe-code-api-enable')).to_have_text('已启用')
+    expect(page.locator('#safe-code-api-manage')).to_be_enabled()
+    assert page.evaluate("calls.filter(m=>m.op==='safeCodeApi.enablePublic').map(m=>m.args)")==[{'accepted':True}]
+    assert not page.evaluate("calls.some(m=>m.op==='host.enable'||m.op.startsWith('notice.claudeDesktop')||['claudeDesktop.start','claudeDesktop.stop','claudeDesktop.status'].includes(m.op))")
+    assert not page.locator('#app-message-dialog').is_visible()
     for width,height in [(740,634),(360,600),(360,400)]:
         page.set_viewport_size({'width':width,'height':height})
-        content=page.locator('.claude-desktop-content')
-        footer=page.locator('#claude-desktop-form .config-footer')
-        header=page.locator('#claude-desktop-dialog>.titlebar')
-        if height<=400:assert content.evaluate('e=>e.scrollHeight>e.clientHeight')
-        for fraction in (0,.5,1):
-            content.evaluate('(e,f)=>e.scrollTop=(e.scrollHeight-e.clientHeight)*f',fraction)
-            page.wait_for_timeout(50)
-            rects=[locator.bounding_box() for locator in (header,content,footer)]
-            top,body,bottom=rects
-            assert top['y']+top['height']<=body['y']+1,rects
-            assert body['y']+body['height']<=bottom['y']+1,rects
-            button=page.locator('#claude-desktop-stop').bounding_box()
-            assert button['y']>=bottom['y'] and button['y']+button['height']<=height,rects
-            assert footer.evaluate("e=>{const r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}")
-        # The client entry remains fully reachable above the footer at the bottom.
-        opened=page.locator('#claude-desktop-open').bounding_box()
-        assert opened['y']>=body['y'] and opened['y']+opened['height']<=bottom['y'],(opened,rects)
-        page.screenshot(path=str(evidence/f'active-{width}x{height}.png'))
-    before=footer.bounding_box()
-    content.hover();page.mouse.wheel(0,-10000)
-    page.wait_for_function("document.querySelector('.claude-desktop-content').scrollTop===0")
-    page.wait_for_timeout(300)
-    after=footer.bounding_box()
-    assert abs(before['y']-after['y'])<1,(before,after)
+        box=settings.bounding_box()
+        assert box['x']>=0 and box['x']+box['width']<=width
+        assert footer.evaluate('e=>e.scrollWidth<=e.clientWidth')
+        manage=page.locator('#safe-code-api-manage').bounding_box()
+        assert manage['y']+manage['height']<=height
     page.set_viewport_size({'width':1000,'height':900})
-    attention={**active,'active':False,'state':'attention','message':'SSH gateway unavailable'}
-    page.evaluate("status=>window.safeCodeClaudeDesktopStatus(status)",attention)
-    assert page.locator('#claude-desktop-stop').is_visible()
-    assert page.locator('#claude-gateway-status').inner_text()=='Claude网关未启用'
-    assert 'inactive' in page.locator('#claude-gateway-status').get_attribute('class')
-    stopped={**base,'configured':False,'message':'VPS 桥接已停止，请重新启用。'}
-    page.evaluate("status=>window.__claudeStopped=status",stopped)
-    page.evaluate("document.querySelector('#claude-desktop-stop').onclick()")
-    page.wait_for_function('window.claudeStopCalls===1')
-    page.wait_for_function("!document.querySelector('#claude-desktop-consent').checked")
-    assert page.locator('#claude-desktop-start').is_visible()
-    page.set_viewport_size({'width':360,'height':600})
-    box=page.locator('#claude-desktop-dialog').bounding_box()
-    assert box['x']>=0 and box['x']+box['width']<=360
-    assert page.locator('#claude-desktop-form').evaluate('e=>e.scrollWidth<=e.clientWidth')
-    page.locator('#claude-desktop-close').click()
-    open_desktop_settings()
-    page.evaluate('window.settingsAction')
-    assert page.locator('#claude-desktop-dialog').is_visible()
-    assert not page.locator('#app-message-dialog').is_visible()
-    assert page.evaluate('window.claudeWarningAccepts')==1
-    page.locator('#claude-desktop-close').click()
+    page.evaluate("window.holdGatewayManagement=true")
+    manage_gateway.click()
+    expect(progress).to_contain_text('正在打开网关管理')
+    page.keyboard.press('Escape')
+    expect(settings).to_be_hidden()
+    page.locator('#claude-desktop-manage').click()
+    expect(progress).to_contain_text('正在打开网关管理')
+    page.clock.fast_forward(36000)
+    expect(progress).to_contain_text('打开网关管理超时')
+    expect(manage_gateway).to_be_enabled()
+    page.evaluate("window.holdGatewayManagement=false")
+    page.locator('#safe-code-api-manage').click()
+    expect(settings).to_be_hidden()
+    expect(workspace_key).to_be_visible()
+    workspace_key.click()
+    page.locator('#desktop-key-disable').click()
+    page.locator('#desktop-key-close').click()
     page.evaluate("showScreen('login')")
     page.locator('#advanced-connect').click()
     page.locator('#enter-preview').click()
@@ -330,12 +279,12 @@ with sync_playwright() as p:
     for width,height in [(740,634),(360,600)]:
         page.set_viewport_size({'width':width,'height':height})
         page.locator('#codex-launch').scroll_into_view_if_needed()
-        assert page.locator('.gateway-statuses').evaluate('''e=>{
-          const group=e.getBoundingClientRect(), footer=e.parentElement.getBoundingClientRect();
+        assert page.locator('.gateway-statuses').evaluate('''(e,width)=>{
+          const group=e.getBoundingClientRect();
           const children=[...e.children].map(x=>x.getBoundingClientRect());
-          const delta=Math.abs(group.left+group.width/2-footer.left-footer.width/2);
-          return delta<1&&children.every(x=>Math.abs(x.top-children[0].top)<1&&Math.abs(x.height-children[0].height)<1);
-        }''')
+          const fits=children.every(x=>x.left>=group.left&&x.right<=group.right&&x.bottom<=group.bottom);
+          return fits&&(width===360||children.every(x=>Math.abs(x.top-children[0].top)<1));
+        }''',width)
         for card in ['.claude-desktop-card','.bridge-card']:
             assert page.locator(card).evaluate('e=>e.scrollWidth<=e.clientWidth')
             buttons=page.locator(card+' .bridge-card-actions button')

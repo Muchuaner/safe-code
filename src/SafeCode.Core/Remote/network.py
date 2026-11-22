@@ -124,6 +124,7 @@ def apply_rules(policy):
 @serialized
 def prepare(options):
     if not Path('/usr/sbin/nft').exists():raise PolicyError('operation_failed','请先安装 nftables 组件。')
+    if (ROOT/'socks-egress.json').exists():raise PolicyError('deployment_busy','请先停用开发模式的 SOCKS5 出口。')
     policy=valid_policy(options)
     for pending in ROOT.glob('ip-pending-*.json'):
         record=json.loads(pending.read_text())

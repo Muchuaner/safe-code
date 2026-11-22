@@ -200,23 +200,15 @@
 .claude-desktop-card .advanced-copy{margin:0;min-width:0;flex:1}
 .claude-desktop-dialog[open]{display:flex;flex-direction:column;overflow:hidden}
 .claude-desktop-dialog>.titlebar{flex-shrink:0}
+.claude-desktop-dialog>.titlebar .close:not(:hover){color:#586a5e}
 .claude-desktop-dialog .config-body{display:flex;flex-direction:column;min-height:0;max-height:none;padding:0;overflow:hidden}
 .claude-desktop-content{min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:23px 25px}
-.claude-desktop-dialog.public-api-only .claude-desktop-content>:not(#safe-code-api-intro,#safe-code-api-progress,#safe-code-cloudcli-config){display:none!important}
+#safe-code-api-progress{color:var(--ink);white-space:pre-line;overflow-wrap:anywhere}
 #safe-code-cloudcli-config:not([hidden]){display:grid;gap:8px;margin-top:10px}
 #safe-code-cloudcli-config label{display:grid;gap:4px;font-size:var(--type-small)}
-#safe-code-cloudcli-config .text-button{justify-self:start}
-.claude-desktop-dialog h2{font-size:var(--type-large);margin:0 0 12px}
-.claude-desktop-dialog .bridge-check{display:flex!important;align-items:flex-start;gap:9px}
-.claude-desktop-dialog .bridge-check input{width:14px!important;height:14px!important;min-height:14px!important;margin:3px 0 0!important}
 .claude-desktop-dialog .config-footer{position:static;flex-shrink:0;background:#fff;margin:0 25px;padding:12px 0 18px;gap:8px;flex-wrap:wrap}
 .claude-desktop-dialog .config-footer button{width:auto;min-width:82px;padding:0 10px;height:34px}
-.claude-desktop-actions:not(:has(>:not([hidden]))){display:none}
-.claude-desktop-actions{display:flex;align-items:center;gap:12px;min-height:20px;margin-top:10px}
-.claude-desktop-actions a{font-size:var(--type-small);color:var(--green);text-decoration:none}
-#claude-desktop-progress{font-size:var(--type-small);line-height:1.8;color:#68786d;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}
-#claude-desktop-existing{margin:12px 0 0}
-#claude-desktop-start[hidden],#claude-desktop-stop[hidden],#claude-desktop-open[hidden],#claude-desktop-install[hidden]{display:none!important}
+.claude-desktop-dialog .config-footer button:disabled{opacity:1;background:#f3f5f2;border-color:#e2e8e1;color:#68796d}
 @media(max-width:520px){.claude-desktop-card{align-items:flex-start;gap:10px}}
 
 /* Connection details and live resource readings share the same left edge. */
@@ -377,7 +369,6 @@ html.native-dialog-window dialog.native-dialog-front:not(#client-window){
 :where(small,sub,sup){font-size:var(--type-small)}
 .workspace :is(.advanced-copy p,.server-metadata,.ip-address-label,.metric-label){color:#677b6d}
 .workspace-bottom>span,.workspace-bottom-actions>button{color:#687c6f}
-.macos-client .claude-desktop-content .bridge-check small,.macos-client .claude-desktop-content .bridge-check{color:#66786d}
 
 .connection-details-row{grid-template-columns:minmax(0,1fr) max-content;transform:none;padding-inline:10px}
 .connected-header .connection-card .server-metadata{grid-column:1}
@@ -388,3 +379,25 @@ dialog :is(.config-description,.dialog-hint,.account-description,.bridge-check s
 #notice-screen :is(.declaration p,.usage-consent small,.diagnostic-notice),
 #login-screen .login-heading p,#login-form .rating-disclosure{color:#626f66}
 dialog :is(.config-footer,.mount-footer){align-items:center}
+
+#socks-dialog .config-description { margin: 7px 0 14px; color: #5e7064; font-size: 11px; }
+.socks-warning { border: 1px solid #ebd8b6; border-radius: 6px; padding: 10px 12px; margin-bottom: 16px; background: #fff8eb; color: #76531d; font-size: 11px; line-height: 1.6; }
+.socks-warning strong { font-weight: 650; }
+.socks-warning p { margin: 3px 0 0; }
+.socks-input-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+#socks-form .socks-input-row input { margin: 0; min-width: 0; }
+#socks-test { flex-shrink: 0; height: 36px; padding: 0 9px; }
+#socks-input-hint { display: block; color: #607366; font-size: 10px; line-height: 1.6; }
+#socks-form label.socks-consent { display: flex; align-items: center; gap: 8px; margin: 14px 0; line-height: 1.5; }
+#socks-form .socks-consent input[type=checkbox] { appearance: auto; width: 14px; height: 14px; flex: 0 0 14px; margin: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--green); }
+.socks-results { display: grid; grid-template-columns: .75fr .75fr 1.2fr; margin: 12px 0 0; border: 1px solid var(--border); border-radius: 6px; background: #f7faf7; }
+.socks-results > div { min-width: 0; padding: 9px 10px; }
+.socks-results > div + div { border-left: 1px solid var(--border); }
+.socks-results dt, .socks-results dd { font-size: 11px; margin: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.socks-results dt { color: #607366; }
+.socks-results dd { margin-top: 3px; color: #52675a; }
+.socks-results dd[data-state="pass"] { color: #216247; font-weight: 650; }
+.socks-results dd[data-state="fail"] { color: #9c4231; font-weight: 650; }
+#socks-form .config-footer { margin-top: 14px; padding-top: 13px; }
+#socks-status { color: #5e7064; font-size: 10px; overflow-wrap: anywhere; }
+#socks-disable { flex-shrink: 0; min-height: 34px; padding: 0 10px; }

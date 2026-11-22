@@ -29,7 +29,6 @@ internal sealed class MacBackend : IDisposable
     private readonly ConcurrentDictionary<int,Task> tasks=new();
     private SshSession? session;
     private DesktopKeyAccess? keyAccess;
-    private readonly MacClaudeDesktopBridge claudeDesktop;
     private MacHostControl? hostControl;
     private CancellationTokenSource? connecting,browsing;
     private sealed record GatewayContext(SshSession Session, string Token);
@@ -40,11 +39,10 @@ internal sealed class MacBackend : IDisposable
     private DownloadedInstaller? update;
     private int connectionPending,activeMutations,serial;
     private string step="";
-    public MacBackend(string directory,bool offline){this.directory=directory;this.offline=offline;services=new(directory,endpointEnabled:!offline);preferences=new(directory);clients=new(directory);desktopDisplay=new(directory);hostControl=new(directory);claudeDesktop=new(directory,offline);}
+    public MacBackend(string directory,bool offline){this.directory=directory;this.offline=offline;services=new(directory,endpointEnabled:!offline);preferences=new(directory);clients=new(directory);desktopDisplay=new(directory);hostControl=new(directory);}
     public async Task RunAsync()
     {
         var statusUpdates=PublishStatusAsync();
-        var desktopHealth=MaintainDesktopAsync();
         await EmitAsync(new{type="ready"});
         while(await Console.In.ReadLineAsync() is {} line)
         {
@@ -52,7 +50,7 @@ internal sealed class MacBackend : IDisposable
             var task=Task.Run(()=>RespondAsync(line));tasks[key]=task;_=task.ContinueWith(completed=>tasks.TryRemove(key,out _));
         }
         // Native app normally calls app.shutdown first. Pipe loss stops all loopback tunnels immediately.
-        lifetime.Cancel();session?.Dispose();await Task.WhenAll(tasks.Values.Append(statusUpdates).Append(desktopHealth));
+        lifetime.Cancel();session?.Dispose();await Task.WhenAll(tasks.Values.Append(statusUpdates));
     }
     private async Task RespondAsync(string line)
     {
@@ -61,7 +59,8 @@ internal sealed class MacBackend : IDisposable
         {
             using var doc=JsonDocument.Parse(line);var root=doc.RootElement;id=root.GetProperty("id").GetString()??"";operation=root.GetProperty("op").GetString()??"";var args=root.GetProperty("args");
             bool modifies=operation is "deploy" or "job.resume" or "mount.apply" or "mount.install" or "cloud.install" or "cloud.expose" or "ip.apply" or "terminal" or "desktop" or "desktop.resolution.save" or "host.enable" or "host.disable" or "app.shutdown" or "connection.reauthenticate"
-                or "desktopKey.enable" or "desktopKey.disable" or "claudeDesktop.start" or "claudeDesktop.stop" or "safeCodeApi.install";
+                or "desktopKey.enable" or "desktopKey.disable" or "desktopKey.refreshModels" or "safeCodeApi.enablePublic" or "safeCodeApi.install"
+                or "socks.probe" or "socks.enable" or "socks.disable";
             if(modifies){if(!await mutation.WaitAsync(0))throw new InvalidOperationException("已有任务正在执行，请等待完成。");gate=true;Interlocked.Increment(ref activeMutations);}
             var diagnosticOperation=offline||operation=="mount.reconnect"&&session?.HasMounts!=true?null:DiagnosticTrace.OperationFor(operation,args);
             if(diagnosticOperation!=null)trace=services.BeginDiagnostic(diagnosticOperation,DiagnosticTrace.IsBackgroundOperation(diagnosticOperation,args));
@@ -108,16 +107,15 @@ internal sealed class MacBackend : IDisposable
         if(offline){
             if(op=="login.load")return null;
             if(op=="updates.check")return new UpdateInfo(ClientServices.Version,null,"隔离预览，不连接网络",null);
-            if(op is not ("app.state" or "app.shutdown" or "preview.begin" or "services.preferences" or "services.consent" or "services.confirm" or "diagnostics.consent" or "login.load" or "notice.state" or "notice.accept" or "notice.claudeDesktop.state" or "notice.claudeDesktop.accept" or "mount.status" or "host.status" or "bridge.status" or "claudeDesktop.status" or "folder.cancel"))throw new InvalidOperationException("隔离预览不允许连接服务器或执行网络操作。");
+            if(op is not ("app.state" or "app.shutdown" or "preview.begin" or "services.preferences" or "services.consent" or "services.confirm" or "diagnostics.consent" or "login.load" or "notice.state" or "notice.accept" or "mount.status" or "host.status" or "bridge.status" or "folder.cancel"))throw new InvalidOperationException("隔离预览不允许连接服务器或执行网络操作。");
         }
         switch(op)
         {
-            case "app.state":return new{busy=activeMutations>0,guarding=session?.HasMounts==true||hostControl?.Enabled==true||claudeDesktop.Running};
+            case "app.state":return new{busy=activeMutations>0,guarding=session?.HasMounts==true||hostControl?.Enabled==true||keyAccess?.Running==true};
             case "app.shutdown":
                 if(connectionPending!=0)throw new InvalidOperationException("正在连接，请先取消连接后退出。");
                 if(hostControl?.Enabled==true)await hostControl.SuspendAsync(ct);
                 if(session?.HasMounts==true)await session.UnmountAsync(ct);
-                if(claudeDesktop.Running)await claudeDesktop.StopAsync(ct,suspend:true);
                 if(keyAccess!=null)await keyAccess.StopAsync();
                 return true;
             case "mount.reconnect":
@@ -139,10 +137,10 @@ internal sealed class MacBackend : IDisposable
             case "desktopKey.status":
                 return await KeyAccess().RestoreAsync(ct,interactive:Flag("interactive"));
             case "desktopKey.enable":
-                if(claudeDesktop.Configured)throw new InvalidOperationException("请先停用 Claude Desktop 的 SSH 接入。");
                 _=LocalSecrets.RequireKey();
                 return await KeyAccess().EnableAsync(Read("key"),ct,replace:Flag("replace"),useSaved:Flag("useSaved"));
             case "desktopKey.disable": return await KeyAccess().DisableAsync(ct);
+            case "desktopKey.refreshModels": return await KeyAccess().RefreshModelsAsync(ct);
             case "desktopKey.balance": return await KeyAccess().ReadBalanceAsync(ct);
             case "safeCodeApi.refreshSubscription":
                 return await RequireGatewaySession().RefreshPublicGatewaySubscriptionAsync(ct);
@@ -153,7 +151,7 @@ internal sealed class MacBackend : IDisposable
                 return await RequireGatewaySession().InstallPublicGatewayAsync(ct,
                     args.TryGetProperty("cloudcli",out var cloudcliInstall)?cloudcliInstall:null);
             case "safeCodeApi.enablePublic":
-                if (!Flag("accepted")) throw new InvalidOperationException("请先确认「保证自用」。");
+                if (!Flag("accepted")) throw new InvalidOperationException("请先点击公网网关的「启用」。");
                 return await RequireGatewaySession().EnablePublicGatewayAsync(ct);
             case "safeCodeApi.context":
                 var currentGatewaySession = RequireGatewaySession();
@@ -171,18 +169,6 @@ internal sealed class MacBackend : IDisposable
                 var request=args.Deserialize<Dictionary<string,JsonElement>>()!;
                 request.Remove("background");
                 return await gatewaySession.ManagePublicGatewayAsync(request,ct);
-            case "claudeDesktop.status":return await claudeDesktop.RefreshAsync(ct);
-            case "claudeDesktop.start":
-                if(!Flag("accepted"))throw new InvalidOperationException("请先确认通过 VPS 上的 CloudCLI 接入。");
-                if(File.Exists(Path.Combine(directory,"desktop-key.state")))throw new InvalidOperationException("请先停用 API Key 接入，再启用 SSH 接入。");
-                using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct))
-                {
-                    deadline.CancelAfter(TimeSpan.FromSeconds(90));
-                    return await claudeDesktop.StartAsync(RequireSession(),deadline.Token,Read("replaceOldProfile"));
-                }
-            case "claudeDesktop.stop":
-                if(connectionPending!=0)throw new InvalidOperationException("请等待当前服务器连接完成。");
-                return await claudeDesktop.StopAsync(ct);
             case "codex.open":return await MacClients.OpenLocalClientAsync("Codex",ct);
             case "claudeDesktop.open":return await MacClients.OpenLocalClientAsync("Claude",ct);
             case "host.status":return hostControl?.Status??new(false,"disabled","","","未启用；需先开启 macOS 系统远程登录");
@@ -193,7 +179,7 @@ internal sealed class MacBackend : IDisposable
                 if(connectionPending!=0)throw new InvalidOperationException("请等待当前服务器连接完成。");
                 return hostControl==null?new HostControlStatus(false,"disabled","","","未启用"):await hostControl.DisableAsync(ct);
             case "preview.begin":
-                if(activeMutations>0||connectionPending!=0||session?.HasMounts==true||hostControl?.Enabled==true||claudeDesktop.Running)throw new InvalidOperationException("请先结束当前操作并安全卸载目录。");
+                if(activeMutations>0||connectionPending!=0||session?.HasMounts==true||hostControl?.Enabled==true)throw new InvalidOperationException("请先结束当前操作并安全卸载目录。");
                 session?.Dispose();session=null;challenge=null;return true;
             case "services.preferences":
                 lock(consentGate)return services.Preferences();
@@ -206,7 +192,7 @@ internal sealed class MacBackend : IDisposable
                 lock(consentGate)return services.SetDiagnosticConsent(Flag("enabled"));
             case "diagnostics.native-failure":
                 var nativeOperation=Read("operation");
-                if(nativeOperation is not ("login_restore" or "account_customization" or "desktop_key_enable" or "desktop_key_disable" or "desktop_key_restore" or "claude_desktop_start" or "claude_desktop_stop" or "desktop_launch"))return null;
+                if(nativeOperation is not ("login_restore" or "account_customization" or "desktop_key_enable" or "desktop_key_disable" or "desktop_key_restore" or "desktop_launch"))return null;
                 var nativeTrace=services.BeginDiagnostic(nativeOperation,false);
                 if(nativeTrace==null)return null;
                 Exception nativeFailure=Flag("cancelled")?new OperationCanceledException():nativeOperation=="desktop_launch"?new InvalidOperationException():new UnauthorizedAccessException();
@@ -217,12 +203,12 @@ internal sealed class MacBackend : IDisposable
             case "updates.check":return await services.CheckUpdateAsync(Flag("force"),ct);
             case "updates.download":update=await services.DownloadUpdateAsync((done,total)=>_=EmitAsync(new{type="updateProgress",done,total}),ct);return true;
             case "updates.install":
-                if(activeMutations>0||session?.HasMounts==true||hostControl?.Enabled==true||claudeDesktop.Running)throw new InvalidOperationException("请先完成任务、停用 SSH 接入与本机控制，并安全卸载目录，再打开新版安装镜像。");
+                if(activeMutations>0||session?.HasMounts==true||hostControl?.Enabled==true)throw new InvalidOperationException("请先完成任务、停用本机控制，并安全卸载目录，再打开新版安装镜像。");
                 if(update==null)throw new InvalidOperationException("请先下载并校验 macOS 安装镜像。");
                 await ClientServices.VerifyInstallerAsync(update,ct);if(LocalSecrets.IsUnlocked)LocalSecrets.CheckpointLogin();await EmitAsync(new{type="openFile",path=update.Path});return true;
             case "gateways.resume-settings":
                 var remembered = LocalSecrets.IsUnlocked ? LocalSecrets.Load() : null;
-                bool resumeHost=remembered!=null&&(claudeDesktop.Configured||File.Exists(Path.Combine(directory,"desktop-key.state")))
+                bool resumeHost=remembered!=null&&File.Exists(Path.Combine(directory,"desktop-key.state"))
                     &&hostControl?.CanResume(remembered)==true;
                 return remembered!=null&&(resumeHost||SshSession.CanResumePublicGateway(directory,remembered))?remembered:null;
             case "login.load":case "login.restoreSaved":return LocalSecrets.IsUnlocked?LocalSecrets.Load():null;
@@ -239,14 +225,12 @@ internal sealed class MacBackend : IDisposable
                 return new{ready=true,mount=recovering.GetMountStatus()};
             case "notice.state":return new{accepted=File.Exists(Path.Combine(directory,"notice-accepted-v2"))||services.NoticeWasConfirmed};
             case "notice.accept":File.WriteAllText(Path.Combine(directory,"notice-accepted-v2"),DateTimeOffset.UtcNow.ToString("O"));return true;
-            case "notice.claudeDesktop.state":return preferences.ClaudeDesktopWarningAccepted;
-            case "notice.claudeDesktop.accept":preferences.AcceptClaudeDesktopWarning();return true;
             case "connection.cancel":connecting?.Cancel();challenge=null;return true;
             case "host.trust":
                 if(challenge is not {} current||current.Token!=Read("token"))throw new InvalidOperationException("服务器身份确认已失效。");
                 new HostTrustStore(directory).Accept(current.Key);challenge=null;return true;
             case "connect":
-                if(activeMutations>0||session?.HasMounts==true||hostControl?.Enabled==true||claudeDesktop.Running)throw new InvalidOperationException("请先完成任务、停用 SSH 接入与本机控制，并安全卸载目录，再更换连接。");
+                if(activeMutations>0||session?.HasMounts==true||hostControl?.Enabled==true)throw new InvalidOperationException("请先完成任务、停用本机控制，并安全卸载目录，再更换连接。");
                 if(Interlocked.CompareExchange(ref connectionPending,1,0)!=0)throw new InvalidOperationException("正在连接，请稍候。");
                 try
                 {
@@ -266,7 +250,7 @@ internal sealed class MacBackend : IDisposable
                         }
                     }
                     bool keyConfigured=File.Exists(Path.Combine(directory,"desktop-key.state"));
-                    if((keyConfigured||claudeDesktop.Configured)&&hostControl?.CanResume(settings)==true)
+                    if(keyConfigured&&hostControl?.CanResume(settings)==true)
                     {
                         using var hostRestore=CancellationTokenSource.CreateLinkedTokenSource(connecting.Token);
                         hostRestore.CancelAfter(TimeSpan.FromSeconds(40));
@@ -276,31 +260,6 @@ internal sealed class MacBackend : IDisposable
                         }
                         catch(OperationCanceledException)when(!connecting.IsCancellationRequested)
                         {warnings.Add("本机远程控制恢复超时，可在设置中重试。");}
-                    }
-                    if(!keyConfigured&&claudeDesktop.Configured&&LocalSecrets.IsUnlocked)
-                    {
-                        using var restoreTimeout=CancellationTokenSource.CreateLinkedTokenSource(connecting.Token);
-                        restoreTimeout.CancelAfter(TimeSpan.FromSeconds(40));
-                        var restoreTrace=services.BeginDiagnostic("claude_desktop_restore",true);
-                        Exception? restoreFailure=null;
-                        try
-                        {
-                            if(await claudeDesktop.ResumeAsync(session,restoreTimeout.Token) is {} warning)
-                            {
-                                warnings.Add(warning);
-                                restoreFailure=new InvalidOperationException();
-                            }
-                        }
-                        catch(OperationCanceledException)when(!connecting.IsCancellationRequested)
-                        {
-                            restoreFailure=new TimeoutException();
-                            warnings.Add("Claude SSH 网关恢复超时，可在设置中重试。");
-                        }
-                        catch(Exception error){restoreFailure=error;throw;}
-                        finally
-                        {
-                            if(restoreTrace!=null&&(claudeDesktop.Running||restoreFailure!=null))_=services.SendDiagnosticAsync(restoreTrace,restoreFailure,ct);
-                        }
                     }
                     connecting.Token.ThrowIfCancellationRequested();
                     return new{ready=true,server,gatewayWarnings=warnings};
@@ -323,7 +282,7 @@ internal sealed class MacBackend : IDisposable
             case "job.resume":step=Read("operation");return await RequireSession().ResumeJobAsync(Read("jobId"),ct);
             case "deploy":
                 step=Read("step");
-                if(step=="account"&&(hostControl?.Enabled==true||claudeDesktop.Running))throw new InvalidOperationException("请先停用本机控制和 Claude Desktop SSH 接入，再修改工作账户。");
+                if(step=="account"&&hostControl?.Enabled==true)throw new InvalidOperationException("请先停用本机控制，再修改工作账户。");
                 var deploymentTarget=RequireSession();
                 var locale=preferences.RequireDeploymentChoices(deploymentTarget);
                 var draft=step=="account"?preferences.ReadDraft(deploymentTarget)??throw new InvalidOperationException("请先保存工作账户设置。"):null;
@@ -374,6 +333,15 @@ internal sealed class MacBackend : IDisposable
                 try{if(LocalSecrets.IsUnlocked&&LocalSecrets.Load() is {} saved)LocalSecrets.Save(saved with{Host=RequireSession().Host,Port=RequireSession().Port});}
                 catch{Log("connection","服务器设置已应用，但本机保存的登录信息未能更新。");}
                 return changed;
+            case "socks.probe":
+                return await RequireSession().ProbeSocksEgressAsync(Read("proxyUrl"),ct);
+            case "socks.status":
+                return await RequireSession().RequestAsync<SocksEgressStatus>("socks_status",null,ct);
+            case "socks.enable":
+                if(!Flag("accepted"))throw new InvalidOperationException("请先确认整机代理的影响。");
+                return await RequireSession().SetSocksEgressAsync(Read("proxyUrl"),ct);
+            case "socks.disable":
+                return await RequireSession().SetSocksEgressAsync(null,ct);
             default:throw new InvalidOperationException("不支持的客户端操作："+op);
         }
     }
@@ -391,23 +359,8 @@ internal sealed class MacBackend : IDisposable
     }
     private async Task PublishStatusAsync()
     {
-        using var timer=new PeriodicTimer(TimeSpan.FromSeconds(1));try{while(await timer.WaitForNextTickAsync(lifetime.Token))await EmitAsync(new{type="status",busy=activeMutations>0||connectionPending!=0,mount=session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),host=hostControl?.Status,desktopKeyRunning=keyAccess?.Running==true,desktopSshRunning=claudeDesktop.Running});}catch(OperationCanceledException){}
-    }
-    private async Task MaintainDesktopAsync()
-    {
-        using var timer=new PeriodicTimer(TimeSpan.FromSeconds(15));
-        try
-        {
-            while(await timer.WaitForNextTickAsync(lifetime.Token))
-            {
-                if(!claudeDesktop.Running)continue;
-                try{await claudeDesktop.RefreshAsync(lifetime.Token);}
-                catch(Exception error)when(error is IOException or JsonException or UnauthorizedAccessException or CryptographicException)
-                {Log("claude_desktop","无法刷新 Claude Desktop SSH 接入状态。");}
-            }
-        }
-        catch(OperationCanceledException)when(lifetime.IsCancellationRequested){}
+        using var timer=new PeriodicTimer(TimeSpan.FromSeconds(1));try{while(await timer.WaitForNextTickAsync(lifetime.Token))await EmitAsync(new{type="status",busy=activeMutations>0||connectionPending!=0,mount=session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),host=hostControl?.Status,desktopKeyRunning=keyAccess?.Running==true});}catch(OperationCanceledException){}
     }
     private async Task EmitAsync(object value){await writer.WaitAsync();try{await Console.Out.WriteLineAsync(JsonSerializer.Serialize(value,Json));await Console.Out.FlushAsync();}finally{writer.Release();}}
-    public void Dispose(){claudeDesktop.Dispose();keyAccess?.Dispose();lifetime.Cancel();hostControl?.Dispose();session?.Dispose();services.Dispose();lifetime.Dispose();}
+    public void Dispose(){keyAccess?.Dispose();lifetime.Cancel();hostControl?.Dispose();session?.Dispose();services.Dispose();lifetime.Dispose();}
 }

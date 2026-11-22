@@ -15,51 +15,66 @@ internal static class MacSelfTest
         string Feed(string suffix)=>JsonSerializer.Serialize(new{tag_name="Beta-0.4.4.2",draft=false,prerelease=true,assets=new[]{new{name="SafeCode-Beta-0.4.4.2-"+suffix,browser_download_url="https://github.com/Muchuaner/safe-code/releases/download/Beta-0.4.4.2/SafeCode-Beta-0.4.4.2-"+suffix,digest="sha256:"+new string('a',64),size=123}}});
         using(var win=JsonDocument.Parse(Feed("Setup-x64.exe")))if(ClientServices.ParseRelease(win.RootElement,"Beta-0.4.4.1","macOS-arm64.dmg").CanInstall)throw new Exception("Mac 更新误选 Windows 安装包。");
         using(var mac=JsonDocument.Parse(Feed("macOS-arm64.dmg")))if(!ClientServices.ParseRelease(mac.RootElement,"Beta-0.4.4.1","macOS-arm64.dmg").CanInstall||ClientServices.ParseRelease(mac.RootElement,"Beta-0.4.4.1","macOS-x64.dmg").CanInstall)throw new Exception("架构筛选失败。");
-        var profile=MacClaudeDesktopBridge.MakeProfile("http://127.0.0.1:18899","fixture-local-token",
-            [new("claude-fixture-opus","Opus",["low","high"],true,"opus"),
-             new("claude-fixture-classifier","Classifier",["low"],false,null,true)]);
-        var model=profile["inferenceModels"]!.AsArray().Single()!;
-        if((string?)model["name"]!="claude-fixture-opus"||(string?)model["maxEffort"]!="high"||
-           (string?)profile["claudeCodeSettings"]?["env"]?["CLAUDE_CODE_AUTO_MODE_MODEL"]!="claude-fixture-classifier")
-            throw new Exception("Mac Claude Desktop 模型和分类器配置错误。");
+        var catalog=JsonNode.Parse("""
+            [
+                {"id":"default","display_name":"Default (recommended)","desktop_model_id":"safecode-cloudcli-default"},
+                {"id":"opus","display_name":"Opus","anthropic_family_tier":"opus","behaves_as":"claude-fixture-opus",
+                 "supported_effort_levels":["max","low","ultracode"],"supports_1m":true,
+                 "desktop_model_id":"safecode-cloudcli-opus","desktop_ultracode_model_id":"safecode-ultracode/opus","ultracode_supports_1m":true},
+                {"id":"vendor/custom-model","supported_effort_levels":["high","low"]},
+                {"id":"opusplan","desktop_model_id":"safecode-cloudcli-opusplan"},
+                {"id":"claude-fixture-classifier","auto_mode_classifier":true}
+            ]
+            """)!.AsArray();
+        var (models,classifier)=DesktopKeyAccess.ReadModelCatalog(catalog);
+        string[] names=["safecode-cloudcli-default","safecode-cloudcli-opus","safecode-ultracode/opus",
+            "vendor/custom-model","safecode-cloudcli-opusplan"];
+        if(!models.Select(model=>(string?)model?["name"]).SequenceEqual(names)||
+           (string?)models[1]!["maxEffort"]!="max"||(bool?)models[1]!["supports1m"]!=true||
+           (string?)models[2]!["maxEffort"]!="xhigh"||(bool?)models[2]!["supports1m"]!=true||
+           (string?)models[2]!["behavesAs"]!="claude-fixture-opus"||
+           (string?)models[3]!["maxEffort"]!="high"||classifier!="claude-fixture-classifier")
+            throw new Exception("Claude Desktop API Key 模型、思考强度或分类器配置错误。");
         Console.WriteLine("MAC_CLAUDE_PROFILE_CHAT_AND_CLASSIFIER_CONFIGURATION_OK");
         string profileTest = Directory.CreateTempSubdirectory("safecode-mac-profile-").FullName;
         try
         {
             string library = Path.Combine(profileTest, "configLibrary");
-            string id = Guid.NewGuid().ToString("D");
-            string profilePath = Path.Combine(library, id + ".json");
-            string metaPath = Path.Combine(library, "_meta.json");
-            string statePath = Path.Combine(profileTest, "desktop-ssh.aes");
+            string sealedId = Guid.NewGuid().ToString("D");
+            string tokenId = Guid.NewGuid().ToString("D");
+            string otherId = Guid.NewGuid().ToString("D");
             var meta = new JsonObject
             {
-                ["appliedId"] = id,
-                ["entries"] = new JsonArray(new JsonObject { ["id"] = id, ["name"] = "SafeCode SSH" })
+                ["appliedId"] = sealedId,
+                ["entries"] = new JsonArray(
+                    new JsonObject { ["id"] = sealedId, ["name"] = "SafeCode SSH" },
+                    new JsonObject { ["id"] = tokenId, ["name"] = "SafeCode SSH" },
+                    new JsonObject { ["id"] = otherId, ["name"] = "SafeCode SSH" })
             };
-            profile["inferenceGatewayApiKey"] = "__sealed__:v1:fixture-only";
-            DesktopKeyAccess.WriteProfileFile(profilePath, JsonSerializer.SerializeToUtf8Bytes(profile));
-            DesktopKeyAccess.WriteProfileFile(metaPath, JsonSerializer.SerializeToUtf8Bytes(meta));
-            using var bridge = new MacClaudeDesktopBridge(profileTest, false, library);
-            var orphan = JsonSerializer.SerializeToElement(await bridge.RefreshAsync(CancellationToken.None));
-            if (orphan.GetProperty("oldProfile").GetString() != id)
-                throw new Exception("未识别旧版遗留的 SafeCode SSH 配置。");
-            meta["hybridPointer"] = "fixture";
-            DesktopKeyAccess.WriteProfileFile(metaPath, JsonSerializer.SerializeToUtf8Bytes(meta));
-            var protectedProfile = JsonSerializer.SerializeToElement(await bridge.RefreshAsync(CancellationToken.None));
-            if (protectedProfile.GetProperty("oldProfile").ValueKind != JsonValueKind.Null)
-                throw new Exception("将 Claude 混合模式误判为可替换的旧配置。");
-            meta.Remove("hybridPointer");
-            DesktopKeyAccess.WriteProfileFile(metaPath, JsonSerializer.SerializeToUtf8Bytes(meta));
-
-            var state = new { Server = new GatewayPreference(), Id = id, Token = "fixture-local-token", Port = 18899 };
-            DesktopKeyAccess.WriteProfileFile(statePath, LocalSecrets.Protect(JsonSerializer.SerializeToUtf8Bytes(state)));
-            await bridge.StopAsync(CancellationToken.None);
-            var after = DesktopKeyAccess.ReadProfileMeta(library);
-            if (File.Exists(profilePath) || File.Exists(statePath) || after["appliedId"]?.GetValue<string>() != "")
-                throw new Exception("停止 SSH 接入后遗留了加密过的本机配置。");
-            if (MacClaudeDesktopBridge.IsSealedGatewayProfile(profile, 18900))
-                throw new Exception("密文前缀匹配时也必须校验原端口。");
-            Console.WriteLine("MAC_SEALED_SSH_PROFILE_DETECTION_AND_STOP_OK");
+            var profile = new JsonObject
+            {
+                ["inferenceGatewayBaseUrl"] = "http://127.0.0.1:18899",
+                ["inferenceGatewayApiKey"] = "__sealed__:v1:fixture-only",
+                ["inferenceProvider"] = "gateway",
+                ["inferenceGatewayAuthScheme"] = "bearer",
+                ["inferenceCredentialKind"] = "static",
+                ["deploymentDisplayName"] = "SafeCode"
+            };
+            void WriteProfile(string id) => DesktopKeyAccess.WriteProfileFile(
+                Path.Combine(library,id+".json"), JsonSerializer.SerializeToUtf8Bytes(profile));
+            WriteProfile(sealedId);
+            profile["inferenceGatewayApiKey"] = "fixture-local-token";
+            WriteProfile(tokenId);
+            profile["inferenceGatewayBaseUrl"] = "https://other.example";
+            WriteProfile(otherId);
+            var state = new { Id = tokenId, Token = "fixture-local-token", Port = 18899 };
+            DesktopKeyAccess.WriteProfileFile(Path.Combine(profileTest,"desktop-ssh.aes"),
+                LocalSecrets.Protect(JsonSerializer.SerializeToUtf8Bytes(state)));
+            using var access = new DesktopKeyAccess(profileTest,LocalSecrets.Protect,LocalSecrets.Unprotect,library);
+            access.RemoveLegacyMacProfiles(meta,library);
+            if ((string?)meta["appliedId"]!="" || (string?)meta["entries"]!.AsArray().Single()!["id"]!=otherId)
+                throw new Exception("切换 API Key 时未正确区分旧 SSH 与自定义配置。");
+            Console.WriteLine("MAC_LEGACY_SSH_PROFILE_MIGRATION_OK");
         }
         finally { Directory.Delete(profileTest, true); }
         string fingerprint=new('A',64);

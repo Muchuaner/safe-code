@@ -5,7 +5,6 @@ root=Path(__file__).resolve().parents[1]
 with sync_playwright() as p:
  browser=p.chromium.launch(executable_path='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless=True);page=browser.new_page(viewport={'width':740,'height':634});errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
  main_fixture='''window.__safeCodeDesktop=true;window.__safeCodePlatform='macos';window.__safeCodeAcceptance=true;window.calls=[];
- window.desktopFixture={active:false,managed:false,configured:false,installed:true};
  window.gatewayOnline=true;window.hostEnabled=false;
  window.publicGatewayFixture=null;
  window.claudeInstalled=true;window.cloudInstalled=false;
@@ -13,20 +12,17 @@ with sync_playwright() as p:
  window.chrome={webview:{postMessage(m){
    calls.push(m);
    if(m.op==='host.enable')window.hostEnabled=m.args.riskAccepted===true;
-   if(m.op==='claudeDesktop.start')window.desktopFixture={active:true,managed:true,configured:true,installed:true,endpoint:'http://127.0.0.1:18899'};
-   if(m.op==='claudeDesktop.stop')window.desktopFixture={active:false,managed:false,configured:false,installed:true};
    const needsKey=m.op==='safeCodeApi.install'&&window.cloudInstalled&&!window.publicGatewayFixture?.cloudcliConfigured&&!m.args.cloudcli;
    const generatesAccount=m.op==='safeCodeApi.install'&&!window.cloudInstalled&&window.publicGatewayFixture?.cloudcliConfigured===false;
    if(m.op==='safeCodeApi.install'&&!needsKey){
      window.cloudInstalled=true;
-     window.publicGatewayFixture={enabled:window.publicGatewayFixture?.enabled||false,backend:'cloudcli',gatewayRevision:3,cloudcliConfigured:true};
+     window.publicGatewayFixture={enabled:window.publicGatewayFixture?.enabled||false,backend:'cloudcli',gatewayRevision:10,cloudcliConfigured:true};
    }
-   if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true,backend:'cloudcli',gatewayRevision:3,cloudcliConfigured:true};
+   if(m.op==='safeCodeApi.enablePublic')window.publicGatewayFixture={enabled:true,backend:'cloudcli',gatewayRevision:10,cloudcliConfigured:true};
    if(m.op==='cloud.install')window.cloudInstalled=true;
    const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:
      m.op==='desktopKey.status'?{configured:false,running:false}:
      m.op==='notice.state'?{accepted:false}:
-     m.op==='notice.claudeDesktop.state'?calls.some(call=>call.op==='notice.claudeDesktop.accept'):
      m.op==='login.restoreAvailable'?true:
      m.op==='login.restoreSaved'?{host:'192.0.2.42',username:'fixture',password:'fixture-only',port:22}:
      ['host.status','host.enable'].includes(m.op)?{enabled:window.hostEnabled,state:window.hostEnabled?'connected':'disabled',alias:'mac',command:'',message:'未启用'}:
@@ -34,12 +30,15 @@ with sync_playwright() as p:
      needsKey?{cloudcliKeyRequired:true}:
      generatesAccount?{...window.publicGatewayFixture,cloudcliAccount:{username:'generated-fixture',password:'generated-fixture-password'}}:
      ['safeCodeApi.publicStatus','safeCodeApi.install','safeCodeApi.enablePublic'].includes(m.op)?
-       window.publicGatewayFixture||{enabled:true,backend:'cloudcli',gatewayRevision:3,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
+       window.publicGatewayFixture||{enabled:true,backend:'cloudcli',gatewayRevision:10,active:1,concurrency:1,waiting:2,subscription:window.quotaFixture}:
      m.op==='window.gateway.open'?true:
      m.op==='connect'?{server:{statuses:{account:true,claude:window.claudeInstalled},cloudReady:window.cloudInstalled,assignedIps:[],osVersion:'24.04'}}:
-     m.op==='cloud.install'?{statuses:{account:true},cloudReady:true,assignedIps:[],osVersion:'24.04'}:
-     m.op.startsWith('claudeDesktop.')?window.desktopFixture:null;
+     m.op==='cloud.install'?{statuses:{account:true},cloudReady:true,assignedIps:[],osVersion:'24.04'}:null;
    const error=m.op==='safeCodeApi.publicStatus'&&!window.gatewayOnline?'网络中断':undefined;
+   if(m.op==='safeCodeApi.install'&&window.deferGatewayInstall){
+     window.replyToGatewayInstall=()=>window.safeCodeNativeResponse?.({id:m.id,result,error});
+     return;
+   }
    queueMicrotask(()=>window.safeCodeNativeResponse?.({id:m.id,result,error}));
  }}};'''
  page.add_init_script(main_fixture)
@@ -81,80 +80,24 @@ with sync_playwright() as p:
  assert '远程登录' in page.locator('#host-progress').inner_text()
  page.locator('#host-close').click()
  page.locator('#claude-desktop-manage').click()
- page.wait_for_selector('#app-message-dialog[open]')
- assert page.locator('#app-message-cancel').inner_text()=='我手滑了'
- assert page.locator('#app-message-confirm').inner_text()=='我知道我在做什么'
- page.locator('#app-message-confirm').click()
- page.wait_for_selector('#host-dialog[open]')
- page.locator('#host-risk').check()
- page.locator('#host-enable').click()
- page.wait_for_selector('#claude-desktop-dialog[open]')
- assert page.evaluate("calls.filter(m=>m.op==='notice.claudeDesktop.accept').length===1")
- assert page.evaluate("calls.some(m=>m.op==='claudeDesktop.status')")
- assert page.locator('#claude-desktop-start').is_disabled()
- page.locator('#claude-desktop-consent').check()
- page.locator('#claude-desktop-start').click()
- page.wait_for_function("!document.querySelector('#claude-desktop-stop').hidden")
- assert page.evaluate("calls.some(m=>m.op==='claudeDesktop.start'&&m.args.accepted===true)")
- assert page.locator('#claude-desktop-launch').is_enabled()
+ expect(page.locator('#claude-desktop-title')).to_have_text('Safe Code API · 公网网关')
+ expect(page.locator('#safe-code-api-enable')).to_have_text('已启用')
  page.locator('#safe-code-api-manage').click()
  page.wait_for_function("calls.some(m=>m.op==='window.gateway.open')")
- assert page.locator('#claude-desktop-dialog').is_visible()
- assert page.locator('#safe-code-api-dialog').count()==0
- page.locator('#claude-desktop-stop').click()
- page.wait_for_function("document.querySelector('#claude-desktop-stop').hidden")
+ expect(page.locator('#claude-desktop-dialog')).to_be_hidden()
  assert page.locator('#claude-desktop-launch').is_disabled()
- page.locator('#claude-desktop-close').click()
-
- # A VPS without the independent API can install it before consenting to public use.
- orphan_id='3d54faac-2ae7-44d8-ac39-aa93a16cb17b'
- page.evaluate("""id=>{
-   window.publicGatewayFixture={installed:false,enabled:false};
-   window.desktopFixture.oldProfile=id;
-   window.dispatchEvent(new Event('online'));
- }""",orphan_id)
- page.locator('#claude-desktop-manage').click()
- expect(page.locator('#claude-desktop-dialog')).to_be_visible()
- expect(page.locator('#safe-code-api-enable')).to_have_text('安装 API 服务')
- expect(page.locator('#safe-code-api-progress')).to_contain_text('自动检查并准备 CloudCLI')
- expect(page.locator('#safe-code-api-manage')).to_be_disabled()
- page.locator('#safe-code-api-enable').click()
- page.locator('#app-message-cancel').click()
- assert not page.evaluate("calls.some(m=>m.op==='safeCodeApi.install')")
- page.locator('#safe-code-api-enable').click()
- expect(page.locator('#app-message-confirm')).to_have_text('安装 API 服务')
- page.locator('#app-message-confirm').click()
- expect(page.locator('#safe-code-api-enable')).to_have_text('公网启用')
- expect(page.locator('#safe-code-api-manage')).to_be_disabled()
- assert not page.evaluate("calls.some(m=>m.op==='safeCodeApi.enablePublic')")
- page.locator('#safe-code-api-enable').click()
- expect(page.locator('#app-message-confirm')).to_have_text('保证自用')
- page.locator('#app-message-confirm').click()
- expect(page.locator('#safe-code-api-enable')).to_have_text('公网已启用')
- expect(page.locator('#safe-code-api-manage')).to_be_enabled()
-
- expect(page.locator('#claude-desktop-start')).to_have_text('重新配置 SSH 接入')
- page.locator('#claude-desktop-consent').check()
- page.locator('#claude-desktop-start').click()
- expect(page.locator('#app-message-confirm')).to_have_text('重新配置')
- page.locator('#app-message-cancel').click()
- assert page.evaluate("calls.filter(m=>m.op==='claudeDesktop.start').length")==1
- page.locator('#claude-desktop-start').click()
- page.locator('#app-message-confirm').click()
- expect(page.locator('#claude-desktop-stop')).to_be_visible()
- assert page.evaluate("calls.filter(m=>m.op==='claudeDesktop.start').at(-1).args")=={'accepted':True,'replaceOldProfile':orphan_id}
- page.locator('#claude-desktop-close').click()
+ assert not page.evaluate("calls.some(m=>m.op==='host.enable'||m.op.startsWith('claudeDesktop.'))")
  assert not errors,errors
 
  for gateway_state,cloud_installed,needs_key in (
      ('{installed:false,enabled:false,cloudcliConfigured:false}',False,False),
      ('{enabled:true,cloudcliConfigured:false}',True,True),
-     ("{enabled:true,backend:'cloudcli',cloudcliConfigured:true}",True,False),
+     ("{enabled:true,backend:'cloudcli',gatewayRevision:4,cloudcliConfigured:true}",True,False),
  ):
   newbie=browser.new_page(viewport={'width':740,'height':634})
   newbie.on('pageerror',lambda e:errors.append(str(e)))
   flags='window.publicGatewayFixture='+gateway_state+';window.cloudInstalled='+str(cloud_installed).lower()+';'
-  newbie.add_init_script(main_fixture.replace("calls.some(call=>call.op==='notice.claudeDesktop.accept')","true")+';'+flags+'window.hostEnabled=true;')
+  newbie.add_init_script(main_fixture+';'+flags)
   newbie.goto((root/'web'/'index.html').as_uri())
   newbie.wait_for_function('window.safeCodeNativeReady===true')
   newbie.evaluate("showScreen('login')")
@@ -163,37 +106,42 @@ with sync_playwright() as p:
   newbie.wait_for_function("!document.querySelector('#claude-desktop-manage').disabled")
   newbie.evaluate("switchMode('maintenance')")
   newbie.locator('#claude-desktop-manage').click()
-  expect(newbie.locator('#claude-desktop-title')).to_have_text('本地 Claude Desktop 接入 VPS')
+  expect(newbie.locator('#claude-desktop-title')).to_have_text('Safe Code API · 公网网关')
   enable=newbie.locator('#safe-code-api-enable')
+  expect(enable).to_have_text('启用')
   expect(newbie.locator('#safe-code-cloudcli-config')).to_be_hidden()
+  if not cloud_installed:
+   newbie.evaluate('window.deferGatewayInstall=true')
   enable.click()
-  expect(newbie.locator('#app-message-confirm')).to_have_text('升级网关' if cloud_installed else '安装 API 服务')
-  newbie.locator('#app-message-confirm').click()
   if needs_key:
    expect(newbie.locator('#safe-code-cloudcli-config')).to_be_visible()
    expect(newbie.locator('#safe-code-cloudcli-config input')).to_have_count(1)
    newbie.locator('#safe-code-cloudcli-api-key').fill('fixture-cloudcli-key')
    enable.click()
-   newbie.locator('#app-message-confirm').click()
    newbie.wait_for_function("calls.filter(message=>message.op==='safeCodeApi.install').length===2")
    assert newbie.evaluate("calls.filter(message=>message.op==='safeCodeApi.install').at(-1).args.cloudcli")=={'apiKey':'fixture-cloudcli-key'}
   elif not cloud_installed:
+   newbie.wait_for_function('!!window.replyToGatewayInstall')
+   expect(newbie.locator('#safe-code-api-progress')).to_contain_text('可以关闭此窗口')
+   newbie.locator('#claude-desktop-close').click()
+   expect(newbie.locator('#claude-desktop-dialog')).to_be_hidden()
+   newbie.evaluate('window.replyToGatewayInstall()')
+   expect(enable).to_have_text('已启用')
+   expect(newbie.locator('#app-message-dialog')).to_be_hidden()
+   newbie.locator('#claude-desktop-manage').click()
    expect(newbie.locator('#app-message-title')).to_have_text('CloudCLI 账户已创建')
    expect(newbie.locator('#app-message-body')).to_contain_text('generated-fixture-password')
    newbie.locator('#app-message-confirm').click()
    expect(newbie.locator('#app-message-body')).to_be_empty()
-   assert newbie.evaluate("calls.find(message=>message.op==='safeCodeApi.install').args")=={'accepted':True}
-   expect(enable).to_have_text('公网启用')
-   enable.click()
-   expect(newbie.locator('#app-message-confirm')).to_have_text('保证自用')
-   newbie.locator('#app-message-confirm').click()
-  expect(enable).to_have_text('公网已启用')
-  if cloud_installed and not needs_key:
-   assert newbie.evaluate("calls.find(message=>message.op==='safeCodeApi.install').args")=={'accepted':True}
+   assert newbie.evaluate("calls.filter(message=>message.op==='safeCodeApi.enablePublic').map(message=>message.args)")==[{'accepted':True}]
+  expect(enable).to_have_text('已启用')
+  if not needs_key:
+   assert newbie.evaluate("calls.filter(message=>message.op==='safeCodeApi.install').map(message=>message.args)")==[{'accepted':True}]
   expect(newbie.locator('#safe-code-cloudcli-api-key')).to_have_value('')
   newbie.locator('#safe-code-api-manage').click()
   newbie.wait_for_function("calls.some(message=>message.op==='window.gateway.open')")
-  assert not newbie.evaluate("calls.some(message=>['host.enable','claudeDesktop.start'].includes(message.op))")
+  expect(newbie.locator('#claude-desktop-dialog')).to_be_hidden()
+  assert not newbie.evaluate("calls.some(message=>message.op==='host.enable'||message.op.startsWith('claudeDesktop.'))")
   newbie.close()
  assert not errors,errors
 
@@ -306,4 +254,4 @@ with sync_playwright() as p:
  gateway.locator('#key-filter').select_option('enabled')
  assert gateway.locator('#key-rows tr').count()==1
  assert not errors,errors;browser.close()
-print('MAC_NATIVE_UI_REMOTE_LOGIN_AND_CLAUDE_DESKTOP_SSH_SETTINGS_OK')
+print('MAC_NATIVE_UI_REMOTE_LOGIN_AND_PUBLIC_GATEWAY_SETTINGS_OK')

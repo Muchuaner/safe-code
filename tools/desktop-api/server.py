@@ -25,15 +25,16 @@ from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from claude_usage import read_subscription
-from desktop_gateway import CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_REQUEST, MESSAGES_PATH, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
+from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
 from device_bridge import DeviceError, Devices, OwnerHosts, SSH_DEVICE, read_json
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
+from prompt_review import PromptReviewer
 
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 3
-PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中确认「保证自用」并启用公网。'
+GATEWAY_REVISION = 10
+PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
 ACTIVATION_CODE_SHA256 = bytes.fromhex('89debb851e3fc69c8e163a3b6462a3493e93d38ae8cf0132e419bd9e0b32d2b9')
 # Shared with DesktopKeyAccess. These bundled keys deter casual inspection only.
@@ -42,8 +43,8 @@ TICKET_AUTH_KEY = bytes.fromhex('bf8145e375d11db0fdd2fb0d9734fdda504c5a480fc2eae
 
 
 class PublicManager(Manager):
-    def __init__(self, folder, config, *, require_cloudcli=True):
-        super().__init__(folder, config, require_cloudcli=require_cloudcli)
+    def __init__(self, folder, config, *, require_cloudcli=True, review_prompt=None):
+        super().__init__(folder, config, require_cloudcli=require_cloudcli, review_prompt=review_prompt)
         self.lock = threading.RLock()
         self.accounting = threading.local()
 
@@ -185,11 +186,18 @@ class PublicHandler(Handler):
             return self.reply(404, {'error':{'message':'Unknown endpoint'}})
         if not self.server.public_enabled:
             return self.public_disabled()
+        if not self.authorized():
+            return self.device_error(401, 'SafeCode Key required')
         if self.server.config['cloudcli'] is None:
-            if not self.authorized():
-                return self.device_error(401, 'SafeCode Key required')
             return self.backend_required()
-        super().do_GET()
+        try:
+            allowed = self.server.registry.model_policy(self.digest)
+            manager = self.manager
+            return self.reply(200, manager.catalog() if allowed is None else manager.cloudcli.catalog(allowed))
+        except GatewayError as error:
+            return self.device_error(error.status, str(error))
+        except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):
+            return self.device_error(503, 'CloudCLI model discovery unavailable')
 
     def do_CONNECT(self):
         self.close_connection = True
@@ -321,11 +329,16 @@ class PublicHandler(Handler):
     def backend_required(self):
         return self.reply(503, {'type': 'error', 'error': {'type': 'api_error', 'message': CLOUDCLI_REQUIRED}})
 
+    def check_model(self, model):
+        allowed = self.server.registry.model_policy(self.digest)
+        if allowed is not None and model not in allowed:
+            raise CloudCliError('This model is not allowed for this API Key', 403)
+
     def execute_message(self, data, **options):
         if not isinstance(data,dict):
             raise GatewayError('Invalid Messages request',400)
         requested = data.get('model')
-        model = requested if isinstance(requested, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}(?:\[1m\])?', requested) else 'unknown'
+        model = requested if isinstance(requested, str) and CLOUDCLI_MODEL_ID.fullmatch(requested) else 'unknown'
         enqueued = time.monotonic()
         started = None
         record = {'model': model, 'outcome': 'success', 'status': 200, 'wait_ms': 0, 'duration_ms': None}
@@ -339,7 +352,7 @@ class PublicHandler(Handler):
                 manager.accounting.model = model
                 manager.accounting.finished = None
                 try:
-                    return manager.run(data, **options)
+                    return manager.run(data, **options, check_model=self.check_model)
                 except GatewayError as error:
                     record.update(outcome='failed', status=error.status)
                     raise
@@ -383,11 +396,13 @@ class PublicServer(ThreadingHTTPServer):
 
     def __init__(self, root, config):
         cloudcli = load_cloudcli_config()
+        questions = cloudcli.get('desktopQuestions') if cloudcli else None
         if cloudcli and not ipaddress.ip_address(config['bind']).is_loopback and (
                 cloudcli.get('hostControl') or
-                cloudcli.get('desktopQuestions') and not cloudcli.get('desktopToolApprovals')):
+                questions and ('tokenFile' in questions or not cloudcli.get('desktopToolApprovals'))):
             raise ValueError('Direct CloudCLI gateways cannot use a shared workstation or disable configured Desktop tool approvals.')
         self.root, self.config = root, {**config, 'cloudcli': cloudcli}
+        self.review_prompt = PromptReviewer(root, cloudcli)
         self.frp_port = config.get('deviceFrpPort')
         if self.frp_port is not None and (type(self.frp_port) is not int or not 1024 <= self.frp_port <= 65535):
             raise ValueError('Invalid private FRP control port')
@@ -398,6 +413,7 @@ class PublicServer(ThreadingHTTPServer):
         self.usage_lock = threading.Lock()
         self.subscription = {'state': 'unavailable', 'windows': {}}
         self.registry = KeyRegistry(root)
+        self.catalog_backend = None
         self.registry.prune_requests()
         self.next_log_cleanup = time.monotonic() + 3600
         try:
@@ -467,7 +483,7 @@ class PublicServer(ThreadingHTTPServer):
                 folder = self.root/'sessions'/identity
                 folder.mkdir(mode=0o700, parents=True, exist_ok=True)
                 m = PublicManager(folder, {**self.config, 'instance':digest[:32], 'clientPlatform':platform,
-                                           'pairedDevice':device})
+                                           'pairedDevice':device}, review_prompt=self.review_prompt)
                 if m.cloudcli:
                     m.cloudcli.parallel = True
                 m.live_slots = self.turns
@@ -495,6 +511,18 @@ class PublicServer(ThreadingHTTPServer):
             return {'enabled': self.public_enabled, 'backend': 'cloudcli', 'gatewayRevision': GATEWAY_REVISION}
         if not self.public_enabled:
             raise ValueError(PUBLIC_DISABLED_MESSAGE)
+        if operation == 'set_prompt_review':
+            with self.lock:
+                return self.review_prompt.update(request, atomic_write)
+        if operation == 'model_catalog':
+            if self.config['cloudcli'] is None:
+                raise ValueError(CLOUDCLI_REQUIRED)
+            with self.lock:
+                if self.catalog_backend is None:
+                    folder = self.root/'model-catalog'
+                    folder.mkdir(mode=0o700, exist_ok=True)
+                    self.catalog_backend = CloudCliBackend(folder, self.config['cloudcli'])
+            return {'models': self.catalog_backend.managed_models()}
         if operation == 'refresh_subscription':
             if not self.usage_lock.acquire(blocking=False):
                 return {'state': 'loading', 'windows': self.subscription['windows']}
@@ -545,12 +573,12 @@ class PublicServer(ThreadingHTTPServer):
                 key['waiting'] = waiters.get(key['id'],0)
             result = {'keys':keys,'origin':self.public_origin,
                       'activation_required':any(key['enabled'] for key in keys),
-                      'can_delete_revoked_keys': True,
+                      'can_delete_revoked_keys': True, 'key_policy_supported': True,
                       'billing': {'cost_nanos': sum(key['cost_nanos'] for key in keys),
                                   'unpriced_tokens': sum(key['unpriced_tokens'] for key in keys)},
                       'active':bool(active),'active_count':sum(active.values()),'waiting':sum(waiters.values()),
                       'concurrency':concurrency,'concurrency_text':str(concurrency),'queue_limit':self.queue.max_queue,
-                      'wait_limit':self.queue.max_wait}
+                      'wait_limit':self.queue.max_wait, 'prompt_review':self.review_prompt.status()}
             if request.get('details') is True:
                 result.update(self.registry.overview(), recent=self.registry.recent_requests())
                 result['subscription'] = self.subscription
@@ -565,7 +593,20 @@ class PublicServer(ThreadingHTTPServer):
             budget = request.get('budget_cents')
             if budget is not None and (type(budget) is not int or not 0 <= budget <= 100_000_000):
                 raise ValueError('累计额度应为 0 到 1,000,000 美元，最多两位小数。')
-            billing = {'budget_nanos': None if budget is None else budget * 10_000_000} if 'budget_cents' in request else {}
+            settings = {'budget_nanos': None if budget is None else budget * 10_000_000} if 'budget_cents' in request else {}
+            if 'expires_at' in request:
+                expiry = request['expires_at']
+                if expiry is not None and (type(expiry) is not int or not 1 <= expiry <= 253402300799):
+                    raise ValueError('请选择有效的失效时间。')
+                settings['expires_at'] = expiry
+            if 'allowed_models' in request:
+                models = request['allowed_models']
+                if models is not None:
+                    if (not isinstance(models, list) or not models or
+                            any(not isinstance(model, str) or not CLOUDCLI_MODEL_ID.fullmatch(model) for model in models)):
+                        raise ValueError('请至少选择一个允许使用的模型。')
+                    models = json.dumps(list(dict.fromkeys(models)), separators=(',', ':'))
+                settings['allowed_models'] = models
             if operation=='issue':
                 if self.config['cloudcli'] is None:
                     raise ValueError(CLOUDCLI_REQUIRED)
@@ -573,7 +614,7 @@ class PublicServer(ThreadingHTTPServer):
                 if not origin:
                     raise ValueError('无法识别 VPS 的公网 IP，请从 Safe Code 的 SSH 会话创建密钥。')
                 ticket, key_id = make_key(self.root,origin)
-                self.registry.issue(key_id, note.strip(), rpm, activated=valid_activation_code(request.get('activation_code')), **billing)
+                self.registry.issue(key_id, note.strip(), rpm, activated=valid_activation_code(request.get('activation_code')), **settings)
                 return {'id':key_id,'ticket':ticket}
         key_id = request.get('id','')
         if not isinstance(key_id,str) or not KEY_ID.fullmatch(key_id):
@@ -581,7 +622,7 @@ class PublicServer(ThreadingHTTPServer):
         if operation=='usage':
             return {'models':self.registry.usage(key_id), 'recent':self.registry.recent_requests(key_id)}
         if operation=='update':
-            self.registry.update(key_id,note.strip(),rpm,**billing)
+            self.registry.update(key_id,note.strip(),rpm,**settings)
         elif operation=='revoke':
             self.registry.revoke(key_id)
         elif operation == 'delete':

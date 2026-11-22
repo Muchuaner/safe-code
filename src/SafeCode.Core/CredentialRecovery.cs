@@ -1,5 +1,3 @@
-using System.Reflection;
-
 namespace SafeCode.Core;
 
 public sealed partial class SshSession
@@ -31,11 +29,7 @@ public sealed partial class SshSession
                         string directory=create.Result.Trim();
                         if(create.ExitStatus!=0||!directory.StartsWith("/tmp/safe-code.")||directory.Any(char.IsWhiteSpace))throw new IOException("无法准备恢复通道，原连接未替换。");
                         using var sftp=MakeSftp(settings);await sftp.ConnectAsync(ct);
-                        foreach(var name in new[]{"agent.py","network.py"})
-                        {
-                            using var resource=Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote."+name)!;
-                            await sftp.UploadFileAsync(resource,directory+"/"+name,ct);sftp.ChangePermissions(directory+"/"+name,600);
-                        }
+                        await UploadManagementModulesAsync(sftp,directory,ct);
                         var previous=client;connection=settings;client=replacement;remoteDirectory=directory;
                         mountAuthenticationFailed=false;gatewayAuthenticationFailed=false;
                         if(HasMounts){mountState="reconnecting";mountMessage="新密码已验证，正在恢复原挂载通道";}

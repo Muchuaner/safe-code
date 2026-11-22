@@ -81,17 +81,24 @@ class SafeCodeApiTest(unittest.TestCase):
         path = self.root/'legacy'
         path.mkdir()
         (path/'keys').mkdir()
+        (path/'keys'/self.digests[0]).touch()
         with sqlite3.connect(path/'gateway.sqlite3') as db:
             db.executescript('''
+                CREATE TABLE keys (id TEXT PRIMARY KEY,note TEXT NOT NULL DEFAULT '',rpm INTEGER NOT NULL DEFAULT 0,
+                    created INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,budget_nanos INTEGER);
                 CREATE TABLE usage (key_id TEXT,model TEXT,requests INTEGER,failures INTEGER,
                     input INTEGER,output INTEGER,cache_read INTEGER,cache_write INTEGER,last_used INTEGER,
                     PRIMARY KEY(key_id,model));
             ''')
+            db.execute('INSERT INTO keys(id,note,created) VALUES(?,?,0)', (self.digests[0], '原有密钥'))
             db.execute('INSERT INTO usage VALUES (?,?,1,0,100,10,20,40,0)',
                        (self.digests[0], 'claude-sonnet-5'))
         for _ in range(2):
             registry = KeyRegistry(path)
             self.assertEqual(registry.usage(self.digests[0])[0]['cost_nanos'], 404_000)
+            legacy, = registry.list()
+            self.assertEqual((legacy['note'], legacy['expires_at'], legacy['allowed_models']), ('原有密钥', None, None))
+            self.assertTrue(registry.enabled(legacy['id']))
 
     def test_legacy_keys_usage_and_revoke(self):
         first, second, _ = self.digests

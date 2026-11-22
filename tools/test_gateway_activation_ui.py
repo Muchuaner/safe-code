@@ -1,5 +1,7 @@
 """Exercise the activation gate through a local browser with a mocked native bridge."""
 
+from argparse import ArgumentParser
+from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import expect, sync_playwright
@@ -17,6 +19,7 @@ window.activeKeys = [];
 window.concurrency = 1;
 window.usageLookups = 0;
 window.originMissing = false;
+window.failModelCatalog = false;
 window.addFixtureKey = () => {
   const key = {id: String(window.activeKeys.length + 1).padStart(64, '0'), note: '测试密钥',
     enabled: true, requests: 0, tokens: 0, rpm: 0, cost_nanos: 14616700000, unpriced_tokens: 10};
@@ -27,7 +30,7 @@ window.chrome = {webview: {postMessage({id, op, args}) {
   let result, error;
   if (op !== 'safeCodeApi.manage') throw Error('Unexpected operation: ' + op);
   if (args.action === 'list') {
-    result = {keys: window.activeKeys, can_delete_revoked_keys: true,
+    result = {keys: window.activeKeys, can_delete_revoked_keys: true, key_policy_supported: true,
       activation_required: window.activeKeys.some(key => key.enabled),
       active: window.concurrency > 1, active_count: window.concurrency > 1 ? 2 : 0,
       concurrency: Number(window.concurrency), concurrency_text: String(window.concurrency),
@@ -35,6 +38,14 @@ window.chrome = {webview: {postMessage({id, op, args}) {
   } else if (args.action === 'refresh_subscription') {
     window.usageLookups++;
     result = {state: 'available', windows: {five_hour: {used: 23.5}, seven_day: {used: 92}}};
+  } else if (args.action === 'model_catalog') {
+    if (window.failModelCatalog) error = '模拟目录读取失败。';
+    else result = {models: [
+      {id: 'fable', name: 'Fable 5'}, {id: 'sonnet', name: 'Sonnet 5.5'},
+      {id: 'opus[1m]', name: 'Opus 5.5 (1M)'}, {id: 'haiku', name: 'Haiku 5.5'},
+      {id: 'default', name: 'Default (recommended)'}, {id: 'best', name: 'Best available'},
+      {id: 'opusplan', name: 'Opus Plan'}, {id: 'vendor/custom.model', name: 'Custom Model'}
+    ]};
   } else if (args.action === 'set_concurrency') {
     window.concurrency = args.concurrency;
     result = {concurrency: window.concurrency};
@@ -45,13 +56,18 @@ window.chrome = {webview: {postMessage({id, op, args}) {
     if (window.activeKeys.some(key => key.enabled) && args.activation_code !== 'fixture-code') {
       error = '添加更多 API Key 需要正确的激活码。';
     } else {
-      result = {...window.addFixtureKey(), ticket: 'sc2.fixture'};
+      const key = Object.assign(window.addFixtureKey(), {note: args.note || '测试密钥',
+        allowed_models: args.allowed_models, expires_at: args.expires_at});
+      result = {...key, ticket: 'sc2.fixture'};
     }
   } else if (args.action === 'refresh_ticket') {
     window.ticketUpdates.push(args.ticket);
     result = {changed:true, ticket:'sc2.updated-fixture'};
   } else if (args.action === 'update') {
     window.updates.push(args);
+    const key = window.activeKeys.find(key => key.id === args.id);
+    Object.assign(key, {note: args.note, allowed_models: args.allowed_models, expires_at: args.expires_at,
+      expired: args.expires_at != null && args.expires_at <= Date.now() / 1000});
     result = {id: args.id};
   } else if (args.action === 'delete') {
     window.activeKeys = window.activeKeys.filter(key => key.id !== args.id || key.enabled);
@@ -64,6 +80,17 @@ window.chrome = {webview: {postMessage({id, op, args}) {
 """
 
 
+def intercept(route):
+    url = route.request.url
+    if url == CREATOR_URL:
+        route.fulfill(status=200, body='External link fixture')
+    elif url in {f'https://safe-code.local/web/{name}' for name in
+                 ('gateway.html', 'gateway.css', 'gateway.js', 'gateway-charts.js', 'gateway-status.js')}:
+        route.fulfill(path=str(ROOT / 'web' / url.rsplit('/', 1)[-1]))
+    else:
+        route.abort()
+
+
 def test_gateway_activation():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -74,16 +101,6 @@ def test_gateway_activation():
             page = browser.new_page(viewport={'width': 850, 'height': 600})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
-
-            def intercept(route):
-                url = route.request.url
-                if url == CREATOR_URL:
-                    route.fulfill(status=200, body='External link fixture')
-                elif url in {f'https://safe-code.local/web/{name}' for name in
-                             ('gateway.html', 'gateway.css', 'gateway.js', 'gateway-charts.js', 'gateway-status.js')}:
-                    route.fulfill(path=str(ROOT / 'web' / url.rsplit('/', 1)[-1]))
-                else:
-                    route.abort()
 
             page.route('**/*', intercept)
             page.add_init_script(NATIVE_FIXTURE)
@@ -126,7 +143,8 @@ def test_gateway_activation():
             expect(code).to_be_disabled()
             save.click()
             expect(issue_dialog).to_be_visible()
-            assert page.evaluate('issues') == [{'action': 'issue', 'note': '', 'rpm': 0, 'budget_cents': None}]
+            assert page.evaluate('issues') == [{'action': 'issue', 'note': '', 'rpm': 0, 'budget_cents': None,
+                                                'allowed_models': None, 'expires_at': None}]
             issue_dialog.get_by_role('button', name='完成').click()
 
             page.evaluate('window.originMissing = true')
@@ -217,6 +235,103 @@ def test_gateway_activation():
             browser.close()
 
 
+def test_key_policy(screenshots=None):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            executable_path='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless=True)
+        page = browser.new_page(viewport={'width': 1040, 'height': 760}, timezone_id='Asia/Shanghai', device_scale_factor=2)
+        page.clock.set_fixed_time(datetime(2026, 11, 22, 6, tzinfo=timezone.utc))
+        page.route('**/*', intercept)
+        page.add_init_script(NATIVE_FIXTURE)
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(GATEWAY_URL)
+
+        def capture(name):
+            if screenshots:
+                page.mouse.move(4, 4)
+                page.screenshot(path=screenshots/f'{name}.png', animations='disabled')
+
+        create = page.locator('#create-key')
+        save = page.locator('#save-key')
+        editor = page.locator('#key-editor')
+        model = page.get_by_label('模型管理', exact=True)
+        expiry = page.get_by_label('失效时间', exact=True)
+        date = page.locator('#key-expiry')
+        create.click()
+        expect(model).to_have_value('all')
+        expect(expiry).to_have_value('never')
+        expect(date).to_be_hidden()
+        capture('01-key-defaults')
+        page.locator('#note').fill('个人工作站')
+        save.click()
+        page.locator('#issued-dialog').get_by_role('button', name='完成').click()
+        expect(page.get_by_role('row').filter(has_text='个人工作站')).to_contain_text('永不过期')
+
+        page.evaluate("""Object.assign(addFixtureKey(), {note:'团队体验 Key'});
+            Object.assign(addFixtureKey(), {note:'短期演示 Key', expires_at:1763769600, expired:true,
+                allowed_models:['haiku']});window.failModelCatalog = true""")
+        page.locator('#refresh').click()
+        team = page.get_by_role('row').filter(has_text='团队体验 Key')
+        team.get_by_role('button', name='编辑').click()
+        model.select_option('selected')
+        expect(page.locator('#model-status')).to_contain_text('模拟目录读取失败')
+        save.click()
+        expect(page.locator('#editor-status')).to_have_text('请至少选择一个允许使用的模型。')
+        assert page.evaluate('updates.length') == 0
+        page.evaluate('window.failModelCatalog = false')
+        page.locator('#reload-models').click()
+        page.locator('input[value="fable"]').check()
+        page.locator('input[value="sonnet"]').check()
+        expect(page.locator('input[value="vendor/custom.model"]')).to_have_count(1)
+        expiry.select_option('scheduled')
+        date.fill('2026-11-22T12:00')
+        save.click()
+        expect(page.locator('#editor-status')).to_have_text('请选择晚于现在的失效时间。')
+        date.fill('2026-12-06T18:00')
+        save.click()
+        expect(editor).to_be_hidden()
+        assert page.evaluate('updates.at(-1).allowed_models') == ['fable', 'sonnet']
+        assert page.evaluate('updates.at(-1).expires_at') == int(datetime(2026, 12, 6, 10, tzinfo=timezone.utc).timestamp())
+        expect(team).to_contain_text('2 个模型')
+        expect(page.get_by_role('row').filter(has_text='短期演示 Key')).to_contain_text('已过期')
+        capture('03-key-policy-list')
+        team.get_by_role('button', name='编辑').click()
+        expect(page.locator('input[value="sonnet"]')).to_be_checked()
+        expect(date).to_have_value('2026-12-06T18:00')
+        expect(page.locator('#model-status')).to_be_hidden()
+        capture('02-key-restrictions')
+        page.set_viewport_size({'width': 360, 'height': 600})
+        assert editor.evaluate('node => node.scrollWidth <= node.clientWidth')
+        expect(save).to_be_in_viewport()
+        date.scroll_into_view_if_needed()
+        expect(date).to_be_in_viewport()
+        expect(save).to_be_in_viewport()
+        capture('04-narrow-key-editor')
+        page.keyboard.press('Escape')
+        expect(editor).to_be_hidden()
+        page.set_viewport_size({'width': 1040, 'height': 760})
+        page.locator('#key-filter').select_option('expired')
+        expired = page.get_by_role('row').filter(has_text='短期演示 Key')
+        expect(expired).to_be_visible()
+        expect(team).to_have_count(0)
+        expired.get_by_role('button', name='编辑').click()
+        expiry.select_option('never')
+        model.select_option('all')
+        save.click()
+        expect(expired).to_have_count(0)
+        assert page.evaluate('updates.at(-1).expires_at') is None
+        assert page.evaluate('updates.at(-1).allowed_models') is None
+        assert not errors, errors
+        browser.close()
+
+
 if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('--screenshots', type=Path)
+    args = parser.parse_args()
+    if args.screenshots:
+        args.screenshots.mkdir(parents=True, exist_ok=True)
     test_gateway_activation()
-    print('GATEWAY_ACTIVATION_FIRST_KEY_MORE_KEYS_REVOKED_RACE_AND_CREATOR_LINK_OK')
+    test_key_policy(args.screenshots)
+    print('GATEWAY_ACTIVATION_AND_KEY_POLICY_OK')

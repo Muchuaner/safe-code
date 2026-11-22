@@ -6,7 +6,9 @@ const number = new Intl.NumberFormat('zh-CN');
 const dollars = new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD', maximumFractionDigits: 4});
 const compact = new Intl.NumberFormat('en', {notation: 'compact', maximumFractionDigits: 1});
 const dateTime = new Intl.DateTimeFormat('zh-CN', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
+const expiryDateTime = new Intl.DateTimeFormat('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
 const outcomes = {success: '成功', failed: '失败', limited: '受限', canceled: '已取消'};
+const keyStates = {enabled: '已启用', expired: '已过期', revoked: '已撤销'};
 const viewButtons = [...document.querySelectorAll('[data-view]')];
 let snapshot;
 let editingKey;
@@ -66,6 +68,7 @@ const slotProgressMaximum = item => Math.min(item?.concurrency ?? 1, Number.MAX_
 const usd = nanos => nanos == null ? '—' : nanos > 0 && nanos < 100000 ? '< $0.0001' : dollars.format(nanos / 1e9);
 const costLabel = item => usd(item.cost_nanos);
 const timestamp = seconds => seconds ? dateTime.format(new Date(seconds * 1000)) : '—';
+const keyState = key => key.expired ? 'expired' : key.enabled ? 'enabled' : 'revoked';
 const duration = ms => ms == null ? '—' : ms >= 1000 ? (ms / 1000).toFixed(2) + ' 秒' : Math.round(ms) + ' 毫秒';
 const shortId = id => id.slice(0, 12);
 const keyName = key => key.note || shortId(key.id);
@@ -77,6 +80,7 @@ function notice(id, text, error = false) {
   node.hidden = !text;
   node.textContent = text;
   node.dataset.error = String(error);
+  if (id === 'editor-status' && error) node.scrollIntoView({block: 'nearest'});
 }
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -108,11 +112,19 @@ function renderOverview() {
   const {keys, waiting, stats} = snapshot;
   const current = keys.find(key => key.active);
   const running = activeCount(snapshot);
+  const review = snapshot.prompt_review;
+  const reviewButton = byId('gateway-prompt-review');
+  const reviewState = byId('prompt-review-state');
+  reviewButton.disabled = !review;
+  reviewButton.title = review ? '' : '更新 VPS 网关后可配置前置审查';
+  reviewState.hidden = !review;
+  reviewState.textContent = review?.enabled ? '已开启' : '关闭';
+  reviewState.dataset.enabled = String(review?.enabled === true);
   const concurrencyButton = byId('gateway-concurrency');
   concurrencyButton.disabled = !snapshot.concurrency_text;
   concurrencyButton.textContent = '处理槽位 ' + slotLabel(snapshot);
   concurrencyButton.title = concurrencyButton.disabled ? '更新 VPS 网关后可调整处理槽位' : '';
-  byId('metric-keys').textContent = fmt(keys.filter(key => key.enabled).length);
+  byId('metric-keys').textContent = fmt(keys.filter(key => keyState(key) === 'enabled').length);
   byId('metric-keys-detail').textContent = '共 ' + fmt(keys.length) + ' 把密钥';
   byId('metric-requests-label').textContent = stats ? '近 24 小时请求' : '累计请求';
   byId('metric-requests').textContent = fmt(stats?.requests ?? keys.reduce((sum, key) => sum + key.requests, 0));
@@ -152,7 +164,7 @@ function renderKeys() {
   const sort = byId('key-sort').value;
   const keys = (snapshot?.keys ?? []).filter(key =>
     (!query || key.id.includes(query) || key.note.toLowerCase().includes(query)) &&
-    (!status || key.enabled === (status === 'enabled')));
+    (!status || keyState(key) === status));
   keys.sort((left, right) => (right[sort] ?? 0) - (left[sort] ?? 0));
   const pages = Math.max(1, Math.ceil(keys.length / keysPerPage));
   keyPage = Math.min(keyPage, pages - 1);
@@ -174,12 +186,15 @@ function renderKeys() {
       const id = element('code', shortId(key.id) + '…');
       id.title = key.id;
       cell(row, name).append(id);
-      const state = key.enabled ? pill('已启用', 'enabled') : pill('已撤销', 'revoked');
+      const state = pill(keyStates[keyState(key)], keyState(key));
       const stateCell = cell(row, state);
       if (key.active || key.waiting) {
         const activity = [key.active && '执行中 ' + fmt(activeCount(key)), key.waiting && '排队 ' + fmt(key.waiting)].filter(Boolean).join(' · ');
         stateCell.append(element('small', activity, 'key-activity'));
       }
+      const models = cell(row, key.allowed_models ? fmt(key.allowed_models.length) + ' 个模型' : '全部模型');
+      if (key.allowed_models) models.title = key.allowed_models.join('、');
+      models.append(element('small', key.expires_at ? expiryDateTime.format(key.expires_at * 1000) : '永不过期', 'key-policy-detail'));
       cell(row, key.rpm ? fmt(key.rpm) + ' 次/分' : '不限频', 'number');
       const requests = cell(row, fmt(key.requests), 'number');
       if (key.failures != null) requests.title = '失败 ' + fmt(key.failures) + ' 次';
@@ -488,8 +503,82 @@ function renderActivationField() {
   input.required = required;
   if (!required) input.value = '';
 }
+const modelPolicy = byId('model-policy');
+const expiryPolicy = byId('expiry-policy');
+const expiryInput = byId('key-expiry');
+const modelOptions = byId('allowed-models');
+const editor = byId('key-editor');
+let editorEpoch = 0;
+let catalogLoaded = false;
+let catalogPending = false;
+
+function selectedModels() {
+  return [...modelOptions.querySelectorAll('input:checked')].map(input => input.value);
+}
+function showModelOptions(catalog, selected) {
+  const options = new Map(catalog.map(model => [model.id, model.name]));
+  for (const id of selected) if (!options.has(id)) options.set(id, id);
+  modelOptions.replaceChildren(...Array.from(options, ([id, name]) => {
+    const label = element('label');
+    const input = element('input');
+    input.type = 'checkbox';
+    input.value = id;
+    input.checked = selected.includes(id);
+    const text = element('span', name);
+    if (name !== id) text.append(element('small', id));
+    label.append(input, text);
+    return label;
+  }));
+}
+async function loadModelOptions() {
+  if (catalogPending) return;
+  const epoch = editorEpoch;
+  catalogPending = true;
+  byId('reload-models').hidden = true;
+  notice('model-status', '正在读取 CloudCLI 模型…');
+  try {
+    const {models} = await manage('model_catalog');
+    if (!editor.open || epoch !== editorEpoch) return;
+    showModelOptions(models, selectedModels());
+    catalogLoaded = models.length > 0;
+    notice('model-status', catalogLoaded ? '' : 'CloudCLI 当前没有返回可用模型。');
+    byId('reload-models').hidden = catalogLoaded;
+  } catch (error) {
+    if (!editor.open || epoch !== editorEpoch) return;
+    notice('model-status', '无法读取模型。' + error.message, true);
+    byId('reload-models').hidden = false;
+  } finally {
+    if (epoch === editorEpoch) catalogPending = false;
+  }
+}
+function localExpiry(seconds) {
+  const date = new Date(seconds * 1000);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+function renderPolicyFields() {
+  const limited = modelPolicy.value === 'selected';
+  byId('model-picker').hidden = !limited;
+  if (limited && !catalogLoaded) void loadModelOptions();
+  const scheduled = expiryPolicy.value === 'scheduled';
+  byId('expiry-field').hidden = expiryInput.disabled = !scheduled;
+  if (scheduled && !expiryInput.value) expiryInput.value = localExpiry(Date.now() / 1000 + 7 * 86400);
+}
+modelPolicy.onchange = expiryPolicy.onchange = renderPolicyFields;
+byId('reload-models').onclick = loadModelOptions;
+
 function showEditor(key) {
   editingKey = key;
+  editorEpoch++;
+  catalogLoaded = catalogPending = false;
+  const policySupported = snapshot.key_policy_supported === true;
+  modelPolicy.disabled = expiryPolicy.disabled = !policySupported;
+  byId('key-policy-upgrade').hidden = policySupported;
+  modelPolicy.value = key?.allowed_models ? 'selected' : 'all';
+  expiryPolicy.value = key?.expires_at ? 'scheduled' : 'never';
+  expiryInput.value = key?.expires_at ? localExpiry(key.expires_at) : '';
+  notice('model-status', '');
+  byId('reload-models').hidden = true;
+  showModelOptions([], key?.allowed_models ?? []);
   byId('editor-title').textContent = key ? '编辑密钥' : '创建密钥';
   byId('save-key').textContent = key ? '保存修改' : '创建密钥';
   byId('note').value = key?.note ?? '';
@@ -503,7 +592,8 @@ function showEditor(key) {
     : '余额用完后暂停新请求，留空不限额。';
   renderActivationField();
   notice('editor-status', '');
-  byId('key-editor').showModal();
+  editor.showModal();
+  renderPolicyFields();
   byId('note').focus();
 }
 function showKeyRemoval(key, permanent) {
@@ -593,6 +683,65 @@ for (const dialog of document.querySelectorAll('dialog')) {
   dialog.addEventListener('cancel', event => { if (operationPending) event.preventDefault(); });
 }
 byId('refresh').onclick = () => refresh();
+
+const reviewDialog = byId('prompt-review-dialog');
+const reviewProvider = byId('prompt-review-provider');
+const reviewModel = byId('prompt-review-model');
+const reviewKey = byId('prompt-review-key');
+const reviewEnabled = byId('prompt-review-enabled');
+const reviewLanguage = byId('prompt-review-language');
+function renderReviewFields() {
+  const deepseek = reviewProvider.value === 'deepseek';
+  const savedKey = snapshot.prompt_review.has_deepseek_key;
+  byId('prompt-review-model-field').hidden = deepseek;
+  byId('prompt-review-builtin-note').hidden = deepseek || snapshot.prompt_review.builtin_available;
+  byId('prompt-review-key-field').hidden = !deepseek;
+  reviewKey.disabled = !deepseek;
+  reviewKey.required = deepseek && reviewEnabled.checked && !savedKey;
+  reviewKey.placeholder = savedKey ? '已保存 · 粘贴可替换' : '粘贴 DeepSeek API Key';
+  const languageSupported = typeof snapshot.prompt_review.language_replacement === 'boolean';
+  reviewLanguage.disabled = !languageSupported || !reviewEnabled.checked;
+  if (reviewLanguage.disabled) reviewLanguage.checked = false;
+  byId('prompt-review-language-note').textContent = !languageSupported ? '更新 VPS 网关后可使用。'
+    : reviewEnabled.checked ? '由上方模型把通过审查的提示词翻译成英文。' : '开启安全审查后可用。';
+}
+byId('gateway-prompt-review').onclick = () => {
+  const settings = snapshot.prompt_review;
+  reviewProvider.value = settings.provider;
+  reviewModel.value = settings.model;
+  reviewKey.value = '';
+  reviewEnabled.checked = settings.enabled;
+  reviewLanguage.checked = settings.language_replacement === true;
+  notice('prompt-review-status', '');
+  renderReviewFields();
+  reviewDialog.showModal();
+};
+reviewProvider.onchange = reviewEnabled.onchange = renderReviewFields;
+reviewDialog.addEventListener('close', () => { reviewKey.value = ''; });
+byId('prompt-review-form').onsubmit = async event => {
+  event.preventDefault();
+  if (operationPending) return;
+  const button = byId('save-prompt-review');
+  const options = {enabled: reviewEnabled.checked, provider: reviewProvider.value, model: reviewModel.value};
+  if (typeof snapshot.prompt_review.language_replacement === 'boolean') options.language_replacement = reviewLanguage.checked;
+  if (options.provider === 'deepseek' && reviewKey.value.trim()) options.deepseek_key = reviewKey.value.trim();
+  operationPending = true;
+  button.disabled = reviewProvider.disabled = reviewModel.disabled = reviewKey.disabled = reviewEnabled.disabled = reviewLanguage.disabled = true;
+  notice('prompt-review-status', '正在保存…');
+  try {
+    await refreshTask;
+    snapshot.prompt_review = await manage('set_prompt_review', options);
+    reviewDialog.close();
+    await refresh(false);
+  } catch (error) {
+    notice('prompt-review-status', error.message, true);
+  } finally {
+    operationPending = false;
+    button.disabled = reviewProvider.disabled = reviewModel.disabled = reviewEnabled.disabled = false;
+    renderReviewFields();
+  }
+};
+
 byId('gateway-concurrency').onclick = () => {
   const input = byId('concurrency-value');
   input.value = snapshot.concurrency_text;
@@ -639,7 +788,7 @@ function showTicket(result, updated = false) {
   byId('issued-title').textContent = updated ? 'Key 已更新' : '密钥已创建';
   byId('issued-help').textContent = updated
     ? '请在使用这把 Key 的设备上选择「更换 Key」，粘贴下面的完整 Key。'
-    : '完整密钥仅在这里显示。请复制到新版 Safe Code 中使用。';
+    : '完整密钥仅在这里显示。请复制后回到 Safe Code 主界面的「API Key 接入」粘贴。';
   notice('issued-origin', result.origin ? '接入地址  ' + result.origin : '');
   byId('ticket').value = result.ticket;
   notice('copy-status', '');
@@ -669,8 +818,26 @@ byId('refresh-ticket-form').onsubmit = event => {
 byId('create-key').onclick = () => showEditor();
 byId('key-form').onsubmit = event => {
   event.preventDefault();
+  const options = {note: byId('note').value, rpm: byId('rpm').valueAsNumber};
+  if (!modelPolicy.disabled) {
+    options.allowed_models = modelPolicy.value === 'selected' ? selectedModels() : null;
+    if (options.allowed_models?.length === 0) {
+      notice('editor-status', '请至少选择一个允许使用的模型。', true);
+      return;
+    }
+    let expiry = null;
+    if (expiryPolicy.value === 'scheduled') {
+      const original = editingKey?.expires_at;
+      expiry = original && expiryInput.value === localExpiry(original)
+        ? original : new Date(expiryInput.value).getTime() / 1000;
+      if (!Number.isFinite(expiry) || (expiry !== original && expiry <= Date.now() / 1000)) {
+        notice('editor-status', '请选择晚于现在的失效时间。', true);
+        return;
+      }
+    }
+    options.expires_at = expiry;
+  }
   void changeKey(async () => {
-    const options = {note: byId('note').value, rpm: byId('rpm').valueAsNumber};
     const budget = byId('budget');
     if (!budget.disabled) options.budget_cents = budget.value === '' ? null : Math.round(budget.valueAsNumber * 100);
     if (editingKey) {

@@ -1,6 +1,5 @@
 using Renci.SshNet;
 using Renci.SshNet.Common;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -153,8 +152,7 @@ public sealed partial class SshSession
                 using var create=replacement.CreateCommand("mktemp -d /tmp/safe-code.XXXXXXXX");create.CommandTimeout=TimeSpan.FromSeconds(10);await create.ExecuteAsync(ct);string restoredDirectory=create.Result.Trim();
                 if(!restoredDirectory.StartsWith("/tmp/safe-code."))throw new IOException("无法恢复管理通道。");
                 using var sftp=MakeSftp();await sftp.ConnectAsync(ct);
-                foreach(var name in new[]{"agent.py","network.py"})
-                {using var resource=Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote."+name)!;await sftp.UploadFileAsync(resource,restoredDirectory+"/"+name,ct);sftp.ChangePermissions(restoredDirectory+"/"+name,600);}
+                await UploadManagementModulesAsync(sftp,restoredDirectory,ct);
                 remoteDirectory=restoredDirectory;client=replacement;
             }
             catch{DisposeMountResource(replacement);throw;}
