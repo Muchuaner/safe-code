@@ -1160,7 +1160,9 @@ def stage_cloudcli_repair(cloud, staged):
     log('正在准备 CloudCLI 官方原版 '+version+'…')
     env={'PATH':str(npm.parent)+':/usr/sbin:/usr/bin:/bin','HOME':str(staged.parent),'LANG':'C.UTF-8',
          'SHARP_IGNORE_GLOBAL_LIBVIPS':'1'}
-    run([str(npm),'ci','--prefix',str(staged),'--userconfig','/dev/null','--globalconfig','/dev/null',
+    global_config=staged.parent/'global.npmrc'
+    global_config.touch(mode=0o600)
+    run([str(npm),'ci','--prefix',str(staged),'--userconfig','/dev/null','--globalconfig',str(global_config),
          '--no-audit','--no-fund'],env=env,timeout=360)
     current=json.loads((staged/package/'package.json').read_text())
     if current.get('name')!='@cloudcli-ai/cloudcli' or current.get('version')!=version:
