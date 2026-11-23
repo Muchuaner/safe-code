@@ -30,6 +30,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     Func<byte[],byte[]> unprotect, string? profileDirectory=null,ClientServices? diagnostics=null,
     string? windowsPolicyPath=null,Func<CancellationToken,Task>? beforeMessages=null) : IDisposable
 {
+    private const int MaxMessagesRequest = 16 * 1024 * 1024;
+
     internal sealed record DeviceBinding(string DeviceId,string DeviceProof,string Alias,int Port,string PublicKey);
     internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing,SshSession? HostSession=null);
     private sealed record Saved(Ticket Remote,string Local,int Port,string Profile,string Previous,JsonNode? Hybrid,bool CreatedMeta=false,
@@ -165,7 +167,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             // The remote Messages endpoint requires Content-Length, including for a chunked local request.
             using var body=new MemoryStream();
             await ctx.Request.Body.CopyToAsync(body,ctx.RequestAborted);
-            if(body.Length>8*1024*1024){ctx.Response.StatusCode=413;return;}
+            if(body.Length>MaxMessagesRequest){ctx.Response.StatusCode=413;return;}
             req.Content=new ByteArrayContent(body.ToArray());
             req.Content.Headers.ContentType=new MediaTypeHeaderValue("application/json");
         }
@@ -239,7 +241,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions{Args=[],ContentRootPath=AppContext.BaseDirectory});
         builder.Configuration.Sources.Clear();
         builder.Logging.ClearProviders();
-        builder.WebHost.ConfigureKestrel(k=>{k.Limits.MaxRequestBodySize=8*1024*1024;k.Limits.MaxConcurrentConnections=32;k.Listen(IPAddress.Loopback,port);});
+        builder.WebHost.ConfigureKestrel(k=>{k.Limits.MaxRequestBodySize=MaxMessagesRequest;k.Limits.MaxConcurrentConnections=32;k.Listen(IPAddress.Loopback,port);});
         var app=builder.Build();var client=Remote(t);
         if(device!=null)
         {
