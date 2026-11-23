@@ -2251,7 +2251,7 @@ class CloudCliBackend:
         except (OSError, HTTPException, ValueError, RecursionError):
             raise CloudCliError('CloudCLI did not return a valid web API response', 502) from None
 
-    def history_users(self, session, since=None):
+    def history_users(self, session, *, since=None, anchor=None, minimum=1):
         if not CLOUDCLI_SESSION_ID.fullmatch(session):
             raise CloudCliError('CloudCLI returned an invalid session identifier')
         # CloudCLI returns the newest page first, ordered oldest-to-newest
@@ -2276,9 +2276,11 @@ class CloudCliBackend:
                           and row.get('role') == 'user' and row.get('kind') == 'text']
             users[:0] = page_users
             has_more = data.get('hasMore')
-            if has_more is not True or (users and since is None):
+            if (has_more is not True or
+                    anchor is not None and any(row.get('transcriptAnchorId') == anchor for row in users[1:]) or
+                    anchor is None and since is None and len(users) >= minimum):
                 return users
-            if any((seen := self.history_timestamp(row)) is not None and seen < since for row in page_users):
+            if since is not None and any((seen := self.history_timestamp(row)) is not None and seen < since for row in page_users):
                 return users
             if len(rows) != 64 or type(total) is not int or total <= offset + len(rows):
                 raise CloudCliError('CloudCLI did not return its history pagination')
@@ -2720,13 +2722,16 @@ class CloudCliBackend:
             users = self.history_users(source)
             if not users or users[-1].get('transcriptAnchorId') != tip:
                 raise CloudCliError('CloudCLI history changed after the last Desktop turn', 409)
+            previous = None
             if anchor:
-                # The native history search may need older pages for an edit.
-                users = self.history_users(source,since=0)
-                matches = [row for row in users if row.get('transcriptAnchorId') == anchor]
-                if len(matches) != 1:
+                # Read through the target and its preceding user prompt.
+                users = self.history_users(source,anchor=anchor)
+                matches = [index for index,row in enumerate(users) if row.get('transcriptAnchorId') == anchor]
+                if len(matches) != 1 or users[-1].get('transcriptAnchorId') != tip:
                     raise CloudCliError('No verified CloudCLI message anchor for this Desktop branch', 409)
-                original = matches[0]
+                index = matches[0]
+                original = users[index]
+                previous = users[index-1] if index else None
             else:
                 original = users[-1]
             options = {'upToAnchorId':anchor} if anchor else {}
@@ -2735,14 +2740,21 @@ class CloudCliBackend:
             fork = result.get('data', {}).get('sessionId')
             if not isinstance(fork,str) or fork == source or not CLOUDCLI_SESSION_ID.fullmatch(fork):
                 raise CloudCliError('CloudCLI did not return a valid Desktop branch')
-            fork_users = self.history_users(fork)
+            fork_users = self.history_users(fork,minimum=2 if previous else 1)
             if not fork_users:
                 raise CloudCliError('CloudCLI did not preserve the verified Desktop prefix',409)
             head = fork_users[-1]
             fork_anchor = head.get('transcriptAnchorId')
             if (not isinstance(fork_anchor,str) or not CLOUDCLI_SESSION_ID.fullmatch(fork_anchor)
-                    or head.get('content') != original.get('content')
-                    or self.history_timestamp(head) != self.history_timestamp(original)):
+                    or head.get('content') != original.get('content')):
+                raise CloudCliError('CloudCLI did not preserve the verified Desktop prefix',409)
+            # Native forks at a user anchor recreate that prompt with a new
+            # timestamp. Check the untouched preceding prompt in that case.
+            if previous is not None:
+                if (len(fork_users) < 2 or fork_users[-2].get('content') != previous.get('content')
+                        or self.history_timestamp(fork_users[-2]) != self.history_timestamp(previous)):
+                    raise CloudCliError('CloudCLI did not preserve the verified Desktop prefix',409)
+            elif not anchor and self.history_timestamp(head) != self.history_timestamp(original):
                 raise CloudCliError('CloudCLI did not preserve the verified Desktop prefix',409)
         return (fork,project,workspace,model,fork_anchor), (fork_anchor,fork_anchor) if anchor else None
 

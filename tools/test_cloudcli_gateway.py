@@ -2094,6 +2094,26 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'],fork_id)
         self.assertEqual(self.cloud.history[-1],original)
 
+    def test_native_bounded_fork_can_recreate_its_last_user_anchor(self):
+        backend = self.manager.cloudcli
+        original = [cloud_user('Verified preceding prompt.'),cloud_user('Prompt to replace.')]
+        fork_id = 'verified-fork-session'
+        cloned = [original[0].copy(),{**cloud_user(original[-1]['content']), 'timestamp':'2026-11-23T10:00:01Z'}]
+        original[-1]['timestamp'] = '2026-11-23T10:00:00Z'
+        tip = original[-1]['transcriptAnchorId']
+        branch = ('source-scope',CLOUD_SESSION,None,None,MODEL,tip,tip)
+        self.assertNotEqual(cloned[-1]['transcriptAnchorId'],tip)
+        with patch.object(backend,'running_sessions',return_value=[]), \
+                patch.object(backend,'history_users',side_effect=lambda session, **kwargs:original if session==CLOUD_SESSION else cloned), \
+                patch.object(backend,'web_request',return_value={'data':{'sessionId':fork_id}}) as native:
+            route,edit = backend.fork_desktop_branch(branch)
+            self.assertEqual(route[0],fork_id)
+            self.assertEqual(edit,(cloned[-1]['transcriptAnchorId'],)*2)
+            self.assertEqual(json.loads(native.call_args.args[2]),{'upToAnchorId':tip})
+            cloned[0]['content'] = 'An unexpected previous prompt.'
+            with self.assertRaisesRegex(gateway.CloudCliError,'verified Desktop prefix'):
+                backend.fork_desktop_branch(branch)
+
     def test_stop_does_not_cancel_a_replacement_run(self):
         actions = []
         progress = gateway.CloudCliProgress(object(), None)
