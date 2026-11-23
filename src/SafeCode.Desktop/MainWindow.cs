@@ -409,6 +409,10 @@ public sealed class MainWindow : Window
             case "bridge.stop":
                 if(deploying)throw new InvalidOperationException("请等待当前操作完成。");deploying=true;activeStep="codex_bridge";
                 try{return claudeBridge==null?new ClaudeCodexStatus(false,false,false,18797,"sonnet",false,"未启动"):await claudeBridge.StopAsync(lifetime.Token);}finally{deploying=false;activeStep="";}
+            case "desktopKey.mode":
+                if (args.ValueKind==JsonValueKind.Object && args.TryGetProperty("enabled",out var apiMode))
+                    preferences.SetApiAccessMode(apiMode.GetBoolean());
+                return preferences.PrefersApiAccess;
             case "desktopKey.status":
                 return await KeyAccess.RestoreAsync(lifetime.Token,
                     interactive:args.TryGetProperty("interactive",out var interactive)&&interactive.ValueKind==JsonValueKind.True);
@@ -431,6 +435,7 @@ public sealed class MainWindow : Window
                     throw new InvalidOperationException("请先阅读并同意本机远程控制权限说明。");
                 return await AuthorizeKeyDeviceAsync(lifetime.Token);
             case "desktopKey.refreshModels": return await KeyAccess.RefreshModelsAsync(lifetime.Token);
+            case "desktopKey.balance": return await KeyAccess.ReadBalanceAsync(lifetime.Token);
             case "desktopKey.cancelDevice":
                 pendingKeyDevice=null;
                 return true;
@@ -510,7 +515,10 @@ public sealed class MainWindow : Window
                 gatewayWindow?.Close();
                 connecting?.Cancel();pendingHostTrust=null;clients.Dispose();session?.Dispose();session=null;return true;
             case "window.resize":
-                Width = args.GetProperty("wide").GetBoolean() ? 740 : 360; Height = args.GetProperty("wide").GetBoolean() ? 634 : 536;
+                var api = Read("layout") == "api";
+                MinHeight = api ? 495 : 500;
+                Width = api ? 660 : args.GetProperty("wide").GetBoolean() ? 740 : 360;
+                Height = api ? 495 : args.GetProperty("wide").GetBoolean() ? 634 : 536;
                 Left = Math.Max(0, (SystemParameters.WorkArea.Width - Width) / 2); Top = Math.Max(0, (SystemParameters.WorkArea.Height - Height) / 2); return true;
             case "window.drag":
                 ReleaseCapture(); SendMessage(new System.Windows.Interop.WindowInteropHelper(this).Handle, 0xA1, (IntPtr)2, IntPtr.Zero); return true;

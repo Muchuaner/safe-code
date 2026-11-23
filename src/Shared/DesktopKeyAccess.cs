@@ -36,7 +36,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing,SshSession? HostSession=null);
     private sealed record Saved(Ticket Remote,string Local,int Port,string Profile,string Previous,JsonNode? Hybrid,bool CreatedMeta=false,
         Dictionary<string,PolicyValue>? WindowsPolicy=null,DeviceBinding? Device=null);
-    private sealed record Relay(WebApplication App,HttpClient Client,int Port,Func<bool>? HostReady) : IAsyncDisposable
+    private sealed record Relay(WebApplication App,HttpClient Client,int Port,Func<bool>? HostReady,long StartedAt) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
@@ -58,29 +58,40 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     internal bool Configured=>File.Exists(StatePath);
     internal async Task<KeyBalance> ReadBalanceAsync(CancellationToken ct)
     {
+        Ticket remote;
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (!Running) throw new InvalidOperationException("API Key 接入尚未启动。");
-            using var client=Remote(Load().Remote);
-            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
-            deadline.CancelAfter(TimeSpan.FromSeconds(8));
-            using var response=await client.GetAsync("/v1/key/balance",deadline.Token).ConfigureAwait(false);
-            if (response.StatusCode==HttpStatusCode.NotFound)
-                throw new InvalidOperationException("请升级 VPS 网关后再查看 Key 余额。");
-            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                throw new InvalidOperationException("Key 无效或公网网关已停用。");
-            response.EnsureSuccessStatusCode();
-            using var body=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(deadline.Token).ConfigureAwait(false));
-            var value=body.RootElement;
-            var remaining=value.GetProperty("remaining_nanos");
-            return new KeyBalance(value.GetProperty("used_nanos").GetInt64(),
-                                  remaining.ValueKind==JsonValueKind.Null?null:remaining.GetInt64());
+            remote=Load().Remote;
         }
         finally { gate.Release(); }
+        using var client=Remote(remote);
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(8));
+        using var response=await client.GetAsync("/v1/key/balance",deadline.Token).ConfigureAwait(false);
+        if (response.StatusCode==HttpStatusCode.NotFound)
+            throw new InvalidOperationException("请升级 VPS 网关后再查看 Key 余额。");
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            throw new InvalidOperationException("Key 无效或公网网关已停用。");
+        response.EnsureSuccessStatusCode();
+        using var body=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(deadline.Token).ConfigureAwait(false));
+        var value=body.RootElement;
+        var remaining=value.GetProperty("remaining_nanos");
+        IReadOnlyList<KeyModelUsage>? models=null;
+        if(value.TryGetProperty("models",out var rows)&&rows.ValueKind==JsonValueKind.Array)
+            models=rows.EnumerateArray().Select(row=>new KeyModelUsage(
+                row.GetProperty("model").GetString()??"",
+                row.GetProperty("input").GetInt64(),row.GetProperty("output").GetInt64(),
+                row.GetProperty("cache_read").GetInt64(),row.GetProperty("cache_write").GetInt64(),
+                row.GetProperty("cost_nanos").GetInt64(),row.GetProperty("unpriced_tokens").GetInt64())).ToArray();
+        return new KeyBalance(value.GetProperty("used_nanos").GetInt64(),
+                              remaining.ValueKind==JsonValueKind.Null?null:remaining.GetInt64(),models);
     }
 
-    internal sealed record KeyBalance(long UsedNanos,long? RemainingNanos)
+    internal sealed record KeyModelUsage(string Model,long Input,long Output,long CacheRead,long CacheWrite,
+        long CostNanos,long UnpricedTokens);
+    internal sealed record KeyBalance(long UsedNanos,long? RemainingNanos,IReadOnlyList<KeyModelUsage>? Models)
     {
         private static string Usd(long nanos)=>"$"+(nanos/1_000_000_000m).ToString("0.00##",System.Globalization.CultureInfo.InvariantCulture);
         public string Used=>"已用 "+Usd(UsedNanos);
@@ -253,7 +264,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             await app.StartAsync(ct);
             var addresses=app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses;
-            return new(app,client,new Uri(addresses.Single()).Port,hostReady);
+            return new(app,client,new Uri(addresses.Single()).Port,hostReady,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
         catch{client.Dispose();await app.DisposeAsync();throw;}
     }
@@ -557,7 +568,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     {
         bool disconnected=relay?.HostReady?.Invoke()==false;
         var device=Configured?Load().Device:null;
-        return new{configured=Configured,running=relay!=null&&!disconnected,deviceAlias=device?.Alias,
+        return new{configured=Configured,running=relay!=null&&!disconnected,deviceAlias=device?.Alias,startedAt=relay?.StartedAt,
             error=error??(disconnected?"已授权的本机远程控制暂不可用。请恢复本机控制或选择「重新启用」。":null)};
     }
     // The classifier accepts permission checks only. Publishing it as a chat model

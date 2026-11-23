@@ -332,7 +332,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             }
             reconcileDialogs()
             answer(id,true)
-        case "window.resize":let wide=args["wide"] as? Bool ?? false;window.setContentSize(NSSize(width:wide ? 740:360,height:wide ? 634:536));window.center();answer(id,true)
+        case "window.resize":
+            let wide=args["wide"] as? Bool ?? false
+            let api=args["layout"] as? String == "api"
+            window.setContentSize(NSSize(width:api ? 660:(wide ? 740:360),height:api ? 495:(wide ? 634:536)))
+            window.center();answer(id,true)
         case "window.drag":if let event=NSApp.currentEvent,event.type == .leftMouseDown {window.performDrag(with:event)};answer(id,true)
         case "window.minimize":window.miniaturize(nil);answer(id,true)
         case "window.maximize":window.zoom(nil);answer(id,true)

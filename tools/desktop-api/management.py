@@ -131,13 +131,17 @@ class KeyRegistry:
 
     def balance(self, key_id):
         with self.connect() as db:
-            row = db.execute('''SELECT k.budget_nanos, COALESCE(SUM(u.cost_nanos),0) AS used_nanos
-                FROM keys k LEFT JOIN usage u ON u.key_id=k.id WHERE k.id=? GROUP BY k.id''', (key_id,)).fetchone()
-        if row is None:
-            return None
-        budget, used = row['budget_nanos'], row['used_nanos']
+            db.execute('BEGIN')
+            row = db.execute('SELECT budget_nanos FROM keys WHERE id=?', (key_id,)).fetchone()
+            if row is None:
+                return None
+            models = [dict(model) for model in db.execute(
+                'SELECT model,input,output,cache_read,cache_write,cost_nanos,unpriced_tokens FROM usage '
+                'WHERE key_id=? ORDER BY requests DESC,model', (key_id,))]
+        budget = row['budget_nanos']
+        used = sum(model['cost_nanos'] for model in models)
         return {'budget_nanos': budget, 'used_nanos': used,
-                'remaining_nanos': None if budget is None else max(0, budget-used)}
+                'remaining_nanos': None if budget is None else max(0, budget-used), 'models': models}
 
     def update(self, key_id, note, rpm, *, budget_nanos=..., expires_at=..., allowed_models=...):
         with self.connect() as db:

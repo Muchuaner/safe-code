@@ -58,6 +58,17 @@ internal sealed class ClientPreferences(string directory)
         // 使用默认账户参数时不会创建草稿目录，部署成功后的清理应直接跳过。
         try{File.Delete(DraftPath(session));}catch(DirectoryNotFoundException){}
     }
+    private string ApiAccessModePath => Path.Combine(directory,"api-access-mode");
+    public bool PrefersApiAccess => File.Exists(ApiAccessModePath);
+    public void SetApiAccessMode(bool enabled)
+    {
+        if (enabled)
+        {
+            Directory.CreateDirectory(directory);
+            using var marker = File.Open(ApiAccessModePath,FileMode.OpenOrCreate,FileAccess.Write,FileShare.ReadWrite);
+        }
+        else if (PrefersApiAccess) File.Delete(ApiAccessModePath);
+    }
     public DesktopResolution ReadResolution()
     {
         try{var value=JsonSerializer.Deserialize<DesktopResolution>(File.ReadAllText(Path.Combine(directory,"desktop-resolution.json")),JsonDefaults.Options);return value!=null&&Resolutions.Contains(value)?value:new();}catch(IOException){return new();}catch(JsonException){return new();}

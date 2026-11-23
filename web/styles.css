@@ -401,3 +401,53 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
 #socks-form .config-footer { margin-top: 14px; padding-top: 13px; }
 #socks-status { color: #5e7064; font-size: 10px; overflow-wrap: anywhere; }
 #socks-disable { flex-shrink: 0; min-height: 34px; padding: 0 10px; }
+
+/* API access is a main-window mode shared by both desktop shells. */
+.window.api-window{width:660px;height:495px}
+.api-access{gap:18px;padding:26px 28px 19px;background:#fff}
+.api-heading,.api-usage-heading,.api-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.api-heading h1:focus{outline:none}
+#api-state{display:flex;align-items:center;gap:7px;margin:7px 0 0;color:#69796e;font-size:var(--type-small)}
+#api-state b{font-weight:550;white-space:nowrap}
+#api-state>span:first-child{width:7px;height:7px;border-radius:50%;background:#a7b0a9}
+#api-state.connected{color:var(--green)}
+#api-state.connected>span:first-child{background:var(--green)}
+#api-device{color:#69796e;overflow-wrap:anywhere}
+#api-device:empty{display:none}
+#api-device:not(:empty)::before{content:'·';margin-right:7px}
+.api-access .text-button{color:#62796a;font-size:var(--type-small)}
+.api-access .text-button:hover:not(:disabled){color:var(--green)}
+.api-access .text-button:disabled{color:var(--muted)}
+.api-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0}
+.api-metrics>div{min-width:0;padding:13px 14px;background:#f8faf8;border:1px solid #e0e7e1;border-radius:7px}
+.api-metrics>div:nth-child(2){background:#eff6f0;border-color:#dbe9de}
+.api-metrics dt,.api-usage-heading p{margin:0;color:#617468;font-size:var(--type-small)}
+.api-metrics dd{margin:6px 0 0;font-size:var(--type-large);font-weight:600;letter-spacing:-.35px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.api-metrics>div:nth-child(2) dd{color:var(--green)}
+.api-usage{flex:1;min-height:0;display:flex;flex-direction:column;border:1px solid #e0e7e1;border-radius:7px;overflow:hidden}
+.api-usage-heading{padding:11px 14px}
+.api-usage-heading>div{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.api-usage-heading h2{margin:0;font-size:var(--type-medium);font-weight:600}
+.api-usage-table{overflow:auto;scrollbar-width:thin!important;min-height:0}
+.api-usage-table table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--type-small)}
+.api-usage-table tr>*{text-align:right;padding:9px 14px;border-top:1px solid #e9ede9;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.api-usage-table tr>:first-child{text-align:left;width:48%}
+.api-usage-table thead th{font-weight:500;color:#617468;background:#f7f9f7}
+.api-usage-table tbody th{font-weight:550}
+#api-usage-message{margin:0;padding:14px;color:#617468;font-size:var(--type-small);border-top:1px solid #e9ede9}
+.api-actions{flex-shrink:0;border-top:1px solid #e9ede9;padding-top:13px}
+.api-actions>div{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.api-actions .primary{width:auto;margin:0;height:36px;padding:0 16px;font-size:var(--type-small);white-space:nowrap}
+@media(min-width:491px){
+ .native-client:not(.macos-client) .api-access{padding-top:20px;gap:14px}
+ .native-client:not(.macos-client) .api-usage-table tr>*{padding-block:7px}
+}
+@media(max-width:490px){
+ .api-access{padding:17px 14px 13px;gap:12px;overflow:auto}
+ .api-metrics{gap:6px}
+ .api-metrics>div{padding:9px 7px}
+ .api-metrics dd{font-size:var(--type-medium)}
+ .api-usage{flex-basis:120px;flex-shrink:0}
+ .api-usage-table tr>*{padding:7px}
+ .api-actions>div{gap:9px}
+}

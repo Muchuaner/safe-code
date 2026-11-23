@@ -41,8 +41,9 @@ const tasks = [
 states = Array(tasks.length).fill('pending');
 taskLogs = Array(tasks.length).fill('');
 function showScreen(name) {
-  for(const id of ['notice','login','workspace']) $('#'+id+'-screen').hidden = id!==name;
+  for(const id of ['notice','login','workspace','api']) $('#'+id+'-screen').hidden = id!==name;
   appWindow.classList.toggle('wide',name==='workspace');
+  appWindow.classList.toggle('api-window',name==='api');
 }
 function stopWork(){for(const timer of advancedTimers)clearTimeout(timer);advancedTimers.clear();if(ipQueryController)ipQueryController.abort();clearTimeout(connectionTimer);runToken++;busy=false;}
 function exit(){stopWork();$('#login-form').reset();appWindow.hidden=true;$('#restore-window').hidden=true;$('#ip-policy-dialog').close();$('#socks-dialog').close();$('#localization-dialog').close();$('#mount-dialog').close();$('#maintenance-result').close();$('#result-body').replaceChildren();$('#client-window').close();$('#client-frame').removeAttribute('src');document.title='Safe Code · 已退出';}

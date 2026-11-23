@@ -185,7 +185,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('.titlebar').addEventListener('mousedown',e=>{if(e.button===0&&!e.target.closest('button'))native('window.drag');});
     $('.titlebar').addEventListener('dblclick',e=>{if(!e.target.closest('button'))native('window.maximize');});
     $('#client-window').addEventListener('close',()=>$('#client-frame').removeAttribute('src'));
-    const originalShowScreen=showScreen;showScreen=function(name){originalShowScreen(name);native('window.resize',{wide:name==='workspace'});};
+    const originalShowScreen=showScreen;showScreen=function(name){originalShowScreen(name);native('window.resize',{wide:name==='workspace',layout:name});};
     const advanced=$('#advanced-connect');
     advanced.onclick=()=>{$('#ssh-port').value=String(sshPort);$('#advanced-dialog').showModal();$('#ssh-port').focus();};
     $('#ssh-port').addEventListener('input',()=>$('#ssh-port').setCustomValidity(''));
@@ -938,6 +938,94 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     const keyDialog=$('#desktop-key-dialog'), keyInput=$('#desktop-key-input'), keyProgress=$('#desktop-key-progress');
     const keyEnable=$('#desktop-key-enable'), keyReplace=$('#desktop-key-replace'), keyResume=$('#desktop-key-resume');
     let keyReplacing=false, keyDeviceSetup=null;
+    const apiScreen=$('#api-screen'), apiUsage=$('#api-usage-message'), apiTable=$('#api-model-table');
+    let apiModeWrite=Promise.resolve();
+    function rememberApiMode(enabled){
+      apiModeWrite=apiModeWrite.then(()=>native('desktopKey.mode',{enabled})).catch(()=>{});
+    }
+    let apiReturn='login', apiRequest=0, apiFetching=false;
+    const usd=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4});
+    const tokens=new Intl.NumberFormat('zh-CN');
+    function money(value){
+      return value>0&&value<100000?'< $0.0001':usd.format(value/1e9);
+    }
+    function renderApiDuration(){
+      const start=keyState.startedAt;
+      if(!keyState.running||!Number.isFinite(start)){ $('#api-duration').textContent='—';return; }
+      const elapsed=Math.max(0,Math.floor((Date.now()-start)/1000));
+      const hours=Math.floor(elapsed/3600), minutes=Math.floor(elapsed/60)%60, seconds=elapsed%60;
+      $('#api-duration').textContent=hours?`${hours} 小时 ${minutes} 分`:minutes?`${minutes} 分 ${seconds} 秒`:`${seconds} 秒`;
+    }
+    function renderApi(){
+      $('#api-state-label').textContent=keyState.running?'已接入':keyState.configured?'待恢复':'未接入';
+      $('#api-state').classList.toggle('connected',!!keyState.running);
+      $('#api-device').textContent=keyState.deviceAlias?keyState.deviceAlias:'';
+      $('#api-manage-key').textContent=keyState.running?'接入设置':'恢复接入';
+      setLaunchAvailability('api-open-claude',!!keyState.running&&!keyBusy);
+      $('#api-usage-refresh').disabled=!keyState.running||apiFetching;
+      renderApiDuration();
+    }
+    function resetApiUsage(message){
+      apiRequest++;apiFetching=false;
+      $('#api-balance').textContent=$('#api-spend').textContent='—';
+      $('#api-models').replaceChildren();apiTable.hidden=true;
+      apiUsage.hidden=false;apiUsage.textContent=message;
+    }
+    async function refreshApiUsage(){
+      if(apiScreen.hidden||!keyState.running||apiFetching)return;
+      apiFetching=true;renderApi();
+      const request=++apiRequest;
+      try{
+        const data=await native('desktopKey.balance');
+        if(request!==apiRequest)return;
+        $('#api-balance').textContent=data.remainingNanos===null?'不限额':money(data.remainingNanos);
+        $('#api-spend').textContent=money(data.usedNanos);
+        const rows=Array.isArray(data.models)?data.models:[];
+        const elements=rows.map(model=>{
+          const row=document.createElement('tr');
+          const count=model.input+model.output+model.cacheRead+model.cacheWrite;
+          const fee=model.unpricedTokens>0?(model.costNanos?money(model.costNanos)+' + 未计价':'未计价'):money(model.costNanos);
+          for(const [index,value] of [model.model,tokens.format(count),fee].entries()){
+            const cell=document.createElement(index===0?'th':'td');
+            if(index===0)cell.scope='row';
+            cell.textContent=value;row.append(cell);
+          }
+          return row;
+        });
+        $('#api-models').replaceChildren(...elements);
+        apiTable.hidden=!rows.length;apiUsage.hidden=!!rows.length;
+        apiUsage.textContent=Array.isArray(data.models)?'当前 Key 暂无模型用量。':'当前网关版本暂不提供模型明细。';
+      }catch{
+        if(request!==apiRequest)return;
+        apiUsage.hidden=false;
+        apiUsage.textContent=apiTable.hidden?'暂时无法获取用量，请点击「刷新用量」重试。':'刷新失败，已保留上次查询的数据。';
+      }finally{
+        if(request===apiRequest){apiFetching=false;renderApi();}
+      }
+    }
+    function showApiAccess(remember=true){
+      if(apiScreen.hidden){
+        apiReturn=$('#workspace-screen').hidden?'login':'workspace';
+        if(remember)rememberApiMode(true);
+        showScreen('api');$('#api-title').focus();
+      }
+      if(keyDialog.open)keyDialog.close();
+      resetApiUsage(keyState.running?'正在查询用量…':'恢复接入后即可查看用量。');
+      renderApi();void refreshApiUsage();
+    }
+    function closeApiAccess(){
+      rememberApiMode(false);
+      resetApiUsage('正在查询用量…');
+      showScreen(apiReturn==='workspace'&&connectionReady?'workspace':'login');
+    }
+    $('#api-server-mode').onclick=closeApiAccess;
+    $('#api-usage-refresh').onclick=refreshApiUsage;
+    $('#api-open-claude').onclick=()=>openLocalClient($('#api-open-claude'),'claudeDesktop.open',renderApi);
+    $('#api-manage-key').onclick=()=>{
+      keyDialog.showModal();void keyAction('status',{interactive:true});
+    };
+    setInterval(()=>{if(!apiScreen.hidden)renderApiDuration();},1000);
+    setInterval(refreshApiUsage,30000);
     function describeKey(op,args){
       const target=keyState.deviceAlias?'\n工具目标：已授权的本机设备 '+keyState.deviceAlias:'';
       if(keyState.error)return (keyState.configured?'已保存 Key，暂未恢复接入。\n':'')+keyState.error;
@@ -966,6 +1054,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       setLaunchAvailability('desktop-key-open',keyState.running&&!keyBusy&&!keyReplacing);
       $('#desktop-key-close').disabled=keyBusy;
       renderDesktopAccess();
+      if(!apiScreen.hidden)renderApi();
     }
     async function keyAction(op,args={}){
       if(keyBusy)return;
@@ -985,6 +1074,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         keyState=result;
         if(op==='enable'&&keyState.running)keyReplacing=false;
         keyProgress.textContent=op==='refreshModels'?'模型列表已更新。请完全退出并重新打开 Claude Desktop。':describeKey(op,args);
+        if(op==='enable'&&keyState.running)showApiAccess();
+        if(op==='disable'&&!apiScreen.hidden){keyDialog.close();closeApiAccess();}
       }catch(error){
         keyProgress.textContent=error.message;
       }finally{keyBusy=false;renderKey();}
@@ -993,6 +1084,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const button=$('#'+id);button.hidden=false;
       button.onclick=()=>{
         if(keyDialog.open)return;
+        if(keyState.running){showApiAccess();return;}
         keyDialog.showModal();
         keyAction('status',{interactive:true});
       };
@@ -1130,6 +1222,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           keyDeviceSetup=null;keyReplacing=false;
           keyProgress.textContent=describeKey('enable');
           hostDialog.close();renderKey();
+          if(keyState.running)showApiAccess();
         }catch(error){
           $('#host-risk').checked=false;
           $('#host-progress').textContent=error.message;
@@ -1322,8 +1415,14 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       }catch{showAppMessage('无法保存声明确认，请检查本机存储空间。');}
     };
     const startupReady=preferencesReady.then(()=>native('notice.state')).then(state=>{if(state.accepted&&(!window.__safeCodeAcceptance||window.__safeCodeConnectionAcceptance)){showScreen('login');confirmServices().then(showPreferences).catch(()=>{});}else{showScreen('notice');}}).catch(()=>{showScreen('notice');});
-    startupReady.then(()=>{if(!window.__safeCodeAcceptance&&!window.__safeCodeConnectionAcceptance)return keyAction('status');});
-    startupReady.then(async()=>{if(window.__safeCodeAcceptance||window.__safeCodeConnectionAcceptance||!$('#notice-screen').hidden)return;const settings=await native('gateways.resume-settings');if(settings&&!$('#login-screen').hidden&&!connectionInFlight)await connect(settings,true);}).catch(()=>{});
+    startupReady.then(async()=>{
+      if(window.__safeCodeAcceptance||window.__safeCodeConnectionAcceptance||!$('#notice-screen').hidden)return;
+      await keyAction('status');
+      const prefersApi=keyState.configured&&await native('desktopKey.mode').catch(()=>false);
+      if(prefersApi&&!$('#login-screen').hidden){showApiAccess(false);return;}
+      const settings=await native('gateways.resume-settings');
+      if(settings&&!$('#login-screen').hidden&&!connectionInFlight)await connect(settings,true);
+    }).catch(()=>{});
     for(const button of document.querySelectorAll('[data-open-services]')){
       if(isMac)button.onclick=()=>native('services.open').catch(error=>showAppMessage(error.message));
       else button.addEventListener('click',refreshPreferences);

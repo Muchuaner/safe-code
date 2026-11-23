@@ -215,6 +215,10 @@ internal sealed class MacBackend : IDisposable
             case "bridge.stop":return new{running=false,connected=false,cleanupPending=false,message="未启动"};
             case "secrets.initialize":
                 LocalSecrets.Initialize(Convert.FromBase64String(Read("key")));return true;
+            case "desktopKey.mode":
+                if (args.ValueKind==JsonValueKind.Object && args.TryGetProperty("enabled",out var apiMode))
+                    preferences.SetApiAccessMode(apiMode.GetBoolean());
+                return preferences.PrefersApiAccess;
             case "desktopKey.status" when !LocalSecrets.IsUnlocked:
                 return new{configured=File.Exists(Path.Combine(directory,"desktop-key.state")),running=false};
             case "desktopKey.status":
