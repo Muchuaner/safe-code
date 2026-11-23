@@ -1174,6 +1174,8 @@ def repair_safe_code_api(entry, command, options, work_python):
     cloud_unit=CLOUD_UNIT
     cloud_script='node_modules/@cloudcli-ai/cloudcli/dist-server/server/index.js'
     state=Path(entry.pw_dir)/API_STATE
+    if state.resolve().is_relative_to(API_DIRECTORY.resolve()):
+        raise RuntimeError('网关数据位于程序目录，无法安全重装。')
     secure_root_directory(STATE,0o700)
     secure_root_directory(API_DIRECTORY.parent,0o755)
     secure_root_directory(API_UNIT.parent,0o755)
@@ -1220,8 +1222,15 @@ def replace_gateway_programs(entry, command, source, state, work_python, revisio
             package=Path(tempfile.mkdtemp(prefix='.cloudcli-repair-',dir=cloud.parent))
             replacements.append((cloud,package))
             units.append(cloud_unit)
-            environment=run(['systemctl','show','-p','Environment','--value',cloud_unit.name],timeout=8).stdout
-            port=next((item.split('=',1)[1] for item in shlex.split(environment) if item.startswith('SERVER_PORT=')),'3001')
+            raw_env=run(['systemctl','show','-p','Environment','--value',cloud_unit.name],timeout=8).stdout
+            cloud_env=dict(item.split('=',1) for item in shlex.split(raw_env) if '=' in item)
+            env_files=run(['systemctl','show','-p','EnvironmentFiles','--value',cloud_unit.name],timeout=8).stdout
+            database=Path(cloud_env.get('DATABASE_PATH',''))
+            cloud_home=Path(cloud_env.get('HOME',entry.pw_dir))
+            if env_files.strip() or any(not path.is_absolute() or path.resolve().is_relative_to(cloud.resolve())
+                                        for path in (database,cloud_home)):
+                raise RuntimeError('无法确认 CloudCLI 的账号和对话数据位于程序目录外，未更改服务。')
+            port=cloud_env.get('SERVER_PORT','3001')
             if not port.isdecimal() or not 1<=int(port)<=65535:
                 raise ValueError('CloudCLI 的服务端口无效。')
             (package/'new').mkdir(mode=0o755)
