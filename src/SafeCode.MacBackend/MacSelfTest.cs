@@ -35,6 +35,9 @@ internal static class MacSelfTest
            (string?)models[2]!["behavesAs"]!="claude-fixture-opus"||
            (string?)models[3]!["maxEffort"]!="high"||classifier!="claude-fixture-classifier")
             throw new Exception("Claude Desktop API Key 模型、思考强度或分类器配置错误。");
+        using(var transport=DesktopKeyAccess.RemoteHandler(new("https://gateway.example",new string('0',64),new string('a',43))))
+            if(transport.UseProxy)throw new Exception("固定证书网关不应经过系统代理的 CONNECT 隧道。");
+        Console.WriteLine("MAC_PINNED_GATEWAY_DIRECT_TRANSPORT_OK");
         Console.WriteLine("MAC_CLAUDE_PROFILE_CHAT_AND_CLASSIFIER_CONFIGURATION_OK");
         string profileTest = Directory.CreateTempSubdirectory("safecode-mac-profile-").FullName;
         try

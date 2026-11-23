@@ -99,11 +99,16 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(File.Exists(Path.Combine(unpackaged,"_meta.json")))return unpackaged;
         return Directory.Exists(packaged)||Directory.Exists(package)&&!Directory.Exists(unpackaged)?packaged:unpackaged;
     }
-    private static HttpClient Remote(Ticket t)
+    // Certificate pinning authenticates the gateway directly; proxy CONNECT tunnels only add a failure point.
+    internal static HttpClientHandler RemoteHandler(Ticket t)
     {
         var pin=Convert.FromHexString(t.Pin);
-        var handler=new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false};
-        handler.ServerCertificateCustomValidationCallback=(_,cert,_,_)=>MatchesPin(pin,cert);
+        return new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false,UseProxy=false,
+            ServerCertificateCustomValidationCallback=(_,cert,_,_)=>MatchesPin(pin,cert)};
+    }
+    private static HttpClient Remote(Ticket t)
+    {
+        var handler=RemoteHandler(t);
         var c=new HttpClient(handler){BaseAddress=new Uri(t.Url),Timeout=TimeSpan.FromMinutes(11),MaxResponseContentBufferSize=1024*1024};
         c.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",t.Key);
         c.DefaultRequestHeaders.Add("X-SafeCode-Platform",OperatingSystem.IsMacOS()?"macos":"windows");
