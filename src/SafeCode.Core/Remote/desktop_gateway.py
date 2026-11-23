@@ -735,6 +735,48 @@ def history_signature(messages, scope):
     return signature(clean)
 
 
+DESKTOP_INTERRUPTIONS = frozenset(('[Request interrupted by user]', '[Request interrupted by user for tool use]'))
+
+
+def split_desktop_interruptions(messages):
+    """Restore the turn boundaries lost when Desktop coalesces consecutive user messages."""
+    result, stopped = [], set()
+    for message in messages:
+        if message['role'] != 'user':
+            result.append(message)
+            continue
+        content = blocks(message.get('content', []))
+        if not any(item.get('type') == 'text' and item.get('text', '').strip() in DESKTOP_INTERRUPTIONS
+                   for item in content):
+            result.append(message)
+            continue
+        pending = []
+        for item in content:
+            if item.get('type') != 'text' or item.get('text','').strip() not in DESKTOP_INTERRUPTIONS:
+                pending.append(item)
+                continue
+            if pending:
+                if pending[-1].get('type') == 'text':
+                    pending[-1]['text'] = pending[-1]['text'].removesuffix('\n')
+                stopped.add(len(result))
+                result.append({'role':'user','content':pending})
+                pending = []
+            elif result and result[-1]['role'] == 'user':
+                stopped.add(len(result)-1)
+        if pending:
+            result.append({'role':'user','content':pending})
+    if len(result)-1 in stopped:
+        raise CloudCliError('CloudCLI requires a new user task after stopping', 400)
+    # A rejected attempt can still appear in the UI even though the gateway
+    # never ran it. Try earlier checkpoints only through marked user turns.
+    prefixes = []
+    index = len(result)-2
+    while index in stopped:
+        prefixes.append(history_signature(result[:index],'cloudcli'))
+        index -= 1
+    return result, prefixes
+
+
 def desktop_compact_context(messages):
     for message in messages:
         if message['role'] != 'user':
@@ -1775,6 +1817,8 @@ class CloudCliBackend:
                        'updated REAL NOT NULL, PRIMARY KEY (scope, session, prefix))')
             db.execute('CREATE TABLE IF NOT EXISTS workspace_prompts (scope TEXT NOT NULL, session TEXT NOT NULL, '
                        'position INTEGER NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (scope, session))')
+            db.execute('CREATE TABLE IF NOT EXISTS stopped_before_anchor (scope TEXT NOT NULL, session TEXT NOT NULL, '
+                       'prefix TEXT NOT NULL, prior_anchor TEXT, PRIMARY KEY (scope,session))')
 
     def verified_model_options(self):
         if not self.config.get('desktopQuestions'):
@@ -2560,13 +2604,21 @@ class CloudCliBackend:
         if content:
             histories.append(history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli'))
         with closing(sqlite3.connect(self.path)) as db, db:
+            previous = db.execute('SELECT tip_anchor FROM session_state WHERE scope=? AND session=?',
+                                  (namespace, session)).fetchone()
+            prior_anchor = previous[0] if previous else None
             self.save_session(db, namespace, prefix, session, project, workspace, histories)
             self.save_turn_state(db, namespace, session, prefix, progress, anchor)
+            if stopped and anchor is None and progress.edit_anchor is None and (
+                    prior_anchor or prefix == history_signature([], 'cloudcli')):
+                db.execute('INSERT OR REPLACE INTO stopped_before_anchor VALUES (?,?,?,?)',
+                           (namespace,session,prefix,prior_anchor))
         return True
 
     @staticmethod
     def save_turn_state(db, namespace, session, prefix, progress, anchor):
         now = time.time()
+        db.execute('DELETE FROM stopped_before_anchor WHERE scope=? AND session=?',(namespace,session))
         db.execute('INSERT OR REPLACE INTO session_state VALUES (?, ?, ?, ?, ?)',
                    (namespace, session, progress.model, anchor, now))
         if progress.edit_anchor is not None:
@@ -2587,14 +2639,15 @@ class CloudCliBackend:
                 workspace is not None and (self.device or 'projectWorkspaces' in (self.config['hostControl'] or {}))):
             db.execute('INSERT OR REPLACE INTO session_projects VALUES (?, ?, ?, ?)', (session, project, workspace, now))
 
-    def session_binding(self, db, namespace, prefix, position, compact_context):
+    def session_binding(self, db, namespace, prefix, position, compact_context, interrupted_prefixes=()):
         fields = ('SELECT DISTINCT sessions.session, project, workspace, model, tip_anchor FROM sessions '
                   'LEFT JOIN session_projects USING (session) '
                   'LEFT JOIN session_state USING (scope, session) WHERE sessions.scope=?')
         if position:
-            current = db.execute(fields+' AND history=?', (namespace, prefix)).fetchone()
-            if current is not None:
-                return current, None
+            for candidate in (prefix,*interrupted_prefixes):
+                current = db.execute(fields+' AND history=?', (namespace, candidate)).fetchone()
+                if current is not None:
+                    return current, None
         if namespace.rpartition(':')[2] and self.config.get('desktopQuestions'):
             bindings = db.execute(fields+' LIMIT 2', (namespace,)).fetchall()
             if bindings:
@@ -2610,10 +2663,88 @@ class CloudCliBackend:
                         anchor = self.stopped_edit_anchor(db, namespace, prefix, binding[0])
                         if anchor is not None:
                             return binding, (anchor, anchor)
+                        if self.stopped_before_user_message(db,namespace,prefix,binding[0]):
+                            return binding, None
                 raise CloudCliError('No verified CloudCLI message anchor for this Desktop edit', 409)
-        if position:
+            if position:
+                branch = self.desktop_branch_source(db, namespace, prefix, interrupted_prefixes)
+                if branch is not None:
+                    return self.fork_desktop_branch(branch)
+        if position and history_signature([], 'cloudcli') not in interrupted_prefixes:
             raise CloudCliError('No matching CloudCLI session; start a new Desktop conversation', 409)
         return None, None
+
+    def stopped_before_user_message(self, db, namespace, prefix, session):
+        checkpoint = db.execute('SELECT prior_anchor FROM stopped_before_anchor WHERE scope=? AND session=? AND prefix=?',
+                                (namespace,session,prefix)).fetchone()
+        if checkpoint is None:
+            return False
+        if any(not isinstance(row,dict) or row.get('sessionId') == session for row in self.running_sessions()):
+            raise CloudCliError('CloudCLI is still stopping the previous Desktop turn',409)
+        users = self.history_users(session)
+        # The provider can stop before appending the old prompt. In that case
+        # a verified unchanged transcript accepts the edit as a normal send.
+        return (users[-1].get('transcriptAnchorId') if users else None) == checkpoint[0]
+
+    def desktop_branch_source(self, db, namespace, prefix, interrupted_prefixes):
+        # A local rewind may have a new Desktop UUID. Only branch a verified
+        # prefix from this same gateway binding (the database is per device).
+        same_binding = namespace.rsplit(':',1)[0]+':%'
+        for candidate in (prefix,*interrupted_prefixes):
+            if candidate == history_signature([], 'cloudcli'):
+                continue
+            candidates = db.execute("""
+                SELECT s.scope,s.session,p.project,p.workspace,t.model,t.tip_anchor,NULL
+                FROM sessions s JOIN session_state t USING (scope,session)
+                LEFT JOIN session_projects p USING (session)
+                WHERE s.scope LIKE ? AND s.scope<>? AND s.history=? AND t.tip_anchor IS NOT NULL LIMIT 2
+                """,(same_binding,namespace,candidate)).fetchall()
+            if not candidates:
+                candidates = db.execute("""
+                    SELECT e.scope,e.session,p.project,p.workspace,t.model,t.tip_anchor,e.anchor
+                    FROM edit_turns e JOIN session_state t USING (scope,session)
+                    LEFT JOIN session_projects p USING (session)
+                    WHERE e.scope LIKE ? AND e.scope<>? AND e.prefix=? AND t.tip_anchor IS NOT NULL LIMIT 2
+                    """,(same_binding,namespace,candidate)).fetchall()
+            if len(candidates) == 1:
+                return candidates[0]
+            if candidates:
+                raise CloudCliError('More than one CloudCLI conversation matches this Desktop branch', 409)
+        return None
+
+    def fork_desktop_branch(self, branch):
+        source_scope, source, project, workspace, model, tip, anchor = branch
+        with self.conversation_slot(source_scope):
+            if any(not isinstance(row,dict) or row.get('sessionId') == source for row in self.running_sessions()):
+                raise CloudCliError('The original CloudCLI conversation is still running', 409)
+            users = self.history_users(source)
+            if not users or users[-1].get('transcriptAnchorId') != tip:
+                raise CloudCliError('CloudCLI history changed after the last Desktop turn', 409)
+            if anchor:
+                # The native history search may need older pages for an edit.
+                users = self.history_users(source,since=0)
+                matches = [row for row in users if row.get('transcriptAnchorId') == anchor]
+                if len(matches) != 1:
+                    raise CloudCliError('No verified CloudCLI message anchor for this Desktop branch', 409)
+                original = matches[0]
+            else:
+                original = users[-1]
+            options = {'upToAnchorId':anchor} if anchor else {}
+            result = self.web_request('POST', f'/api/providers/sessions/{source}/fork',
+                                      json.dumps(options).encode())
+            fork = result.get('data', {}).get('sessionId')
+            if not isinstance(fork,str) or fork == source or not CLOUDCLI_SESSION_ID.fullmatch(fork):
+                raise CloudCliError('CloudCLI did not return a valid Desktop branch')
+            fork_users = self.history_users(fork)
+            if not fork_users:
+                raise CloudCliError('CloudCLI did not preserve the verified Desktop prefix',409)
+            head = fork_users[-1]
+            fork_anchor = head.get('transcriptAnchorId')
+            if (not isinstance(fork_anchor,str) or not CLOUDCLI_SESSION_ID.fullmatch(fork_anchor)
+                    or head.get('content') != original.get('content')
+                    or self.history_timestamp(head) != self.history_timestamp(original)):
+                raise CloudCliError('CloudCLI did not preserve the verified Desktop prefix',409)
+        return (fork,project,workspace,model,fork_anchor), (fork_anchor,fork_anchor) if anchor else None
 
     @staticmethod
     def verified_compact_context(db, namespace, context):
@@ -2674,6 +2805,7 @@ class CloudCliBackend:
             db.execute('DELETE FROM edit_turns WHERE scope=? AND session=?', (namespace, session))
             db.execute('DELETE FROM session_state WHERE scope=? AND session=?', (namespace, session))
             db.execute('DELETE FROM workspace_prompts WHERE scope=? AND session=?', (namespace, session))
+            db.execute('DELETE FROM stopped_before_anchor WHERE scope=? AND session=?', (namespace, session))
 
     @contextmanager
     def conversation_slot(self, conversation):
@@ -2721,8 +2853,13 @@ class CloudCliBackend:
         messages = [m for m in original if m['role'] != 'system']
         if not messages or messages[-1]['role'] != 'user':
             raise CloudCliError('CloudCLI messages must end with a user task', 400)
-        latest = blocks(messages[-1].get('content'))
         scope = conversation_scope(data, session_header)
+        interrupted_prefixes = []
+        if scope:
+            messages, interrupted_prefixes = split_desktop_interruptions(messages)
+        if not messages or messages[-1]['role'] != 'user':
+            raise CloudCliError('CloudCLI requires a new user task after stopping', 400)
+        latest = blocks(messages[-1].get('content'))
         namespace = self.identity+':'+scope
         if any(isinstance(part, dict) and part.get('type') == 'tool_result' for part in latest):
             if not scope or self.config.get('desktopQuestions') is None:
@@ -2816,13 +2953,17 @@ class CloudCliBackend:
                     db.execute('DELETE FROM workspace_prompts WHERE NOT EXISTS '
                                '(SELECT 1 FROM sessions WHERE sessions.scope=workspace_prompts.scope '
                                'AND sessions.session=workspace_prompts.session)')
+                    db.execute('DELETE FROM stopped_before_anchor WHERE NOT EXISTS '
+                               '(SELECT 1 FROM sessions WHERE sessions.scope=stopped_before_anchor.scope '
+                               'AND sessions.session=stopped_before_anchor.session)')
                 prior = db.execute('SELECT reply FROM requests WHERE identity=?', (identity,)).fetchone()
                 if prior is not None:
                     if prior[0] is None:
                         raise CloudCliError('This CloudCLI request was previously dispatched without a confirmed reply', 409)
                     return json.loads(prior[0])
                 compact_context = desktop_compact_context(messages[:-1]) if scope else None
-                saved, edit = self.session_binding(db, namespace, before, position, compact_context)
+                saved, edit = self.session_binding(db, namespace, before, position, compact_context,
+                                                   interrupted_prefixes)
                 if saved:
                     payload['sessionId'], project, workspace, previous_model, _ = saved
                     if scope and self.config.get('desktopQuestions') and previous_model != model:

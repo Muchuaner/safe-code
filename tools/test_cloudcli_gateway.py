@@ -2024,9 +2024,75 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(len(self.cloud.requests), 1)
         self.cloud.pause_after_frame = None
         self.cloud.reply = (200, cloud_turn('Continuation after stopping.'))
-        following = [*original['messages'], {'role': 'user', 'content': 'Continue after stopping.'}]
+        following = [{'role':'user','content':[
+            {'type':'text','text':original['messages'][0]['content']+'\n'},
+            {'type':'text','text':'[Request interrupted by user]\n'},
+            {'type':'text','text':'An earlier rejected local attempt.\n'},
+            {'type':'text','text':'[Request interrupted by user]\n'},
+            {'type':'text','text':'Continue after stopping.'},
+        ]}]
         self.assertEqual(self.request(conversation('unused', messages=following))[0], 200)
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        task = self.cloud.requests[-1][2]['message']
+        self.assertTrue(task.startswith('Continue after stopping.'))
+        self.assertNotIn('An earlier rejected local attempt',task)
+
+    def test_stopped_prompt_can_be_edited_before_cloudcli_recorded_a_user_anchor(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.track_history = True
+        first = conversation('Retain this context.')
+        status, reply = self.request(first)
+        self.assertEqual(status, 200)
+        prefix = [*first['messages'],{'role':'assistant','content':reply['content']}]
+        backend = self.manager.cloudcli
+        scope = backend.identity+':'+self.session
+        history = gateway.history_signature(prefix, 'cloudcli')
+        anchor = self.cloud.history[-1]['transcriptAnchorId']
+        with closing(sqlite3.connect(backend.path)) as db, db:
+            db.execute('INSERT INTO stopped_before_anchor VALUES (?,?,?,?)',(scope,CLOUD_SESSION,history,anchor))
+            db.execute('UPDATE session_state SET tip_anchor=NULL WHERE scope=?',(scope,))
+            db.execute('DELETE FROM sessions WHERE scope=?',(scope,))
+            db.execute('INSERT INTO sessions VALUES (?,?,?,?)',(scope,gateway.history_signature(
+                prefix+[{'role':'user','content':'Original canceled prompt.'}],'cloudcli'),CLOUD_SESSION,time.time()))
+        task = conversation('unused', messages=[*prefix,{'role':'user','content':'Edited canceled prompt.'}])
+        self.cloud.history.append(cloud_user('An unexpected native request.'))
+        self.assertEqual(self.request(task)[0],409)
+        self.cloud.history.pop()
+        self.assertEqual(self.request(task)[0],200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'],CLOUD_SESSION)
+        self.assertTrue(self.cloud.requests[-1][2]['message'].startswith('Edited canceled prompt.'))
+
+    def test_new_desktop_scope_forks_only_an_exact_verified_prefix(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.track_history = True
+        prompt = conversation('Original conversation context.')
+        status, reply = self.request(prompt)
+        self.assertEqual(status, 200)
+        original = self.cloud.history[-1].copy()
+        fork_id = 'native-cloudcli-fork-fixture'
+        prefix = [*prompt['messages'], {'role':'assistant','content':reply['content']}]
+        branch = conversation('unused',messages=[*prefix,{'role':'user','content':'Continue this branch.'}])
+        corrupted = conversation('unused',messages=[*prefix[:-1],{'role':'assistant','content':'Different history.'},
+                                                     branch['messages'][-1]])
+        backend = self.manager.cloudcli
+        requests = []
+        native_request = backend.web_request
+
+        def web_request(method,path,*args,**kwargs):
+            if path.endswith('/fork'):
+                requests.append((method,path,json.loads(args[0])))
+                return {'data':{'sessionId':fork_id}}
+            return native_request(method,path,*args,**kwargs)
+
+        self.cloud.track_history = False
+        self.cloud.reply = (200,cloud_turn('Continued the fork.',session_id=fork_id))
+        with patch.object(backend,'history_users',side_effect=lambda *a, **kw:[original]), \
+                patch.object(backend,'web_request',side_effect=web_request):
+            self.assertEqual(self.request(corrupted,session=str(uuid.uuid4()))[0],409)
+            self.assertEqual(self.request(branch,session=str(uuid.uuid4()))[0],200)
+        self.assertEqual(requests,[('POST',f'/api/providers/sessions/{CLOUD_SESSION}/fork',{})])
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'],fork_id)
+        self.assertEqual(self.cloud.history[-1],original)
 
     def test_stop_does_not_cancel_a_replacement_run(self):
         actions = []
@@ -2093,7 +2159,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
         payload = conversation('unused', messages=changed)
         with patch.object(gateway, 'cloudcli_websocket', return_value=(
                 lambda *a, **kw: ChatSocketFixture(edit_sent, events), OSError)):
-            self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 409)
+            with patch.object(self.manager.cloudcli,'running_sessions',return_value=[{'sessionId':CLOUD_SESSION}]):
+                self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 409)
             self.cloud.history.append(cloud_user('Changed from another CloudCLI client'))
             self.assertEqual(self.request(payload)[0], 409)
             self.assertFalse(actions)
