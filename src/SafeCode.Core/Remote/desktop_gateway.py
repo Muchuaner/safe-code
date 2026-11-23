@@ -2254,14 +2254,13 @@ class CloudCliBackend:
         except (OSError, HTTPException, ValueError, RecursionError):
             raise CloudCliError('CloudCLI did not return a valid web API response', 502) from None
 
-    def history_users(self, session, *, since=None, anchor=None, minimum=1, timeout=12):
+    def history_pages(self, session, timeout):
         if not CLOUDCLI_SESSION_ID.fullmatch(session):
             raise CloudCliError('CloudCLI returned an invalid session identifier')
         # CloudCLI returns the newest page first, ordered oldest-to-newest
         # within each page. A single tool-heavy turn can fill several pages.
         deadline = time.monotonic() + timeout
         total = None
-        users = []
         for offset in range(0, 1024, 64):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -2275,19 +2274,46 @@ class CloudCliBackend:
             if offset and (data.get('offset') != offset or data.get('total') != total):
                 raise CloudCliError('CloudCLI history changed while locating conversation anchors', 409)
             total = data.get('total')
+            has_more = data.get('hasMore') is True
+            yield rows, has_more
+            if not has_more:
+                return
+            if len(rows) != 64 or type(total) is not int or total <= offset + len(rows):
+                raise CloudCliError('CloudCLI did not return its history pagination')
+        raise CloudCliError('CloudCLI history anchor search reached the gateway limit')
+
+    def history_users(self, session, *, since=None, anchor=None, minimum=1, timeout=12):
+        users = []
+        for rows, has_more in self.history_pages(session, timeout):
             page_users = [row for row in rows if isinstance(row, dict) and row.get('sessionId') == session
                           and row.get('role') == 'user' and row.get('kind') == 'text']
             users[:0] = page_users
-            has_more = data.get('hasMore')
-            if (has_more is not True or
+            if (not has_more or
                     anchor is not None and any(row.get('transcriptAnchorId') == anchor for row in users[1:]) or
                     anchor is None and since is None and len(users) >= minimum):
                 return users
             if since is not None and any((seen := self.history_timestamp(row)) is not None and seen < since for row in page_users):
                 return users
-            if len(rows) != 64 or type(total) is not int or total <= offset + len(rows):
-                raise CloudCliError('CloudCLI did not return its history pagination')
-        raise CloudCliError('CloudCLI history anchor search reached the gateway limit')
+
+    def history_before_edit(self, session, anchor, timeout):
+        history = []
+        target = None
+        for rows, _ in self.history_pages(session, timeout):
+            if not all(isinstance(row, dict) and row.get('sessionId') == session for row in rows):
+                raise CloudCliError('CloudCLI did not return verified Desktop history', 409)
+            for index, row in enumerate(rows):
+                if row.get('transcriptAnchorId') == anchor:
+                    if target is not None or row.get('kind') != 'text' or row.get('role') != 'user':
+                        raise CloudCliError('CloudCLI did not return a unique Desktop edit anchor', 409)
+                    target = row
+                    rows = rows[:index]
+            if target is not None:
+                # Native forks assign new identifiers to copied transcript rows.
+                history[:0] = [{k: v for k, v in row.items()
+                                if k not in ('id', 'sessionId', 'transcriptAnchorId')} for row in rows]
+        if target is None:
+            raise CloudCliError('CloudCLI did not return a verified Desktop edit anchor', 409)
+        return history, target.get('content')
 
     @staticmethod
     def history_timestamp(row):
@@ -2749,8 +2775,11 @@ class CloudCliBackend:
                     LEFT JOIN session_projects p USING (session)
                     WHERE e.scope LIKE ? AND e.scope<>? AND e.prefix=?
                       AND (t.tip_anchor IS NOT NULL OR EXISTS (SELECT 1 FROM anchor_receipts r
-                           WHERE r.scope=e.scope AND r.session=e.session)) LIMIT 2
+                           WHERE r.scope=e.scope AND r.session=e.session))
+                    ORDER BY e.updated, e.session
                     """,(same_binding,namespace,candidate)).fetchall()
+                if len(candidates) > 1:
+                    return self.common_rewind_source(candidates)
             if not candidates:
                 candidates = db.execute("""
                     SELECT r.scope,r.session,p.project,p.workspace,t.model,t.tip_anchor,''
@@ -2763,6 +2792,30 @@ class CloudCliBackend:
             if candidates:
                 raise CloudCliError('More than one CloudCLI conversation matches this Desktop branch', 409)
         return None
+
+    def common_rewind_source(self, candidates):
+        # Repeated saves create new Desktop UUIDs for the same rewind point.
+        # Identify the unmodified prefix before choosing which native chat to fork.
+        error = 'More than one CloudCLI conversation matches this Desktop branch'
+        if any(candidate[2:4] != candidates[0][2:4] for candidate in candidates):
+            raise CloudCliError(error, 409)
+        deadline = time.monotonic() + 12
+        histories = [self.history_before_edit(candidate[1], candidate[6], deadline-time.monotonic())
+                     for candidate in candidates]
+        index = min(range(len(histories)), key=lambda i: len(histories[i][0]))
+        prefix, original_prompt = histories[index]
+        if not prefix or not isinstance(original_prompt, str) or self.history_timestamp(prefix[0]) is None:
+            raise CloudCliError(error, 409)
+        for history, _ in histories:
+            if history[:len(prefix)] != prefix:
+                raise CloudCliError(error, 409)
+            # CloudCLI can retain a regenerated copy of the old user prompt
+            # between the common prefix and the replacement. Fork the clean
+            # source so that this extra prompt is never carried forward again.
+            if any(row.get('role') != 'user' or row.get('kind') != 'text'
+                   or row.get('content') != original_prompt for row in history[len(prefix):]):
+                raise CloudCliError(error, 409)
+        return candidates[index]
 
     def fork_desktop_branch(self, branch):
         source_scope, source, project, workspace, model, tip, anchor = branch

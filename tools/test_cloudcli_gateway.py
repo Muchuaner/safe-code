@@ -2121,6 +2121,42 @@ class CloudCLIGatewayTests(unittest.TestCase):
             with self.assertRaisesRegex(gateway.CloudCliError,'verified Desktop prefix'):
                 backend.fork_desktop_branch(branch)
 
+    def test_repeated_desktop_rewinds_choose_the_verified_common_source(self):
+        backend = self.manager.cloudcli
+        fork_ids = ('first-desktop-rewind', 'second-desktop-rewind')
+        seed = cloud_user('The first user turn.')
+        reply = {**cloud_user('The verified assistant reply.'), 'role': 'assistant'}
+        old_prompt = cloud_user('The original prompt to edit.')
+        history = {CLOUD_SESSION: [seed, reply, old_prompt]}
+        for fork in fork_ids:
+            copied = [{**row, 'sessionId': fork, 'transcriptAnchorId': str(uuid.uuid4())}
+                      for row in (seed, reply)]
+            retained = {**cloud_user(old_prompt['content']), 'sessionId': fork}
+            edited = {**cloud_user('An earlier revision.'), 'sessionId': fork}
+            history[fork] = [*copied, retained, edited]
+        new_scope = backend.identity+':'+str(uuid.uuid4())
+        prefix = 'verified-desktop-prefix'
+
+        def pages(method, path, **kwargs):
+            return {'data': {'messages': history[path.split('/')[4]], 'hasMore': False}}
+
+        with closing(sqlite3.connect(backend.path)) as db, db:
+            for i, session in enumerate((*fork_ids, CLOUD_SESSION)):
+                scope = backend.identity+':'+str(uuid.uuid4())
+                anchor = history[session][-1]['transcriptAnchorId']
+                db.execute('INSERT INTO session_state VALUES (?,?,?,?,?)', (scope, session, MODEL, anchor, i))
+                db.execute('INSERT INTO edit_turns VALUES (?,?,?,?,?,?)', (scope, session, prefix, 2, anchor, i))
+            with patch.object(backend, 'web_request', side_effect=pages):
+                source = backend.desktop_branch_source(db, new_scope, prefix, ())
+                self.assertEqual((source[1], source[6]), (CLOUD_SESSION, old_prompt['transcriptAnchorId']))
+                history[fork_ids[0]][1]['content'] = 'A different assistant reply.'
+                with self.assertRaisesRegex(gateway.CloudCliError, 'More than one CloudCLI conversation'):
+                    backend.desktop_branch_source(db, new_scope, prefix, ())
+                history[fork_ids[0]][1]['content'] = reply['content']
+                history[fork_ids[0]][2]['content'] = 'A different earlier task.'
+                with self.assertRaisesRegex(gateway.CloudCliError, 'More than one CloudCLI conversation'):
+                    backend.desktop_branch_source(db, new_scope, prefix, ())
+
     def test_stop_does_not_cancel_a_replacement_run(self):
         actions = []
         progress = gateway.CloudCliProgress(object(), None)
