@@ -15,7 +15,6 @@ import sys
 import tarfile
 import tempfile
 import time
-from urllib.request import urlopen
 
 from device_bridge import PORTS, device_service_problem, write_file
 
@@ -29,6 +28,7 @@ AUTH_UNIT = 'safe-code-desktop-device-auth.service'
 FRP_UNIT = 'safe-code-desktop-frps.service'
 PORT_CANDIDATES = range(45200, 45250)
 MAX_ARCHIVE = 32 * 1024 * 1024
+ARCHIVE_CACHE = Path('/var/cache/safe-code/frp')
 
 
 def execute(*args, timeout=35):
@@ -41,10 +41,21 @@ def download_frps(destination):
         raise RuntimeError('当前 VPS 架构没有配套的 FRP 安装包。')
     arch, digest = target
     name = f'frp_{VERSION}_linux_{arch}'
-    url = f'https://github.com/fatedier/frp/releases/download/v{VERSION}/{name}.tar.gz'
-    with urlopen(url, timeout=35) as response:
-        archive = response.read(MAX_ARCHIVE + 1)
-    if len(archive) > MAX_ARCHIVE or hashlib.sha256(archive).hexdigest() != digest:
+    archive = None
+    cached = ARCHIVE_CACHE/(name+'.tar.gz')
+    if cached.is_file() and not cached.is_symlink() and cached.stat().st_size <= MAX_ARCHIVE:
+        candidate = cached.read_bytes()
+        if hashlib.sha256(candidate).hexdigest() == digest:
+            archive = candidate
+    if archive is None:
+        url = f'https://github.com/fatedier/frp/releases/download/v{VERSION}/{name}.tar.gz'
+        with tempfile.TemporaryDirectory(dir=destination.parent) as folder:
+            package = Path(folder)/'release.tar.gz'
+            execute('/usr/bin/curl','-fsSL','--connect-timeout','12','--max-time','100',
+                    '--max-filesize',str(MAX_ARCHIVE),'-o',str(package),url,timeout=105)
+            if package.stat().st_size <= MAX_ARCHIVE:
+                archive = package.read_bytes()
+    if archive is None or hashlib.sha256(archive).hexdigest() != digest:
         raise RuntimeError('FRP 官方安装包摘要校验失败。')
     with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as bundle:
         member = bundle.getmember(name + '/frps')

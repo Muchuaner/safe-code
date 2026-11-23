@@ -1216,7 +1216,7 @@ def repair_safe_code_api(entry, command, options, work_python):
 
 def provision_gateway_devices(entry, state):
     run(['/usr/bin/python3','-B',str(API_DIRECTORY/'device_service.py'),
-         entry.pw_name,str(API_DIRECTORY),str(state)],timeout=110)
+         entry.pw_name,str(API_DIRECTORY),str(state)],timeout=250)
 
 def replace_gateway_programs(entry, command, source, state, work_python, revision, cloud_install):
     log('正在准备当前客户端内置的网关安装组件…')
@@ -1403,7 +1403,7 @@ def install_safe_code_api(entry, command, options, work_python):
                     return installed(upgrade_safe_code_api(command, Path(folder), rollback_config, entry))
                 try:
                     run(['/bin/bash',str(Path(folder)/'install.sh'),entry.pw_name,bind,'45143'],
-                        env={**os.environ,'SAFECODE_INITIAL_API_INSTALL':'1'},timeout=60)
+                        env={**os.environ,'SAFECODE_INITIAL_API_INSTALL':'1'},timeout=250)
                     deadline=time.monotonic()+8
                     while time.monotonic()<deadline:
                         try:
