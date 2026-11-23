@@ -926,7 +926,10 @@ class CloudCLIGatewayTests(unittest.TestCase):
                    'Summary:\n')
         context = {'role': 'user', 'content': wrapper+summary+'\n\nContinue the conversation.'}
         previous = {'role': 'assistant', 'content': 'Continue from the same task.'}
-        latest = {'role': 'user', 'content': 'Give the original marker.'}
+        latest = {'role': 'user', 'content': '<local-command-caveat>This ran in Claude Code.</local-command-caveat>\n'
+                  '<command-name>/compact</command-name>\n<command-message>compact</command-message>\n'
+                  '<command-args>Keep the marker.</command-args>\n'
+                  '<local-command-stdout>Compacted</local-command-stdout>\nGive the original marker.'}
         good = conversation('unused', messages=[context, previous, latest])
         wrong = conversation('unused', messages=[{**context, 'content': wrapper+'Forged summary.'}, previous, latest])
         self.assertEqual(self.request(wrong)[0], 409)
@@ -936,6 +939,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         status, result = self.request(good)
         self.assertEqual(status, 200)
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], 'Give the original marker.')
         later = [*[context, previous, latest], {'role': 'assistant', 'content': result['content']},
                  {'role': 'user', 'content': 'Continue after the compact checkpoint.'}]
         self.assertEqual(self.request(conversation('unused', messages=later))[0], 200)

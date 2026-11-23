@@ -242,6 +242,8 @@ CLOUDCLI_MEDIA = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif'
                   'application/pdf': '.pdf', 'text/plain': '.txt', 'text/markdown': '.md',
                   'text/csv': '.csv', 'text/tab-separated-values': '.tsv', 'application/json': '.json'}
 SYSTEM_REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.S)
+DESKTOP_LOCAL_COMMAND = re.compile(
+    r'<(local-command-caveat|local-command-stdout|command-name|command-message|command-args)>.*?</\1>', re.S)
 DESKTOP_COMPACT_PREFIX = ('This session is being continued from a previous conversation that ran out of context. '
                           'The summary below covers the earlier portion of the conversation.')
 PLAN_MODE_REMINDER = re.compile(r'<system-reminder>\s*Plan mode is active\. The user indicated that they do not want you to execute yet\b')
@@ -2734,11 +2736,14 @@ class CloudCliBackend:
             attachments.extend(desktop_read_attachments(messages, task, len(attachments)+1))
         if len(attachments) > 10:
             raise CloudCliError('Desktop can send up to 10 attachments per turn', 413)
+        # The composer can include an already executed /compact command in
+        # the next message. Keep its raw text only for request identity.
+        dispatch_task = DESKTOP_LOCAL_COMMAND.sub('', task).strip() if '<local-command-caveat>' in task else task
         chat_mode = bool(attachments) or plan_mode
         tool_approvals = self.config.get('desktopToolApprovals', False)
         if chat_mode and not self.config.get('desktopQuestions'):
             raise CloudCliError('Desktop attachments and plan mode require the authenticated CloudCLI connection', 503)
-        if not task and not attachments:
+        if not dispatch_task and not attachments:
             raise CloudCliError('CloudCLI requires text for the user task', 400)
         if not chat_mode and len(original) == 1 and not scope and not data.get('tools') and not data.get('system'):
             maximum = data.get('max_tokens')
@@ -2753,7 +2758,8 @@ class CloudCliBackend:
             return self.local_reply(data['model'], '')
         if not chat_mode and webfetch_summary_request({**data, 'messages': messages}):
             raise CloudCliError('Desktop WebFetch helper has no matching CloudCLI tool', 400)
-        forwarded_task = manager.review_prompt(task) if task and manager.review_prompt is not None else task
+        forwarded_task = (manager.review_prompt(dispatch_task)
+                          if dispatch_task and manager.review_prompt is not None else dispatch_task)
         payload = {'provider': 'claude', 'message': forwarded_task or '请查看本轮附加的文件。',
                    'model': model, 'stream': True}
         family = cloudcli_model_family(model)
