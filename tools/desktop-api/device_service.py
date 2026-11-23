@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from urllib.request import urlopen
 
@@ -120,6 +121,20 @@ WantedBy=multi-user.target
 '''
 
 
+def file_digest(path):
+    checksum = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024*1024),b''):
+            checksum.update(block)
+    return checksum.hexdigest()
+
+
+def write_private_config(path, content, user):
+    write_file(path,content)
+    os.chown(path,0,pwd.getpwnam(user).pw_gid)
+    path.chmod(0o640)
+
+
 def settle(config):
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
@@ -134,6 +149,9 @@ def provision(user, app, state):
         raise ValueError('设备服务需要管理员安装并使用非 root 工作账户。')
     if any(not re.fullmatch(r'/[a-zA-Z0-9/_.-]+',str(path)) for path in (app,state,UNIT_DIRECTORY)):
         raise ValueError('设备服务安装路径不受支持。')
+    for directory in (app,app.parent,UNIT_DIRECTORY):
+        if directory.is_symlink() or not directory.is_dir() or directory.stat().st_uid!=0 or directory.stat().st_mode&0o022:
+            raise RuntimeError('设备服务的程序或服务目录权限异常。')
     current = state_config(user,state)
     component = app.parent/'desktop-device'
     manifest = component/'managed.json'
@@ -142,20 +160,50 @@ def provision(user, app, state):
     if current.get('deviceFrpPort') and not current.get('managedDeviceService'):
         return
     if manifest.is_file():
-        if component.is_symlink() or manifest.is_symlink() or manifest.stat().st_uid!=0 or manifest.stat().st_mode&0o022:
+        if any(path.is_symlink() or path.stat().st_uid!=0 or path.stat().st_mode&0o022
+               for path in (component,manifest)):
             raise RuntimeError('设备服务管理目录权限异常。')
         saved = json.loads(manifest.read_text())
+        if saved['user'] != user or saved['state'] != str(state):
+            raise RuntimeError('设备服务属于不同的网关工作账户。')
         config = saved['config']
         units = saved['units']
         if current.get('managedDeviceService') and any(current.get(key)!=value for key,value in config.items()):
             raise RuntimeError('设备服务配置已被修改，请核对监听设置。')
         if any(path.is_symlink() or not path.is_file() or path.read_text()!=units[path.name] for path in (auth,frp)):
             raise RuntimeError('检测到设备服务单元已被修改，请核对 VPS 服务。')
-        if device_service_problem(config) is not None:
+        executable = component/'frps'
+        frp_config = component/'frps.toml'
+        callback = component/'callback'
+        if any(path.is_symlink() for path in (executable,frp_config,callback)):
+            raise RuntimeError('设备服务组件路径异常。')
+        rebuilt = not executable.is_file() or file_digest(executable) != saved['binaryDigest']
+        if rebuilt:
+            with tempfile.TemporaryDirectory(dir=component) as folder:
+                staged = Path(folder)/'frps'
+                download_frps(staged)
+                if file_digest(staged) != saved['binaryDigest']:
+                    raise RuntimeError('FRP 可执行文件与首次安装的摘要不一致。')
+                staged.replace(executable)
+        configured = False
+        for path,content in ((frp_config,render_frp(config)),(callback,config['deviceAuthCallback']+'\n')):
+            if not path.is_file() or path.read_text() != content:
+                write_private_config(path,content,user)
+                configured = True
+        auth_digest = file_digest(app/'device_bridge.py')
+        auth_changed = auth_digest != saved.get('authDigest')
+        if rebuilt or configured or device_service_problem(config) is not None:
+            execute(str(executable),'verify','-c',str(frp_config))
             execute('systemctl','enable',auth.name,frp.name)
             execute('systemctl','restart',auth.name)
             execute('systemctl','restart',frp.name)
             settle(config)
+        elif auth_changed:
+            execute('systemctl','restart',auth.name)
+            settle(config)
+        if auth_changed:
+            saved['authDigest'] = auth_digest
+            write_file(manifest,json.dumps(saved))
         if not current.get('managedDeviceService'):
             state_config(user,state,config)
         return
@@ -176,14 +224,12 @@ def provision(user, app, state):
     installed_units = []
     try:
         download_frps(component/'frps')
-        config_file.write_text(render_frp(config))
-        callback_file.write_text(config['deviceAuthCallback']+'\n')
-        work_gid = pwd.getpwnam(user).pw_gid
-        os.chown(component,0,work_gid)
-        for path in (config_file,callback_file):
-            os.chown(path,0,work_gid)
-            path.chmod(0o640)
-        manifest.write_text(json.dumps({'config':config,'units':units}))
+        os.chown(component,0,pwd.getpwnam(user).pw_gid)
+        write_private_config(config_file,render_frp(config),user)
+        write_private_config(callback_file,config['deviceAuthCallback']+'\n',user)
+        manifest.write_text(json.dumps({'config':config,'units':units,'user':user,'state':str(state),
+                                        'binaryDigest':file_digest(component/'frps'),
+                                        'authDigest':file_digest(app/'device_bridge.py')}))
         manifest.chmod(0o600)
         execute(str(component/'frps'),'verify','-c',str(config_file))
         for path in (auth,frp):
