@@ -1160,10 +1160,21 @@ def stage_cloudcli_repair(cloud, staged):
     log('正在准备 CloudCLI 官方原版 '+version+'…')
     env={'PATH':str(npm.parent)+':/usr/sbin:/usr/bin:/bin','HOME':str(staged.parent),'LANG':'C.UTF-8',
          'SHARP_IGNORE_GLOBAL_LIBVIPS':'1'}
+    if (npm.parent.parent/'include/node/node.h').is_file():
+        env['npm_config_nodedir']=str(npm.parent.parent)
     global_config=staged.parent/'global.npmrc'
     global_config.touch(mode=0o600)
-    run([str(npm),'ci','--prefix',str(staged),'--userconfig','/dev/null','--globalconfig',str(global_config),
-         '--no-audit','--no-fund'],env=env,timeout=360)
+    install=[str(npm),'ci','--prefix',str(staged),'--userconfig','/dev/null','--globalconfig',str(global_config),
+             '--no-audit','--no-fund','--prefer-offline']
+    try:
+        run(install,env=env,timeout=360)
+    except RuntimeError as error:
+        lacks_toolchain=any(not shutil.which(tool,path=env['PATH']) for tool in ('make','g++','python3'))
+        if 'gyp ERR!' not in str(error) or not lacks_toolchain:
+            raise
+        log('CloudCLI 的原生依赖需要在本机编译，正在安装 Ubuntu 构建工具…')
+        apt(['build-essential','python3'])
+        run(install,env=env,timeout=360)
     current=json.loads((staged/package/'package.json').read_text())
     if current.get('name')!='@cloudcli-ai/cloudcli' or current.get('version')!=version:
         raise RuntimeError('CloudCLI 官方软件包版本与锁定清单不一致。')
