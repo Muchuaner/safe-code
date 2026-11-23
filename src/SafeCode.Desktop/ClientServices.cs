@@ -256,7 +256,7 @@ internal sealed class ClientServices : IDisposable
             bool betaChannel=ReleaseNumber.Parse(currentVersion)?.Beta==true;
             if(now>=apiBlockedUntil)
             {
-                using var request=new HttpRequestMessage(HttpMethod.Get,"https://api.github.com/repos/"+Repository+(betaChannel?"/releases?per_page=100":"/releases/latest"));request.Headers.Accept.ParseAdd("application/vnd.github+json");
+                using var request=new HttpRequestMessage(HttpMethod.Get,"https://api.github.com/repos/"+Repository+"/releases?per_page=100");request.Headers.Accept.ParseAdd("application/vnd.github+json");
                 using var response=await http.SendAsync(request,ct);
                 if(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                 {
@@ -267,10 +267,7 @@ internal sealed class ClientServices : IDisposable
                     apiBlockedUntil=DateTimeOffset.MinValue;
                     if(response.StatusCode==HttpStatusCode.NotFound)return CacheUpdate(new(currentVersion,null,betaChannel?"尚未发布测试版本":"尚未发布正式版本",null));
                     response.EnsureSuccessStatusCode();using var doc=JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));var root=doc.RootElement;
-                    if(betaChannel){JsonElement? best=null;ReleaseNumber? bestNumber=null;foreach(var candidate in root.EnumerateArray()){if(candidate.GetProperty("draft").GetBoolean())continue;var number=ReleaseNumber.Parse(candidate.GetProperty("tag_name").GetString()??"");if(number==null||(candidate.GetProperty("prerelease").GetBoolean()&&!number.Beta))continue;if(bestNumber==null||number.CompareTo(bestNumber)>0){best=candidate;bestNumber=number;}}if(best==null)return CacheUpdate(new(currentVersion,null,"尚未发布测试版本",null));root=best.Value;}
-                    var update=ParseRelease(root,currentVersion,updateAssetSuffix);
-                    if(update.CanInstall){string name="SafeCode-"+update.Version+"-"+updateAssetSuffix;var asset=root.GetProperty("assets").EnumerateArray().First(x=>x.GetProperty("name").GetString()==name);release=new(update.Version!,asset.GetProperty("browser_download_url").GetString()!,asset.GetProperty("digest").GetString()![7..],asset.GetProperty("size").GetInt64());}
-                    return CacheUpdate(update);
+                    return CacheUpdate(SelectPlatformUpdate(root,betaChannel));
                 }
             }
             var fallback=await CheckReleaseFallbackAsync(betaChannel,ct);
@@ -278,6 +275,26 @@ internal sealed class ClientServices : IDisposable
             return CacheUpdate(fallback,fromFallback:true);
         }
         finally{updateCheckGate.Release();}
+    }
+    private UpdateInfo SelectPlatformUpdate(JsonElement releases,bool betaChannel)
+    {
+        ReleaseNumber? bestNumber=null;
+        UpdateInfo? bestUpdate=null;
+        foreach(var candidate in releases.EnumerateArray())
+        {
+            if(candidate.GetProperty("draft").GetBoolean())continue;
+            var number=ReleaseNumber.Parse(candidate.GetProperty("tag_name").GetString()??"");
+            if(number==null||number.Beta&&!betaChannel||candidate.GetProperty("prerelease").GetBoolean()&&!number.Beta
+                ||number.CompareTo(bestNumber)<=0)continue;
+            var update=ParseRelease(candidate,currentVersion,updateAssetSuffix);
+            if(!update.CanInstall)continue;
+            string name="SafeCode-"+update.Version+"-"+updateAssetSuffix;
+            var asset=candidate.GetProperty("assets").EnumerateArray().First(x=>x.GetProperty("name").GetString()==name);
+            release=new(update.Version!,asset.GetProperty("browser_download_url").GetString()!,asset.GetProperty("digest").GetString()![7..],asset.GetProperty("size").GetInt64());
+            bestNumber=number;
+            bestUpdate=update;
+        }
+        return bestUpdate??new(currentVersion,null,"未发现适用于此平台的新版本",null);
     }
     private UpdateInfo CacheUpdate(UpdateInfo update,bool fromFallback=false)
     {
@@ -315,13 +332,26 @@ internal sealed class ClientServices : IDisposable
                 if(response.StatusCode!=HttpStatusCode.Found||response.Headers.Location is not {} location)return UnknownFallback();
                 var tag=TagFromReleaseLink(new Uri(request.RequestUri!,location).AbsoluteUri);
                 var number=ReleaseNumber.Parse(tag??"");
-                return number is {Beta:false} ? FallbackResult(installed,number,tag!,"官方发布页未发现更新") : UnknownFallback();
+                return number is {Beta:false} ? await ConfirmFallbackAssetAsync(FallbackResult(installed,number,tag!,"官方发布页未发现更新"),ct) : UnknownFallback();
             }
             response.EnsureSuccessStatusCode();
-            return ParseAtomRelease(await response.Content.ReadAsStringAsync(ct),installed);
+            return await ConfirmFallbackAssetAsync(ParseAtomRelease(await response.Content.ReadAsStringAsync(ct),installed),ct);
         }
         catch(OperationCanceledException) when(ct.IsCancellationRequested){throw;}
         catch(Exception e) when(e is HttpRequestException or IOException or XmlException or UriFormatException or OperationCanceledException){return UnknownFallback();}
+    }
+    private async Task<UpdateInfo> ConfirmFallbackAssetAsync(UpdateInfo update,CancellationToken ct)
+    {
+        if(update.Version==null)return update;
+        string tag=TagFromReleaseLink(update.Page!)!;
+        string name="SafeCode-"+update.Version+"-"+updateAssetSuffix;
+        using var request=new HttpRequestMessage(HttpMethod.Head,ReleasesPage+"/download/"+Uri.EscapeDataString(tag)+"/"+name);
+        using var response=await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
+        if(response.StatusCode==HttpStatusCode.OK)return update;
+        if((int)response.StatusCode is >=300 and <=399&&response.Headers.Location is {IsAbsoluteUri:true} location
+            &&location.Scheme=="https"&&location.UserInfo==""&&
+            location.Host is "release-assets.githubusercontent.com" or "objects.githubusercontent.com")return update;
+        return UnknownFallback();
     }
     private UpdateInfo UnknownFallback()=>new(currentVersion,null,UnknownUpdateStatus,ReleasesPage);
     private UpdateInfo ParseAtomRelease(string xml,ReleaseNumber installed)

@@ -639,7 +639,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                         return new DeviceSetup(t,replace,useSaved,null,deviceSession);
                     throw new InvalidOperationException("请连接签发此 Key 的 VPS，恢复已授权的本机远程控制。");
                 }
-                var capability=await RequestDeviceControlAsync(client,new{action="capability"},timeout.Token);
+                // The catalog response can close its TLS connection before device validation.
+                using var deviceClient=Remote(t);
+                var capability=await RequestDeviceControlAsync(deviceClient,new{action="capability"},timeout.Token);
                 if(capability is {} available)
                 {
                     if(!available.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)
