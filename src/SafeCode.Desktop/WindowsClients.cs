@@ -70,9 +70,10 @@ public sealed class WindowsClients : IDisposable
         foreach(string arg in args)start.ArgumentList.Add(arg);
         var process=Process.Start(start)??throw new IOException("无法打开 Windows 终端。");terminals.Add(process);
     }
-    internal static string OpenClaude()
+    internal static async Task<string> OpenClaudeAsync(DesktopKeyAccess access,CancellationToken ct)
     {
         if(!IsClaudeInstalled())throw new InvalidOperationException("未检测到 Claude Desktop，请先安装官方客户端，或从开始菜单启动。");
+        await access.PrepareLaunchAsync(ct);
         try
         {
             // Use the registered app entry so the MSIX process reads its selected profile.

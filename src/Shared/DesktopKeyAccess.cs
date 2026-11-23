@@ -527,6 +527,13 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         new ClaudePermissionSettings(settings,backup).Restore();
     }
 
+    private ClaudePermissionSettings WindowsLaunchPermissions()
+    {
+        var settings=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".claude","settings.json");
+        var backup=Path.Combine(dataDirectory,"ClaudeDesktop","launch-permissions-backup.json");
+        return new ClaudePermissionSettings(settings,backup);
+    }
+
     [SupportedOSPlatform("windows")]
     private Action RemoveWindowsPolicy(IReadOnlyDictionary<string,PolicyValue>? fields)
     {
@@ -600,6 +607,33 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         var settings=profile["claudeCodeSettings"]!.AsObject();
         if(settings["env"] is null)settings["env"]=new JsonObject();
         settings["env"]!.AsObject()["CLAUDE_CODE_AUTO_MODE_MODEL"]=classifier;
+    }
+
+    internal async Task PrepareLaunchAsync(CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            if(!Configured)return;
+            var saved=Load();
+            var library=Library();
+            if(ProfileText(ReadProfileMeta(library),"appliedId")!=saved.Profile)return;
+
+            var path=Path.Combine(library,saved.Profile+".json");
+            var profile=JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject;
+            if(profile==null||ProfileText(profile,"inferenceGatewayBaseUrl")!="http://127.0.0.1:"+saved.Port)
+                throw new InvalidOperationException("Claude Desktop 接入配置已变更，请重新启用 Safe Code API Key。");
+
+            if(ProfileText(profile,"codeDefaultPermissionMode")!="auto")
+            {
+                profile["codeDefaultPermissionMode"]="auto";
+                WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
+            }
+            // Older Windows releases resolve the initial mode from the current user's settings.
+            if(OperatingSystem.IsWindows())WindowsLaunchPermissions().Enable();
+        }
+        catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}
+        finally{gate.Release();}
     }
 
     private static void MigrateClassifier(string path)
@@ -704,7 +738,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 var profile=new JsonObject{["inferenceProvider"]="gateway",["inferenceGatewayBaseUrl"]="http://127.0.0.1:"+next.Port,
                     ["inferenceGatewayAuthScheme"]="bearer",["inferenceCredentialKind"]="static",["inferenceGatewayApiKey"]=local,
                     ["deploymentMode"]="3p",["disableDeploymentModeChooser"]=true,["deploymentDisplayName"]="SafeCode",
-                    ["inferenceModels"]=models,["modelDiscoveryEnabled"]=false,["autoModeEnabled"]=true,["chatTabEnabled"]=true};
+                    ["inferenceModels"]=models,["modelDiscoveryEnabled"]=false,["autoModeEnabled"]=true,
+                    ["codeDefaultPermissionMode"]="auto",["chatTabEnabled"]=true};
                 if(classifier!=null)SetClassifier(profile,classifier);
                 if(OperatingSystem.IsWindows())
                 {
@@ -918,6 +953,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 }
             }
             if(relay!=null){await relay.DisposeAsync();relay=null;}
+            if(OperatingSystem.IsWindows())WindowsLaunchPermissions().Restore();
             return Status();
         }
         catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}

@@ -78,6 +78,36 @@ internal static class MacSelfTest
             if ((string?)meta["appliedId"]!="" || (string?)meta["entries"]!.AsArray().Single()!["id"]!=otherId)
                 throw new Exception("切换 API Key 时未正确区分旧 SSH 与自定义配置。");
             Console.WriteLine("MAC_LEGACY_SSH_PROFILE_MIGRATION_OK");
+
+            var savedKey = new
+            {
+                Remote = new PublicGatewayTicket("https://gateway.example", new string('0',64), new string('a',43)),
+                Local = "fixture-local-token", Port = 18899, Profile = tokenId, Previous = otherId
+            };
+            DesktopKeyAccess.WriteProfileFile(Path.Combine(profileTest,"desktop-key.state"),
+                LocalSecrets.Protect(JsonSerializer.SerializeToUtf8Bytes(savedKey,new JsonSerializerOptions(JsonSerializerDefaults.Web))));
+            string metaPath = Path.Combine(library,"_meta.json");
+            string activePath = Path.Combine(library,tokenId+".json");
+            string otherPath = Path.Combine(library,otherId+".json");
+            string otherContents = File.ReadAllText(otherPath);
+            meta["appliedId"] = otherId;
+            DesktopKeyAccess.WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
+            await access.PrepareLaunchAsync(CancellationToken.None);
+            if (File.ReadAllText(otherPath)!=otherContents || JsonNode.Parse(File.ReadAllText(activePath))?["codeDefaultPermissionMode"]!=null)
+                throw new Exception("打开 Claude Desktop 时改写了非当前 Safe Code 配置。");
+            meta["appliedId"] = tokenId;
+            meta["entries"]!.AsArray().Add(new JsonObject { ["id"] = tokenId, ["name"] = "SafeCode" });
+            DesktopKeyAccess.WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
+            await access.PrepareLaunchAsync(CancellationToken.None);
+            string prepared = File.ReadAllText(activePath);
+            var preparedProfile = JsonNode.Parse(prepared);
+            if ((string?)preparedProfile?["codeDefaultPermissionMode"]!="auto" ||
+                (string?)preparedProfile?["inferenceGatewayApiKey"]!="fixture-local-token")
+                throw new Exception("打开 Claude Desktop 前未保留原接入并设为 Auto。");
+            await access.PrepareLaunchAsync(CancellationToken.None);
+            if (File.ReadAllText(activePath)!=prepared)
+                throw new Exception("重复打开 Claude Desktop 改写了相同配置。");
+            Console.WriteLine("MAC_CLAUDE_LAUNCH_AUTO_DEFAULT_OK");
         }
         finally { Directory.Delete(profileTest, true); }
         string fingerprint=new('A',64);
