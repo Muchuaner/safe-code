@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 
 from claude_usage import read_subscription
 from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_MESSAGES_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
-from device_bridge import DeviceError, Devices, OwnerHosts, SSH_DEVICE, read_json, device_service_problem
+from device_bridge import DeviceError, DeviceOffline, Devices, OwnerHosts, SSH_DEVICE, read_json, device_service_problem
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
 from prompt_review import PromptReviewer
 
@@ -264,7 +264,7 @@ class PublicHandler(Handler):
         device = self.headers.get('X-SafeCode-Device')
         proof = self.headers.get('X-SafeCode-Device-Proof')
         if not self.authorized():
-            return self.reject_device_message(401, 'SafeCode Key required')
+            return self.reject_device_message(401, 'SafeCode API Key 无效或已停用。', 'key_rejected')
         if self.server.config['cloudcli'] is None:
             return self.reject_device_message(503, CLOUDCLI_REQUIRED)
         if self.headers.get('X-SafeCode-Diagnostics') == '1':
@@ -275,19 +275,27 @@ class PublicHandler(Handler):
         if device is None and proof is None:
             if (self.headers.get('X-SafeCode-Client') == 'safecode-desktop'
                     or (self.server.root/'device-required'/self.digest).is_file()):
-                return self.reject_device_message(403, 'Verify SafeCode local device control before starting a chat')
+                return self.reject_device_message(403, '请先在 Safe Code 完成本机设备配对。', 'device_pairing_required')
         else:
             diagnostic(stage='device_check')
+            binding = self.server.owner_hosts if SSH_DEVICE.fullmatch(device or '') else self.server.devices
+            if binding is None:
+                return self.reject_device_message(503, '网关的本机连接服务尚未就绪，请联系管理员。',
+                                                  'device_service_unavailable')
             try:
-                binding = self.server.owner_hosts if SSH_DEVICE.fullmatch(device or '') else self.server.devices
-                if binding is None:
-                    raise DeviceError('Device pairing is unavailable')
                 self.device = binding.chat_binding(self.digest, self.platform, device, proof)
-            except (DeviceError, sqlite3.Error):
-                return self.reject_device_message(403, 'SafeCode device authorization is unavailable')
+            except DeviceOffline:
+                return self.reject_device_message(503, '本机连接暂不可用。请在 Safe Code 恢复设备连接后继续。',
+                                                  'device_offline')
+            except DeviceError:
+                return self.reject_device_message(403, '本机设备授权无效。请在 Safe Code 重新验证设备。',
+                                                  'device_pairing_rejected')
+            except sqlite3.Error:
+                return self.reject_device_message(503, '暂时无法检查本机设备状态，请稍后重试。',
+                                                  'device_state_unavailable')
         super().handle_messages()
 
-    def reject_device_message(self, status, message):
+    def reject_device_message(self, status, message, code=None):
         # Read a bounded request before closing TLS so the rejection body reaches the relay.
         try:
             remaining = int(self.headers.get('Content-Length', '0'))
@@ -299,10 +307,11 @@ class PublicHandler(Handler):
                     remaining -= len(chunk)
         except (ValueError, OSError):
             pass
-        return self.device_error(status, message)
+        return self.device_error(status, message, code)
 
     def device_error(self, status, message, code=None):
-        error = {'type': 'permission_error', 'message': message}
+        kind = {400: 'invalid_request_error', 401: 'authentication_error', 403: 'permission_error'}.get(status, 'api_error')
+        error = {'type': kind, 'message': message}
         if code:
             error['code'] = code
         return self.reply(status, {'type': 'error', 'error': error})

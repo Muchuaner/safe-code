@@ -487,7 +487,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 self.assertFalse(self.cloud.release_stream.is_set())
                 self.assertNotIn('message_stop', [event['type'] for event in decoded])
                 prefix = ''.join(event['delta'].get('text', '') for event in decoded if event['type'] == 'content_block_delta')
-                self.assertIn('CloudCLI 正在执行云端操作', prefix)
+                self.assertIn('正在执行工具操作', prefix)
                 self.assertNotIn('fixture command', prefix)
                 self.assertNotIn('Reasoning excerpt from the fixture', prefix)
                 self.assertEqual([(event['index'], event['content_block']['type']) for event in decoded
@@ -1637,9 +1637,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 for row in response:
                     if row.startswith(b'data: '):
                         events.append(json.loads(row[6:]))
-                        if '正在等待用户输入' in events[-1].get('delta', {}).get('text', ''):
+                        if '等待回答' in events[-1].get('delta', {}).get('text', ''):
                             break
-                self.assertIn('正在等待用户输入', events[-1]['delta']['text'])
+                self.assertIn('等待回答', events[-1]['delta']['text'])
                 self.assertNotIn('message_stop', [event['type'] for event in events])
             finally:
                 self.cloud.release_stream.set()
@@ -1647,7 +1647,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         visible = ''.join(event['delta']['text'] for event in events if event['type'] == 'content_block_delta')
         self.assertEqual(visible.count('选择适合示例的颜色'), 1)
         for expected in ('颜色（多选）', '选择输出格式', '格式（单选）', '海蓝色', '其他',
-                         '>     2. [外部链接]', '正在等待用户输入', '已收到处理结果',
+                         '>     2. [外部链接]', '等待回答', '已收到处理结果',
                          'Review the example plan', '等待已取消', 'fixture cancelled',
                          f'https://cloud.example.com/session/{CLOUD_SESSION}', '未返回额外的助手文字'):
             self.assertIn(expected, visible)
@@ -1760,6 +1760,37 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
 
+    def test_paired_ssh_tool_reports_transport_failures_masked_by_pipeline(self):
+        device = {'command': 'ssh -F /fixture/config win-fixture', 'platform': 'windows'}
+        progress = gateway.CloudCliProgress(None, None, device=device)
+        progress.edit_anchor = 'verified-anchor'
+        progress.feed({'kind': 'history_truncated'})
+
+        def tool(identifier, output, command):
+            progress.feed({'kind': 'tool_use', 'toolName': 'Bash', 'toolId': identifier,
+                           'toolInput': {'command': command}})
+            progress.feed({'kind': 'tool_result', 'toolId': identifier, 'content': output, 'isError': False})
+
+        command = device['command'] + ' hostname 2>&1 | head'
+        tool('unrelated', 'Connection reset by peer', 'cat example.txt')
+        self.assertFalse(progress.device_failure)
+        tool('timeout', 'Connection timed out during banner exchange', command)
+        tool('reset', 'kex_exchange_identification: read: Connection reset by peer', command)
+        interrupted = gateway.cloudcli_failure({'kind': 'error', 'content': 'Claude Code returned an error result'},
+                                              progress)
+        self.assertEqual((interrupted.status, interrupted.error_type), (503, 'api_error'))
+        self.assertIn('本轮未完成', str(interrupted))
+        actual_auth = gateway.cloudcli_failure({'kind': 'error', 'api_error_status': 401}, progress)
+        self.assertEqual(actual_auth.error_type, 'authentication_error')
+        tool('recovered', 'WIN-FIXTURE', command)
+        self.assertFalse(progress.device_failure)
+        visible = progress.finish()[0]['text']
+        self.assertIn('已回到你编辑的位置，正在重新执行', visible)
+        self.assertIn('Windows SSH 连接超时', visible)
+        self.assertEqual(visible.count('正在再次尝试连接 Windows'), 1)
+        self.assertIn('Windows 的后续命令已返回结果', visible)
+        self.assertIn('2 项操作未成功', visible)
+
     def test_status_and_compact_activity_without_streaming(self):
         first = 'Inspect sample data.'
         self.cloud.reply = (200, [
@@ -1794,9 +1825,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(reply['usage']['input_tokens'], 100)
         visible = reply['content'][0]['text']
         self.assertEqual(visible.count('Fixture reply'), 1)
-        self.assertEqual(visible.count('CloudCLI 正在执行云端操作'), 1)
+        self.assertEqual(visible.count('正在执行工具操作'), 1)
         for expected in ('Earlier context was trimmed.', 'Provider setup complete', '/compact', 'Compaction started',
-                         'Command output', '工具调用 2 次', '后台任务 1 项', '报告失败 1 项', '125 / 1,000',
+                         'Command output', '工具调用 2 次', '后台任务 1 项', '其中 1 项操作未成功', '125 / 1,000',
                          'different_new_event'):
             self.assertIn(expected, visible)
         for detail in ('Sample subagent thought', 'sample.txt', 'Sample file output', 'Sample agent answer',

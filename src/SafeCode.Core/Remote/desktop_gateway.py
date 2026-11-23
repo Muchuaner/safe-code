@@ -970,7 +970,7 @@ def desktop_read_attachments(messages, task, first_number):
     return files
 
 
-def cloudcli_failure(event):
+def cloudcli_failure(event, progress=None):
     detail = event.get('content') or event.get('error') or event.get('message')
     error = detail if isinstance(detail, dict) else {}
     statuses = (event.get('api_error_status'), event.get('statusCode'), event.get('status'), error.get('status'))
@@ -986,6 +986,8 @@ def cloudcli_failure(event):
         elif isinstance(detail, str) and detail.startswith('Not logged in') and '/login' in detail:
             status = 401
         else:
+            if progress is not None:
+                return progress.incomplete('CloudCLI agent did not report a successful result')
             status = 502
     return CloudCliError(f'CloudCLI agent reported an error (HTTP {status})' if status != 502
                          else 'CloudCLI agent did not report a successful result', status)
@@ -1131,10 +1133,18 @@ class CloudCliPausedTurn:
     timer: Optional[threading.Timer] = None
 
 
+SSH_TRANSPORT_ERROR = re.compile(
+    r'^(?:Connection timed out during banner exchange\b'
+    r'|ssh: connect to host [^\n]+ port \d+: Connection (?:timed out|refused)\b'
+    r'|kex_exchange_identification: read: Connection reset by peer\b'
+    r'|Connection (?:reset|closed) by [^\n]+ port \d+\b'
+    r'|client_loop: send disconnect: Broken pipe\b)', re.M)
+
+
 class CloudCliProgress:
     """Send assistant text and native thinking, with brief summaries for remote activity."""
 
-    def __init__(self, stream, web_origin, native_tools=(), model=None, tool_approvals=False):
+    def __init__(self, stream, web_origin, native_tools=(), model=None, tool_approvals=False, device=None):
         self.stream = stream
         self.web_origin = web_origin
         self.native_tools = native_tools
@@ -1161,6 +1171,11 @@ class CloudCliProgress:
         self.thinking_chars = 0
         self.tools = {}
         self.tool_failures = set()
+        self.device_command = shlex.split(device['command']) if device else ()
+        self.device_name = 'Windows' if device and device['platform'] == 'windows' else '本机设备'
+        self.device_tools = {}
+        self.device_failure = False
+        self.device_retry_reported = False
         self.tasks = {}
         self.activity_reported = False
         self.permissions = {}
@@ -1284,7 +1299,8 @@ class CloudCliProgress:
                 self.question(data, kind)
             detail = self.fields(data, {'description': '说明', 'command': '命令', 'plan': '计划',
                                         'file_path': '文件', 'message': '消息', 'url': '网址'})
-            self.notice(f'`{tool}` 正在等待用户输入', detail, action=self.open_session()+'处理此请求。')
+            waiting = '等待回答' if tool == 'AskUserQuestion' else '等待授权'
+            self.notice(f'`{tool}` {waiting}', detail, action=self.open_session()+'处理此请求。')
             return
         tool = self.permissions.pop(request, 'CloudCLI')
         title = '已收到处理结果' if kind == 'permission_resolved' else '等待已取消'
@@ -1299,7 +1315,7 @@ class CloudCliProgress:
     def activity(self):
         if not self.activity_reported:
             self.activity_reported = True
-            self.notice('CloudCLI 正在执行云端操作')
+            self.notice('正在执行工具操作')
 
     def summarize_activity(self):
         if not self.activity_reported:
@@ -1311,9 +1327,55 @@ class CloudCliProgress:
             summary.append(f'后台任务 {len(self.tasks)} 项')
         failed = len(self.tool_failures) + sum(status == 'failed' for status in self.tasks.values())
         if failed:
-            summary.append(f'报告失败 {failed} 项')
+            summary.append(f'其中 {failed} 项操作未成功')
         summary.append(self.open_session()+'查看过程详情')
         self.notice(' · '.join(summary))
+
+    def track_device_command(self, identifier, data):
+        command = data.get('command') if isinstance(data, dict) else None
+        if not self.device_command or not isinstance(command, str):
+            return
+        try:
+            args = shlex.split(command)
+            config = args.index('-F')
+        except ValueError:
+            return
+        if (args[0] != 'ssh' or args[config+1:config+2] != self.device_command[2:3]
+                or self.device_command[-1] not in args[config+2:]):
+            return
+        self.device_tools[identifier] = self.device_failure
+        if self.device_failure and not self.device_retry_reported:
+            self.device_retry_reported = True
+            self.notice(f'正在再次尝试连接 {self.device_name}')
+
+    def tool_result(self, event):
+        identifier = event.get('toolId')
+        if not isinstance(identifier, str):
+            return
+        self.tools.setdefault(identifier, 'CloudCLI')
+        result = event.get('toolResult')
+        nested = result if isinstance(result, dict) else {}
+        failed = any(item.get(flag) is True for item in (event, nested) for flag in ('isError', 'is_error'))
+        output = event.get('content')
+        retry = self.device_tools.pop(identifier, None)
+        if retry is not None and isinstance(output, str):
+            match = SSH_TRANSPORT_ERROR.search(output[:16384])
+            if match:
+                failed = True
+                if not self.device_failure:
+                    detail = '连接超时' if 'timed out' in match[0] else '连接中断'
+                    self.notice(f'{self.device_name} SSH {detail}，本次命令未完成')
+                self.device_failure = True
+            elif retry and self.device_failure and not failed and output.strip():
+                self.device_failure = self.device_retry_reported = False
+                self.notice(f'{self.device_name} 的后续命令已返回结果')
+        if failed:
+            self.tool_failures.add(identifier)
+
+    def incomplete(self, message, status=502):
+        if self.device_failure:
+            return CloudCliError(f'{self.device_name} 连接中断，本轮未完成。连接恢复后可在原对话重试。', 503)
+        return CloudCliError(message, status)
 
     def report_thinking(self, content):
         remaining = 64000 - self.thinking_chars
@@ -1390,6 +1452,8 @@ class CloudCliProgress:
                 return
             self.tools[identifier] = tool
             data = event.get('toolInput')
+            if tool == 'Bash':
+                self.track_device_command(identifier, data)
             if tool == 'AskUserQuestion':
                 if tool in self.native_tools:
                     self.deferred_questions.append(data)
@@ -1400,20 +1464,15 @@ class CloudCliProgress:
                     self.plan_candidate = data
                 self.activity()
         elif kind == 'tool_result':
-            identifier = event.get('toolId')
-            result = event.get('toolResult')
-            nested = result if isinstance(result, dict) else {}
-            if isinstance(identifier, str):
-                self.tools.setdefault(identifier, 'CloudCLI')
-                if any(item.get(flag) is True for item in (event, nested) for flag in ('isError', 'is_error')):
-                    self.tool_failures.add(identifier)
+            self.tool_result(event)
             self.activity()
         elif kind in ('permission_request', 'permission_resolved', 'permission_cancelled'):
             self.permission(event)
         elif kind in ('task_status', 'task_notification'):
             self.task(event)
         elif kind == 'history_truncated':
-            self.notice('CloudCLI 已截断历史记录', event.get('summary') or event.get('content'))
+            title = '已回到你编辑的位置，正在重新执行' if self.edit_anchor is not None else 'CloudCLI 调整了本轮上下文'
+            self.notice(title, event.get('summary') or event.get('content'))
         elif kind == 'status':
             if event.get('text') == 'token_budget':
                 self.context_budget = event.get('tokenBudget')
@@ -1512,7 +1571,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                 or kind == 'complete'):
             idle_deadline = time.monotonic() + CLOUDCLI_PROGRESS_TIMEOUT
         if kind == 'error' or event_type == 'error' or (kind != 'tool_result' and event.get('is_error') is True):
-            raise cloudcli_failure(event)
+            raise cloudcli_failure(event, progress)
         if event_type == 'status' and event.get('message') not in ('Session started', 'Repository cloned and session started'):
             progress.notice('CloudCLI 状态', event.get('message'))
         if event_type == 'session-id':
@@ -1535,7 +1594,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
             if (isinstance(content, str) and (event.get('isApiErrorMessage') or event.get('is_api_error_message')
                     or re.match(r'^API Error:\s*[45]\d\d\b', content)
                     or content.startswith('Not logged in') and '/login' in content)):
-                raise cloudcli_failure(event)
+                raise cloudcli_failure(event, progress)
         if kind == 'status' and event.get('text') == 'token_budget':
             budget = event.get('tokenBudget')
             if isinstance(budget, dict):
@@ -1545,9 +1604,9 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
             if event.get('aborted') is True:
                 if progress.stopping.is_set():
                     raise CloudCliStopped('Desktop stopped its CloudCLI turn')
-                raise CloudCliError('CloudCLI run was canceled', 409)
+                raise progress.incomplete('CloudCLI run was canceled', 409)
             if type(event.get('exitCode')) is not int or event['exitCode'] != 0 or event.get('success') is False:
-                raise cloudcli_failure(event)
+                raise cloudcli_failure(event, progress)
             complete = True
         if event_type == 'done':
             if progress.session and complete:
@@ -1583,7 +1642,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                 idle_deadline = resumed + CLOUDCLI_PROGRESS_TIMEOUT
                 continue
         progress.feed(event)
-    raise CloudCliError('CloudCLI ended without a confirmed assistant reply')
+    raise progress.incomplete('CloudCLI ended without a confirmed assistant reply')
 
 
 class CloudCliSocketEvents:
@@ -3144,7 +3203,8 @@ class CloudCliBackend:
                 db.execute('INSERT INTO requests VALUES (?, ?, NULL, ?)', (identity, namespace, now))
             with manager.lock:
                 manager.started += 1
-            progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model, tool_approvals)
+            progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model, tool_approvals,
+                                        self.device)
             progress.forwarded_text = payload['message']
             progress.workspace_prompt_fingerprint = workspace_prompt_fingerprint
             progress.turn_position = position

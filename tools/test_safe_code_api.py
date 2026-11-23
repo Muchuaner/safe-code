@@ -582,11 +582,12 @@ if sys.stdin.buffer.read(1) == b'\r':
                         args.setdefault('activation_code', 'Agentom')
                     return admin_request(action, **args)['value']
 
-                def request(method, path, key=None, body=None):
+                def request(method, path, key=None, body=None, extra_headers=None):
                     conn=http.client.HTTPSConnection('127.0.0.1',public.server_port,
                                                      context=ssl._create_unverified_context(),timeout=3)
                     try:
-                        conn.request(method,path,body,{'Authorization':'Bearer '+key} if key else {})
+                        headers = {'Authorization': 'Bearer '+key} if key else {}
+                        conn.request(method, path, body, {**headers, **(extra_headers or {})})
                         response=conn.getresponse()
                         return response.status,response.read()
                     finally:
@@ -666,6 +667,17 @@ if sys.stdin.buffer.read(1) == b'\r':
                 self.assertEqual(ticket_payload['url'], 'https://fixture.example')
                 key=ticket_payload['key']
                 self.assertEqual(hashlib.sha256(key.encode()).hexdigest(),created['id'])
+                status, body = request('POST', '/v1/messages')
+                self.assertEqual((status, json.loads(body)['error']['type']), (401, 'authentication_error'))
+                device_headers = {'X-SafeCode-Device': 'ssh-'+'a'*20, 'X-SafeCode-Device-Proof': 'fixture'}
+                for failure, status_code, kind, code in (
+                        (server.DeviceOffline('private address'), 503, 'api_error', 'device_offline'),
+                        (server.DeviceError('private proof'), 403, 'permission_error', 'device_pairing_rejected')):
+                    with patch.object(public.owner_hosts, 'chat_binding', side_effect=failure):
+                        status, body = request('POST', '/v1/messages', key, extra_headers=device_headers)
+                    error = json.loads(body)['error']
+                    self.assertEqual((status, error['type'], error['code']), (status_code, kind, code))
+                    self.assertNotIn('private', error['message'])
                 self.assertEqual(post('/admin',key,False)[0],404)
                 self.assertEqual(request('GET','/v1/key/balance')[0],401)
                 status, balance = request('GET','/v1/key/balance',key)

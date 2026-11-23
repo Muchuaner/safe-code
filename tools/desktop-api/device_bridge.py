@@ -33,6 +33,10 @@ class DeviceError(ValueError):
     pass
 
 
+class DeviceOffline(DeviceError):
+    """An authorized device whose return connection is unavailable."""
+
+
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -116,7 +120,7 @@ class OwnerHosts:
                 raise ValueError()
             return alias[1], hashlib.sha256(public_key).hexdigest(), shlex.join(['ssh', '-F', str(folder/'config'), alias[1]])
         except (OSError, ValueError):
-            raise DeviceError('The verified SSH tunnel is unavailable') from None
+            raise DeviceOffline('The verified SSH tunnel is unavailable') from None
 
     def bind(self, owner, client_id, hostname):
         device = 'ssh-'+client_id if isinstance(client_id, str) else ''
@@ -353,13 +357,13 @@ class Devices:
     def chat_binding(self, owner, platform, device, proof):
         row = self.enrolled(owner, platform, device, proof)
         if not row['ready'] or row['expires'] <= time.time():
-            raise DeviceError('SafeCode device control is offline')
+            raise DeviceOffline('SafeCode device control is offline')
         try:
             with socket.create_connection(('127.0.0.1', row['port']), timeout=2) as connection:
                 if not connection.recv(64).startswith(b'SSH-'):
                     raise OSError()
         except OSError:
-            raise DeviceError('SafeCode device control is offline') from None
+            raise DeviceOffline('SafeCode device control is offline') from None
         return {'id': row['id'], 'platform': row['platform'], 'hostname': row['hostname'],
                 'alias': row['alias'], 'command': self.command(row)}
 
