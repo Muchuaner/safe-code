@@ -335,7 +335,12 @@ class PublicHandler(Handler):
                 return self.reply(200, devices.prepare(self.digest, self.platform, request.get('hostname')))
             row = devices.enrolled(self.digest, self.platform, request.get('deviceId'), request.get('deviceProof'))
             if action == 'verify':
-                return self.reply(200, {'command': devices.configure(row, request.get('username'), request.get('hostKey'))})
+                try:
+                    command = devices.configure(row, request.get('username'), request.get('hostKey'))
+                except DeviceError:
+                    return self.device_error(400, 'SafeCode could not verify the SSH return path',
+                                             'device_ssh_verification_failed')
+                return self.reply(200, {'command':command})
             if action == 'renew':
                 devices.renew(row)
                 return self.reply(200, {'ready': bool(row['ready'])})

@@ -148,6 +148,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         using var response=await client.PostAsync("/v1/device-control",body,ct).ConfigureAwait(false);
         if(!response.IsSuccessStatusCode)
         {
+            if(response.StatusCode==HttpStatusCode.Unauthorized)
+                throw new InvalidOperationException("Key 无效、已过期或已撤销。");
             if(optional&&response.StatusCode==HttpStatusCode.NotFound)return null;
             try
             {
@@ -166,6 +168,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                             "device_not_allowed" => "此 Key 没有设备配对权限。请让签发人在「管理网关」将接入用途改为「Safe Code 桌面接入」。",
                             "device_auth_unavailable" => "VPS 的设备鉴权服务未就绪。请在「网关设置」运行故障修复。",
                             "device_frp_unavailable" => "VPS 的私有 FRP 服务未就绪。请在「网关设置」运行故障修复。",
+                            "device_ssh_verification_failed" => "VPS 未能验证 SSH 回连。请检查本机远程登录权限，再重新授权。",
                             _ => null
                         };
                         if(explanation!=null)throw new InvalidOperationException(explanation);
