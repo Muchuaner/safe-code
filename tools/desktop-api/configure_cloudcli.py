@@ -100,11 +100,11 @@ def select_host(home, requested):
     return active[0]
 
 
-def cloudcli_auth_request(path, payload=None, token=None):
+def cloudcli_auth_request(path, payload=None, token=None, *, port=3001):
     headers = {'Content-Type': 'application/json'}
     if token:
         headers['Authorization'] = 'Bearer '+token
-    connection = HTTPConnection('127.0.0.1', 3001, timeout=6)
+    connection = HTTPConnection('127.0.0.1', port, timeout=6)
     try:
         connection.request('GET' if payload is None else 'POST', path,
                            None if payload is None else json.dumps(payload), headers)
@@ -119,8 +119,8 @@ def cloudcli_auth_request(path, payload=None, token=None):
         connection.close()
 
 
-def cloudcli_needs_setup():
-    status = cloudcli_auth_request('/api/auth/status')
+def cloudcli_needs_setup(port=3001):
+    status = cloudcli_auth_request('/api/auth/status', port=port)
     if type(status.get('needsSetup')) is not bool:
         raise ValueError('CloudCLI 未返回有效的首次配置状态。')
     return status['needsSetup']
@@ -398,9 +398,12 @@ def main():
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2 and sys.argv[1] == '--check-cloudcli' and os.getuid():
+    if len(sys.argv) in (2, 3) and sys.argv[1] == '--check-cloudcli' and os.getuid():
         try:
-            print(json.dumps({'needsSetup': cloudcli_needs_setup()}))
+            port = int(sys.argv[2]) if len(sys.argv) == 3 else 3001
+            if not 1 <= port <= 65535:
+                raise ValueError()
+            print(json.dumps({'needsSetup': cloudcli_needs_setup(port)}))
         except ValueError:
             sys.exit(1)
     elif len(sys.argv) == 2 and sys.argv[1] == '--finish-public-gateway' and os.getuid():

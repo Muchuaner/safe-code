@@ -451,3 +451,13 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
  .api-usage-table tr>*{padding:7px}
  .api-actions>div{gap:9px}
 }
+
+
+.gateway-footer-actions{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.gateway-repair-dialog{width:450px}
+.gateway-repair-dialog .config-body{padding:22px 25px 18px}
+.gateway-repair-dialog h2{font-size:var(--type-medium)}
+.gateway-repair-dialog .policy-toggle{margin:15px 0 13px}
+#gateway-repair-status{min-height:20px;white-space:pre-line;overflow-wrap:anywhere}
+.gateway-repair-dialog .config-footer{justify-content:flex-end;gap:14px}
+.gateway-repair-dialog .config-footer .primary{width:auto;min-width:82px;padding:0 12px}

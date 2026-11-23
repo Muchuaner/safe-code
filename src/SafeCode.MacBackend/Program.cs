@@ -62,7 +62,7 @@ internal sealed class MacBackend : IDisposable
         {
             using var doc=JsonDocument.Parse(line);var root=doc.RootElement;id=root.GetProperty("id").GetString()??"";operation=root.GetProperty("op").GetString()??"";var args=root.GetProperty("args");
             bool modifies=operation is "deploy" or "job.resume" or "mount.apply" or "mount.install" or "cloud.install" or "cloud.expose" or "ip.apply" or "terminal" or "desktop" or "desktop.resolution.save" or "host.enable" or "host.disable" or "app.shutdown" or "connection.reauthenticate"
-                or "desktopKey.enable" or "desktopKey.disable" or "desktopKey.refreshModels" or "desktopKey.authorizeDevice" or "desktopKey.cancelDevice" or "safeCodeApi.enablePublic" or "safeCodeApi.install"
+                or "desktopKey.enable" or "desktopKey.disable" or "desktopKey.refreshModels" or "desktopKey.authorizeDevice" or "desktopKey.cancelDevice" or "safeCodeApi.enablePublic" or "safeCodeApi.install" or "safeCodeApi.repair"
                 or "socks.probe" or "socks.enable" or "socks.disable";
             if(modifies){if(!await mutation.WaitAsync(0))throw new InvalidOperationException("已有任务正在执行，请等待完成。");gate=true;Interlocked.Increment(ref activeMutations);}
             var diagnosticOperation=offline||operation=="mount.reconnect"&&session?.HasMounts!=true?null:DiagnosticTrace.OperationFor(operation,args);
@@ -255,6 +255,10 @@ internal sealed class MacBackend : IDisposable
                 if (!Flag("accepted")) throw new InvalidOperationException("请先确认安装 Safe Code API 服务。");
                 return await RequireGatewaySession().InstallPublicGatewayAsync(ct,
                     args.TryGetProperty("cloudcli",out var cloudcliInstall)?cloudcliInstall:null);
+            case "safeCodeApi.repair":
+                if (!Flag("accepted")) throw new InvalidOperationException("请先确认故障修复范围。");
+                step="gateway_repair";
+                return await RequireGatewaySession().RepairPublicGatewayAsync(Flag("reinstallCloudCLI"),ct);
             case "safeCodeApi.enablePublic":
                 if (!Flag("accepted")) throw new InvalidOperationException("请先点击公网网关的「启用」。");
                 return await RequireGatewaySession().EnablePublicGatewayAsync(ct);

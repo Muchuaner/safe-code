@@ -96,7 +96,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         'mount-dialog':[540,510],'client-window':[745,490],
         'login-help-dialog':[620,495],'ip-policy-dialog':[490,495],'socks-dialog':[490,505],
         'remote-folder-dialog':[460,435],'operation-log-dialog':[540,425],
-        'claude-desktop-dialog':[450,320],'cloud-remote-dialog':[470,445],
+        'claude-desktop-dialog':[450,320],'gateway-repair-dialog':[450,320],'cloud-remote-dialog':[470,445],
         'advanced-dialog':[355,235],'resolution-dialog':[355,305],
         'create-folder-dialog':[380,250],'desktop-key-dialog':[360,190],
         'app-message-dialog':[400,300]
@@ -167,7 +167,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     const originalRenderTasks=renderTasks;renderTasks=function(){originalRenderTasks();syncAdvancedButtons();};
     const ids = ['account','localization','desktop','chrome','input','claude','ssh'];
     window.safeCodeNativeLog = (step,line) => {
-      if(step==='codex_bridge'&&bridgeBusy){$('#bridge-progress').textContent=line;}
+      if(step==='gateway_repair'&&repairing&&repairDialog.open){repairStatus.textContent=line;}
+      else if(step==='codex_bridge'&&bridgeBusy){$('#bridge-progress').textContent=line;}
       else if(step==='mount_apply'&&mountSaving){mountProgressText.textContent=line;}
       else if(step==='folder'&&$('#remote-folder-dialog').open){appendFolderLog(line);}
       else if(step==='cloud_public'||(cloudRemoteRunning&&$('#cloud-remote-dialog').open)){appendCloudRemoteLog(line);}
@@ -289,6 +290,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       publicGatewayOperation=publicGatewayStatusError='';
       publicGatewayError=undefined;
       publicGatewayCreatedAccount=undefined;
+      $('#gateway-repair-dialog').close();
       $('#claude-desktop-dialog').close();
       publicGatewaySubscription=undefined;
       $('#public-gateway-footer').hidden=true;
@@ -714,6 +716,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#safe-code-api-enable').disabled=unavailable||checking||publicGatewayEnabled;
       $('#safe-code-api-enable').textContent=publicGatewayEnabled?'已启用':'启用';
       $('#safe-code-api-manage').disabled=unavailable||!publicGatewayEnabled;
+      $('#safe-code-api-repair').disabled=unavailable||publicGatewayMissing;
       $('#safe-code-cloudcli-config').hidden=!publicGatewayNeedsCloudKey;
       $('#safe-code-cloudcli-api-key').disabled=!!publicGatewayOperation;
       $('#claude-desktop-dialog-state').textContent=publicGatewayOperation?'处理中…':checking?'正在读取…':
@@ -843,6 +846,55 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     publicGatewayDialog.addEventListener('close',()=>{
       if(!publicGatewayDialog.open)$('#safe-code-cloudcli-api-key').value='';
     });
+    const repairDialog=$('#gateway-repair-dialog'), repairStatus=$('#gateway-repair-status');
+    const repairCloud=$('#gateway-repair-cloudcli'), repairStart=$('#gateway-repair-start');
+    const repairBack=$('#gateway-repair-back');
+    let repairing=false;
+    function setRepairBusy(value){
+      repairing=value;
+      repairCloud.disabled=repairStart.disabled=value;
+      for(const button of repairDialog.querySelectorAll('[data-close-gateway-repair]'))button.disabled=value;
+    }
+    $('#safe-code-api-repair').onclick=()=>{
+      if($('#safe-code-api-repair').disabled||repairDialog.open)return;
+      repairCloud.checked=false;
+      setRepairBusy(false);
+      repairStart.hidden=false;
+      repairBack.textContent='取消';
+      repairStatus.textContent='重装期间服务会短暂中断，建议等正在运行的请求完成。';
+      repairDialog.showModal();
+    };
+    for(const button of repairDialog.querySelectorAll('[data-close-gateway-repair]')){
+      button.onclick=()=>{if(!repairing)repairDialog.close();};
+    }
+    repairDialog.addEventListener('cancel',event=>{if(repairing)event.preventDefault();});
+    $('#gateway-repair-form').onsubmit=async event=>{
+      event.preventDefault();
+      if(repairing||repairStart.hidden||!connectionReady||publicGatewayOperation)return;
+      const attempt=connectionAttempt, reinstallCloudCLI=repairCloud.checked;
+      setRepairBusy(true);
+      setPublicGatewayOperation('正在修复网关。');
+      repairStatus.textContent=reinstallCloudCLI?'正在重装网关和 CloudCLI，下载安装可能需要几分钟。':'正在重装网关并检查服务。';
+      try{
+        await publicGatewayTask?.promise;
+        if(attempt!==connectionAttempt)return;
+        const status=await native('safeCodeApi.repair',{accepted:true,reinstallCloudCLI});
+        if(attempt!==connectionAttempt)return;
+        publicGatewayError=undefined;
+        renderPublicGatewayStatus(status);
+        repairStatus.textContent=status.cloudcliReinstalled?'网关和 CloudCLI 已重装，服务检查通过。':'网关已重装，服务检查通过。';
+        repairStart.hidden=true;
+        repairBack.textContent='完成';
+      }catch(error){
+        if(attempt===connectionAttempt)repairStatus.textContent=error.message;
+      }finally{
+        setRepairBusy(false);
+        if(attempt===connectionAttempt){
+          setPublicGatewayOperation('');
+          void refreshPublicGateway();
+        }
+      }
+    };
     $('#safe-code-open-cloudcli').onclick=event=>{
       event.preventDefault();
       const attempt=connectionAttempt;

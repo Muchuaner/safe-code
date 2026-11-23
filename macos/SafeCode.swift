@@ -876,14 +876,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         const desktopDialog=document.querySelector('#claude-desktop-dialog');
         const gatewayForm=document.querySelector('#safe-code-api-form');
         const gatewayButtons=[...gatewayForm.querySelectorAll('.config-footer button')];
-        if(gatewayButtons.map(button=>button.textContent.trim()).join(',')!=='启用,管理网关')
+        if(gatewayButtons.map(button=>button.textContent.trim()).join(',')!=='故障修复,启用,管理网关')
           throw Error('Unexpected gateway actions');
         if(capture){
           gatewayForm.querySelector('#claude-desktop-dialog-state').textContent='公网已启用';
           gatewayForm.querySelector('#safe-code-api-progress').textContent='点击「管理网关」创建 API Key，再回到主界面粘贴。';
-          gatewayButtons[0].textContent='已启用';
-          gatewayButtons[0].disabled=true;
-          gatewayButtons[1].disabled=false;
+          gatewayButtons[1].textContent='已启用';
+          gatewayButtons[1].disabled=true;
+          gatewayButtons[2].disabled=false;
         }
         desktopDialog.showModal();
         await waitPanel('claude-desktop-dialog',1);
@@ -891,7 +891,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           const state=await rpc('window.smoke.dialog');
           return Math.abs(state.contentHeight-Math.max(120,Math.ceil(gatewayForm.getBoundingClientRect().height)))<=1;
         },'Public gateway window content height');
+        gatewayButtons[0].disabled=false;
         if(capture)await rpc('window.smoke.screenshot',{name:'desktop-access'});
+        gatewayButtons[0].click();
+        await waitPanel('gateway-repair-dialog',2);
+        const cloudRepair=document.querySelector('#gateway-repair-cloudcli');
+        if(cloudRepair.checked)throw Error('CloudCLI repair must be opt-in');
+        if(capture)await rpc('window.smoke.screenshot',{name:'dialog-gateway-repair'});
+        cloudRepair.click();
+        if(!cloudRepair.checked)throw Error('CloudCLI repair cannot be selected');
+        document.querySelector('#gateway-repair-back').click();
+        await waitPanel('claude-desktop-dialog',1);
+        gatewayButtons[0].click();
+        await waitPanel('gateway-repair-dialog',2);
+        if(cloudRepair.checked)throw Error('Repair selection was reused');
+        document.querySelector('#gateway-repair-back').click();
+        await waitPanel('claude-desktop-dialog',1);
         await rpc('window.gateway.open');
         await waitFor(async()=>{const state=await rpc('window.smoke.gateway');return state.ready&&state.visible;},'gateway window');
         await rpc('window.smoke.gateway',{createKey:true});

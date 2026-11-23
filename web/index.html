@@ -132,8 +132,27 @@
     </div>
     <div class="config-footer">
       <span id="claude-desktop-dialog-state">未启用</span>
-      <button type="submit" class="primary" id="safe-code-api-enable" disabled>启用</button>
-      <button type="button" class="primary" id="safe-code-api-manage" disabled>管理网关</button>
+      <div class="gateway-footer-actions">
+        <button type="button" class="deploy-button" id="safe-code-api-repair" disabled>故障修复</button>
+        <button type="submit" class="primary" id="safe-code-api-enable" disabled>启用</button>
+        <button type="button" class="primary" id="safe-code-api-manage" disabled>管理网关</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+<dialog id="gateway-repair-dialog" class="config-dialog gateway-repair-dialog" aria-labelledby="gateway-repair-title">
+  <header class="titlebar"><span class="app-name" id="gateway-repair-title">Safe Code API · 故障修复</span><button type="button" class="close" data-close-gateway-repair aria-label="关闭故障修复">×</button></header>
+  <form class="config-body" id="gateway-repair-form">
+    <h2>重装公网网关</h2>
+    <p class="config-description">使用当前 Safe Code 客户端内置版本重新安装，保留 API Key、证书、用量记录和监听设置。</p>
+    <label class="policy-toggle">
+      <input type="checkbox" id="gateway-repair-cloudcli">
+      <span>同时重装 CloudCLI<small>重新安装已部署的官方版本，保留账号、对话和项目。</small></span>
+    </label>
+    <p id="gateway-repair-status" class="config-description" role="status">重装期间服务会短暂中断，建议等正在运行的请求完成。</p>
+    <div class="config-footer">
+      <button type="button" class="text-button" id="gateway-repair-back" data-close-gateway-repair>取消</button>
+      <button type="submit" class="primary" id="gateway-repair-start">开始重装</button>
     </div>
   </form>
 </dialog>

@@ -272,7 +272,7 @@ public sealed class MainWindow : Window
             var args = root.TryGetProperty("args", out var value) ? value : default;
             if(exitInProgress)throw new InvalidOperationException("正在安全退出，请稍候。");
             if(installingUpdate)throw new InvalidOperationException("正在准备安装更新，请稍候。");
-            bool maintenance=operation is "cloud.install" or "cloud.expose" or "mount.install" or "mount.apply" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "bridge.start" or "bridge.stop" or "safeCodeApi.enablePublic" or "desktopKey.enable" or "desktopKey.authorizeDevice" or "desktopKey.refreshModels" or "desktopKey.disable" or "connection.reauthenticate";
+            bool maintenance=operation is "cloud.install" or "cloud.expose" or "mount.install" or "mount.apply" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "bridge.start" or "bridge.stop" or "safeCodeApi.enablePublic" or "safeCodeApi.repair" or "desktopKey.enable" or "desktopKey.authorizeDevice" or "desktopKey.refreshModels" or "desktopKey.disable" or "connection.reauthenticate";
             if(maintenance)maintenanceOperations++;
             if(CanReportDiagnostics)
             {
@@ -457,6 +457,15 @@ public sealed class MainWindow : Window
                 deploying=true;activeStep="gateway_install";
                 try{return await installSession.InstallPublicGatewayAsync(lifetime.Token,
                     args.TryGetProperty("cloudcli",out var cloudcliInstall)?cloudcliInstall:null);}
+                finally{deploying=false;activeStep="";}
+            case "safeCodeApi.repair":
+                if (!args.TryGetProperty("accepted",out var repairAccepted) || repairAccepted.ValueKind!=JsonValueKind.True)
+                    throw new InvalidOperationException("请先确认故障修复范围。");
+                if(deploying||gatewayWindow?.Busy==true)throw new InvalidOperationException("请等待当前操作完成。");
+                var repairSession=RequireGatewaySession();
+                deploying=true;activeStep="gateway_repair";
+                try{return await repairSession.RepairPublicGatewayAsync(
+                    args.TryGetProperty("reinstallCloudCLI",out var reinstallCloud) && reinstallCloud.ValueKind==JsonValueKind.True,lifetime.Token);}
                 finally{deploying=false;activeStep="";}
             case "safeCodeApi.enablePublic":
                 if (!args.TryGetProperty("accepted", out var publicAccepted) || publicAccepted.ValueKind != JsonValueKind.True)

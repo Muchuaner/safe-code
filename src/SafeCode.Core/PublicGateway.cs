@@ -139,6 +139,27 @@ public sealed partial class SshSession
 
     public async Task<JsonElement> InstallPublicGatewayAsync(CancellationToken ct, JsonElement? cloudcli = null)
     {
+        var files = await LoadGatewayPackageAsync(ct);
+        var result = await RequestGatewayAsync(new { action = "install", accepted = true, files, cloudcli }, ct,
+            timeout: TimeSpan.FromMinutes(12));
+        if (Server is { } server
+            && (result.TryGetProperty("backend", out var backend) && backend.GetString() == "cloudcli"
+                || result.TryGetProperty("cloudcliKeyRequired", out var keyRequired) && keyRequired.ValueKind == JsonValueKind.True))
+            server.CloudReady = true;
+        return result;
+    }
+
+    public async Task<JsonElement> RepairPublicGatewayAsync(bool reinstallCloudCLI, CancellationToken ct)
+    {
+        var files = await LoadGatewayPackageAsync(ct);
+        var result = await RequestAsync<JsonElement>("safe_code_api_repair",
+            new { action = "repair", accepted = true, files, reinstallCloudCLI }, ct);
+        RememberPublicGateway(result);
+        return result;
+    }
+
+    private static async Task<Dictionary<string, string>> LoadGatewayPackageAsync(CancellationToken ct)
+    {
         var assembly = Assembly.GetExecutingAssembly();
         var files = new Dictionary<string, string>();
         const string api = "SafeCode.Core.PublicApi.";
@@ -153,13 +174,7 @@ public sealed partial class SshSession
             files.Add(resource[prefix..],
                 Convert.ToBase64String(buffer.ToArray()));
         }
-        var result = await RequestGatewayAsync(new { action = "install", accepted = true, files, cloudcli }, ct,
-            timeout: TimeSpan.FromMinutes(12));
-        if (Server is { } server
-            && (result.TryGetProperty("backend", out var backend) && backend.GetString() == "cloudcli"
-                || result.TryGetProperty("cloudcliKeyRequired", out var keyRequired) && keyRequired.ValueKind == JsonValueKind.True))
-            server.CloudReady = true;
-        return result;
+        return files;
     }
 
     private void RememberPublicGateway(JsonElement result)

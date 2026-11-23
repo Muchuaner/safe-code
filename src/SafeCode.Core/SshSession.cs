@@ -189,7 +189,7 @@ public sealed partial class SshSession : IDisposable
             if (client?.IsConnected != true) throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
             using (var sftp = MakeSftp())
             {
-                if (operation == "safe_code_api") sftp.OperationTimeout = TimeSpan.FromSeconds(12);
+                if (operation is "safe_code_api" or "safe_code_api_repair") sftp.OperationTimeout = TimeSpan.FromSeconds(12);
                 await sftp.ConnectAsync(ct);
                 using var bytes = new MemoryStream(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { op = operation, options, background = IsLongOperation(operation) }, JsonDefaults.Options)));
                 await sftp.UploadFileAsync(bytes, requestPath, ct); sftp.ChangePermissions(requestPath, 600);
@@ -244,7 +244,7 @@ public sealed partial class SshSession : IDisposable
             if(!ct.IsCancellationRequested)_=Task.Run(()=>{try{using var sftp=MakeSftp();sftp.ConnectionInfo.Timeout=TimeSpan.FromSeconds(3);sftp.OperationTimeout=TimeSpan.FromSeconds(2);sftp.Connect();sftp.DeleteFile(requestPath);}catch{}});
         }
     }
-    private static bool IsLongOperation(string operation)=>operation is "account" or "localization" or "desktop" or "chrome" or "input" or "claude" or "ssh" or "cloud" or "mount_install";
+    private static bool IsLongOperation(string operation)=>operation is "account" or "localization" or "desktop" or "chrome" or "input" or "claude" or "ssh" or "cloud" or "mount_install" or "safe_code_api_repair";
     private async Task<string> WatchJobJsonAsync(string jobId,CancellationToken ct)
     {
         if(!Regex.IsMatch(jobId,"^[a-f0-9]{32}$"))throw new ArgumentException("后台任务标识无效。");
