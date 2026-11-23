@@ -3,7 +3,7 @@ import WebKit
 import Security
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "Beta-0.4.5.2"
+private let safeCodeVersion = "0.4.6"
 private enum AppError: LocalizedError {
     case message(String)
     case keychainCancelled
