@@ -742,8 +742,8 @@ def desktop_compact_context(messages):
             return None
         text = ''.join(item['text'] for item in content)
         if text.startswith(DESKTOP_COMPACT_PREFIX+'\n'):
-            header, marker, body = text.partition('\nSummary:\n')
-            if marker and not SYSTEM_REMINDER.sub('', header[len(DESKTOP_COMPACT_PREFIX):]).strip():
+            _, marker, body = text.partition('\nSummary:\n')
+            if marker:
                 return body.lstrip()
         if SYSTEM_REMINDER.sub('', text).strip():
             return None

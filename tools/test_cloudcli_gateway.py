@@ -922,6 +922,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         wrapper = (gateway.DESKTOP_COMPACT_PREFIX+'\n\n'
                    '<system-reminder>\n<tools-used-before-summary>Read</tools-used-before-summary>\n</system-reminder>\n\n'
+                   '> **SafeCode** · 已接收任务\n\n'
                    'Summary:\n')
         context = {'role': 'user', 'content': wrapper+summary+'\n\nContinue the conversation.'}
         previous = {'role': 'assistant', 'content': 'Continue from the same task.'}
