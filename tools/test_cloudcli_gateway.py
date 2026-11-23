@@ -209,6 +209,28 @@ class ChatSocketFixture:
 
 
 class CloudCLIStreamTests(unittest.TestCase):
+    def test_open_sse_sends_idle_ping_without_starting_or_finishing_a_message(self):
+        from unittest.mock import Mock
+        handler = Mock()
+        finished = threading.Event()
+        with patch.object(gateway.time, 'monotonic', return_value=100) as clock:
+            stream = gateway.CloudCliMessagesStream(handler, MODEL)
+            clock.return_value = 120
+            stream.ping_if_idle(finished)
+            handler.send_sse.assert_not_called()
+            stream.text('Opening text.')
+            clock.return_value = 134
+            stream.ping_if_idle(finished)
+            self.assertEqual(handler.send_sse.call_args.args[0], 'content_block_delta')
+            clock.return_value = 135
+            stream.ping_if_idle(finished)
+            handler.send_sse.assert_called_with('ping', {'type': 'ping'})
+            finished.set()
+            handler.send_sse.reset_mock()
+            clock.return_value = 160
+            stream.ping_if_idle(finished)
+            handler.send_sse.assert_not_called()
+
     def test_active_stream_can_pass_old_limit(self):
         frames = [(0, {'type': 'session-id', 'sessionId': CLOUD_SESSION})]
         frames.extend((second, {'kind': 'stream_delta', 'content': 'x'}) for second in range(60, 660, 60))
@@ -1805,6 +1827,35 @@ class CloudCLIGatewayTests(unittest.TestCase):
             content[-1]['source'] = {'type': 'url', 'url': 'https://example.com/report.pdf'}
             self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 400)
             self.assertEqual(len(actions), 1)
+
+    def test_large_combined_attachments_and_attachment_only_turn(self):
+        self.enable_cloudcli_web_fixture()
+        actions = []
+        events = [{'kind': 'text', 'role': 'assistant', 'content': 'Files received.', 'sessionId': CLOUD_SESSION},
+                  {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION}]
+        inline = {'type': 'document', 'source': {'type': 'text', 'data': 'Inline text without a MIME field.'}}
+        raw = b'a' * (4 * 1024 * 1024)
+        source = {'type': 'base64', 'media_type': 'text/plain', 'data': base64.b64encode(raw).decode()}
+        content = [inline, {'type': 'document', 'title': 'one.txt', 'source': source},
+                   {'type': 'document', 'title': 'two.txt', 'source': source}]
+        payload = conversation('unused', messages=[{'role': 'user', 'content': content}])
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
+            self.assertEqual(self.request(payload)[0], 200)
+        command, = actions
+        self.assertTrue(command['content'].startswith('请查看本轮附加的文件。'))
+        self.assertEqual([len(data) for _, _, data in self.cloud.uploads], [len(inline['source']['data']), len(raw), len(raw)])
+
+    def test_paired_mac_recovers_workspace_from_the_matching_desktop_session(self):
+        self.manager.cloudcli.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
+                                       'alias': 'desk-mac', 'command': 'ssh -F /trusted/fixture desk-mac'}
+        session = str(uuid.uuid4())
+        with patch('host_control_mcp.exchange_ssh', return_value={'workspace': '/Users/example/Desktop'}) as resolve:
+            self.assertEqual(self.request(conversation('Check the selected folder.'), session=session)[0], 200)
+        self.assertIn('当前工作目录为 `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
+        argv, data = resolve.call_args.args
+        self.assertEqual(json.loads(data), {'name': 'desktop_workspace', 'session': session})
+        self.assertIn('desk-mac', argv)
 
     def test_plan_confirmation_displays_full_plan_and_requires_explicit_approval(self):
         self.enable_cloudcli_web_fixture()

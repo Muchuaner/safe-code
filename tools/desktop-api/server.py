@@ -25,7 +25,7 @@ from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from claude_usage import read_subscription
-from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
+from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_MESSAGES_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
 from device_bridge import DeviceError, Devices, OwnerHosts, SSH_DEVICE, read_json, device_service_problem
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
 from prompt_review import PromptReviewer
@@ -291,7 +291,7 @@ class PublicHandler(Handler):
         # Read a bounded request before closing TLS so the rejection body reaches the relay.
         try:
             remaining = int(self.headers.get('Content-Length', '0'))
-            if not self.headers.get('Transfer-Encoding') and 0 < remaining <= MAX_REQUEST:
+            if not self.headers.get('Transfer-Encoding') and 0 < remaining <= MAX_MESSAGES_REQUEST:
                 while remaining:
                     chunk = self.rfile.read(min(remaining, 65536))
                     if not chunk:

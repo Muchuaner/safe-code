@@ -39,6 +39,9 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 MAX_REQUEST = 8 * 1024 * 1024
+MAX_MESSAGES_REQUEST = 16 * 1024 * 1024
+MAX_CLOUDCLI_STREAM = 32 * 1024 * 1024
+CLOUDCLI_SSE_PING_INTERVAL = 15
 CLOUDCLI_PROGRESS_TIMEOUT = 120
 CLOUDCLI_TURN_LIMIT = 30 * 60
 CLOUDCLI_HISTORY_LIMIT = 4 * 1024 * 1024
@@ -237,7 +240,7 @@ CLOUDCLI_USAGE_FIELDS = {
 }
 CLOUDCLI_MEDIA = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
                   'application/pdf': '.pdf', 'text/plain': '.txt', 'text/markdown': '.md',
-                  'text/csv': '.csv', 'application/json': '.json'}
+                  'text/csv': '.csv', 'text/tab-separated-values': '.tsv', 'application/json': '.json'}
 PLAN_MODE_REMINDER = re.compile(r'<system-reminder>\s*Plan mode is active\. The user indicated that they do not want you to execute yet\b')
 
 
@@ -839,6 +842,8 @@ def cloudcli_attachment(block, number):
     source = block.get('source')
     source = source if isinstance(source, dict) else {}
     media, encoding, value = source.get('media_type'), source.get('type'), source.get('data')
+    if media is None and encoding == 'text':
+        media = 'text/plain'
     if not isinstance(media, str) or media not in CLOUDCLI_MEDIA or not isinstance(value, str):
         raise CloudCliError('CloudCLI supports inline PNG, JPEG, GIF, WebP, PDF and text attachments', 400)
     image = block.get('type') == 'image'
@@ -1384,7 +1389,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
         diagnostic(streamLines=lines, receivedBytes=total)
         if not line:
             break
-        if total > MAX_REQUEST or lines > 50000:
+        if len(line) > MAX_REQUEST or total > MAX_CLOUDCLI_STREAM or lines > 50000:
             raise CloudCliError('CloudCLI response exceeds the gateway limit')
         if not line.startswith(b'data:'):
             continue
@@ -1605,10 +1610,10 @@ class CloudCliStopWatch:
         try:
             self.started_at = self.find_run()
         except CloudCliError:
-            return
+            pass
         while not self.finished.wait(.25):
             stream = self.progress.stream
-            if stream is not None and stream.disconnected():
+            if stream is not None and (stream.disconnected() or not stream.ping_if_idle(self.finished)):
                 self.stop(stream)
                 return
 
@@ -1894,7 +1899,21 @@ class CloudCliBackend:
     def desktop_directory(self, data, scope):
         cwd = desktop_working_directory(data)
         if self.device:
-            return cwd if self.allowed_workspace(cwd) else None
+            if self.allowed_workspace(cwd):
+                return cwd
+            if scope and self.device['platform'] == 'macos':
+                try:
+                    from host_control_mcp import exchange_ssh, REMOTE_COMMAND, ToolError
+                    command = shlex.split(self.device['command'])
+                    request = json.dumps({'name': 'desktop_workspace', 'session': scope}).encode()
+                    result = exchange_ssh(['/usr/bin/ssh', '-T', '-o', 'BatchMode=yes', *command[1:], REMOTE_COMMAND],
+                                          request, timeout=7)
+                    folder = result.get('workspace')
+                    if valid_mac_workspace(folder):
+                        return PurePosixPath(folder)
+                except (OSError, ValueError, AttributeError, subprocess.SubprocessError, ToolError):
+                    pass
+            return None
         host = self.config['hostControl']
         if not scope or not host or 'projectWorkspaces' not in host or self.allowed_workspace(cwd):
             return cwd
@@ -2210,6 +2229,10 @@ class CloudCliBackend:
             raise
         finally:
             observer.finished.set()
+            if progress.stream is not None:
+                # Let an in-flight ping finish before the response writes its final event.
+                with progress.stream.wire_lock:
+                    pass
             progress.on_session = None
             progress.on_disconnect = None
 
@@ -2491,7 +2514,8 @@ class CloudCliBackend:
         db.execute('DELETE FROM sessions WHERE scope=? AND (history=? OR session=?)', (namespace, previous_history, session))
         db.executemany('INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?)',
                        [(namespace, history, session, now) for history in histories])
-        if project != self.config['projectPath'] or (workspace is not None and 'projectWorkspaces' in self.config['hostControl']):
+        if (project != self.config['projectPath'] or
+                workspace is not None and (self.device or 'projectWorkspaces' in (self.config['hostControl'] or {}))):
             db.execute('INSERT OR REPLACE INTO session_projects VALUES (?, ?, ?, ?)', (session, project, workspace, now))
 
     def session_binding(self, db, namespace, prefix, position):
@@ -2647,7 +2671,8 @@ class CloudCliBackend:
         if not chat_mode and webfetch_summary_request({**data, 'messages': messages}):
             raise CloudCliError('Desktop WebFetch helper has no matching CloudCLI tool', 400)
         forwarded_task = manager.review_prompt(task) if task and manager.review_prompt is not None else task
-        payload = {'provider': 'claude', 'message': forwarded_task, 'model': model, 'stream': True}
+        payload = {'provider': 'claude', 'message': forwarded_task or '请查看本轮附加的文件。',
+                   'model': model, 'stream': True}
         family = cloudcli_model_family(model)
         diagnostic(stage='session_route', **({'modelFamily': family} if family else {}))
         if effort not in (None, 'default'):
@@ -2709,6 +2734,8 @@ class CloudCliBackend:
                     if self.device:
                         if not project:
                             raise CloudCliError('The paired session lacks a device project', 409)
+                        if workspace is None:
+                            workspace = self.allowed_workspace(self.desktop_directory(data, scope))
                     elif not host or 'projectWorkspaces' not in host:
                         if project is None:
                             project, workspace = default, default_workspace
@@ -2741,7 +2768,7 @@ class CloudCliBackend:
                                        (namespace, payload.get('sessionId'), position, fingerprint)).fetchone()
                     if known is None:
                         # Keep the user's opening words available for the CloudCLI title.
-                        payload['message'] = forwarded_task+'\n\n'+host_instruction
+                        payload['message'] += '\n\n'+host_instruction
                         workspace_prompt_fingerprint = fingerprint
                 self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
@@ -3241,6 +3268,19 @@ class CloudCliMessagesStream:
         self.started = False
         self.index = 0
         self.open_kind = None
+        self.wire_lock = threading.Lock()
+        self.last_output = time.monotonic()
+
+    def ping_if_idle(self, finished):
+        with self.wire_lock:
+            if finished.is_set() or not self.started or time.monotonic()-self.last_output < CLOUDCLI_SSE_PING_INTERVAL:
+                return True
+            try:
+                self.handler.send_sse('ping', {'type': 'ping'})
+                self.last_output = time.monotonic()
+                return True
+            except OSError:
+                return False
 
     def disconnected(self):
         connection = self.handler.connection
@@ -3268,6 +3308,10 @@ class CloudCliMessagesStream:
     def write(self, kind, part):
         if not part:
             return
+        with self.wire_lock:
+            self.write_part(kind, part)
+
+    def write_part(self, kind, part):
         try:
             if not self.started:
                 self.started = True
@@ -3289,6 +3333,7 @@ class CloudCliMessagesStream:
             self.handler.send_sse('content_block_delta', {
                 'type': 'content_block_delta', 'index': self.index, 'delta': {'type': kind+'_delta', kind: part},
             })
+            self.last_output = time.monotonic()
         except OSError:
             raise ConnectionAbortedError('Desktop disconnected during a CloudCLI stream') from None
 
@@ -3299,12 +3344,13 @@ class CloudCliMessagesStream:
             self.open_kind = None
 
     def finish(self, response):
-        self.close_block()
-        for index, block in enumerate(response['content'][self.index:], self.index):
-            for event, payload in sse_content_block(block, index):
+        with self.wire_lock:
+            self.close_block()
+            for index, block in enumerate(response['content'][self.index:], self.index):
+                for event, payload in sse_content_block(block, index):
+                    self.handler.send_sse(event, payload)
+            for event, payload in sse_tail(response):
                 self.handler.send_sse(event, payload)
-        for event, payload in sse_tail(response):
-            self.handler.send_sse(event, payload)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -3409,7 +3455,8 @@ class Handler(BaseHTTPRequestHandler):
             diagnostic(stage='request_decode')
             if self.headers.get('Transfer-Encoding'):raise GatewayError('Content-Length required', 400)
             length = int(self.headers.get('Content-Length', '0'))
-            if not 0 < length <= MAX_REQUEST:raise GatewayError('Request too large or empty', 413)
+            if not 0 < length <= MAX_MESSAGES_REQUEST:
+                raise GatewayError('Messages request exceeds 16 MiB or is empty', 413)
             self.connection.settimeout(30)
             diagnostic(requestBytes=length)
             data = json.loads(self.rfile.read(length))
