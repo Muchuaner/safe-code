@@ -66,11 +66,11 @@
 .ip-picker-option[aria-selected=true]{color:#2c7455;background:#edf5ef;font-weight:500}
 .ip-picker-option>svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;visibility:hidden}
 .ip-picker-option[aria-selected=true]>svg{visibility:visible}
-#ip-policy-form label.policy-toggle{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;margin:9px 0;border:1px solid #e5ece6;border-radius:6px;background:#fcfdfb}
-#ip-policy-form label.policy-toggle:has(input:checked){border-color:#dce9df;background:#f7faf7}
-#ip-policy-form .policy-toggle input[type=checkbox]{appearance:auto;width:14px;height:14px;min-width:14px;flex:0 0 14px;margin:1px 0 0;padding:0;border:0;box-shadow:none;accent-color:var(--green)}
-#ip-policy-form .policy-toggle span{font-size:var(--type-small);line-height:1.5}
-#ip-policy-form .policy-toggle small{margin-top:4px;font-size:var(--type-small);line-height:1.7}
+:is(#ip-policy-form,#gateway-repair-form) label.policy-toggle{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;margin:9px 0;border:1px solid #e5ece6;border-radius:6px;background:#fcfdfb}
+:is(#ip-policy-form,#gateway-repair-form) label.policy-toggle:has(input:checked){border-color:#dce9df;background:#f7faf7}
+:is(#ip-policy-form,#gateway-repair-form) .policy-toggle input[type=checkbox]{appearance:auto;width:14px;height:14px;min-width:14px;flex:0 0 14px;margin:1px 0 0;padding:0;border:0;box-shadow:none;accent-color:var(--green)}
+:is(#ip-policy-form,#gateway-repair-form) .policy-toggle span{font-size:var(--type-small);line-height:1.5}
+:is(#ip-policy-form,#gateway-repair-form) .policy-toggle small{margin-top:4px;font-size:var(--type-small);line-height:1.7}
 #ip-policy-form .config-description{margin-bottom:19px}
 #ip-policy-form .config-footer{margin-top:19px}
 
@@ -457,7 +457,7 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
 .gateway-repair-dialog{width:450px}
 .gateway-repair-dialog .config-body{padding:22px 25px 18px}
 .gateway-repair-dialog h2{font-size:var(--type-medium)}
-.gateway-repair-dialog .policy-toggle{margin:15px 0 13px}
 #gateway-repair-status{min-height:20px;white-space:pre-line;overflow-wrap:anywhere}
 .gateway-repair-dialog .config-footer{justify-content:flex-end;gap:14px}
+.gateway-repair-dialog .config-footer .text-button{color:#62796a}
 .gateway-repair-dialog .config-footer .primary{width:auto;min-width:82px;padding:0 12px}
