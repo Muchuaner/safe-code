@@ -195,6 +195,41 @@ class ChatSocketFixture:
         pass
 
 
+class CloudCLIStreamTests(unittest.TestCase):
+    def test_active_stream_can_pass_old_limit(self):
+        frames = [(0, {'type': 'session-id', 'sessionId': CLOUD_SESSION})]
+        frames.extend((second, {'kind': 'stream_delta', 'content': 'x'}) for second in range(60, 660, 60))
+        frames.extend([(625, {'kind': 'complete', 'exitCode': 0}), (626, {'type': 'done'})])
+        with self.assertRaises(StopIteration) as completed:
+            self.consume(frames)
+        self.assertEqual(completed.exception.value[:2], (CLOUD_SESSION, [{'type': 'text', 'text': 'x' * 10}]))
+
+    def test_heartbeats_do_not_renew_progress_and_active_stream_has_a_cap(self):
+        for frames, message in (
+            ([(60, None), (119, {'type': 'status', 'message': 'keepalive'}), (121, None)], 'report progress'),
+            ([(second, {'kind': 'stream_delta', 'content': 'x'}) for second in range(60, 1801, 60)],
+             'active runtime limit'),
+        ):
+            with self.subTest(message=message), self.assertRaises(gateway.CloudCliError) as failed:
+                self.consume(frames)
+            self.assertEqual(failed.exception.status, 504)
+            self.assertIn(message, str(failed.exception))
+
+    def consume(self, frames):
+        clock = 0
+
+        class Source:
+            def readline(self, _limit):
+                nonlocal clock
+                clock, event = next(frames)
+                return b': heartbeat\n' if event is None else b'data: ' + json.dumps(event).encode()
+
+        frames = iter(frames)
+        progress = gateway.CloudCliProgress(None, None)
+        with patch.object(gateway.time, 'monotonic', side_effect=lambda: clock):
+            next(gateway.cloudcli_events(Source(), progress))
+
+
 def cloud_user(message):
     return {'kind': 'text', 'role': 'user', 'sessionId': CLOUD_SESSION, 'content': message,
             'timestamp': datetime.now(timezone.utc).isoformat(timespec='milliseconds'),
@@ -1798,6 +1833,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         status, reply = self.request(first)
         self.assertEqual(status, 200)
         prefix = [*first['messages'], {'role': 'assistant', 'content': reply['content']}]
+        self.cloud.history.append({'role': 'assistant', 'kind': 'text', 'content': 'x' * (600 * 1024)})
         second = [*prefix, {'role': 'user', 'content': 'The original second question'}]
         status, second_reply = self.request(conversation('unused', messages=second))
         self.assertEqual(status, 200)
