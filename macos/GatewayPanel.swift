@@ -697,6 +697,11 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         never.isEnabled = policySupported
         var fields: [(String, NSView)] = [("备注",note),("限频（次 / 分）",rpm),("累计额度（美元）",budget),
                                           ("模型管理", modelPicker.button), ("失效时间", expiryControls)]
+        let devicePolicy = NSPopUpButton()
+        devicePolicy.addItems(withTitles:["Safe Code 桌面接入","普通 API"])
+        devicePolicy.selectItem(at:key == nil || key?["device_access"] as? Bool == true ? 0 : 1)
+        let devicePolicySupported = snapshot["device_policy_supported"] as? Bool == true
+        if devicePolicySupported { fields.append(("接入用途", devicePolicy)) }
         if needsActivation { fields.append(("激活码", activation)) }
         form(key == nil ? "创建密钥":"编辑密钥", fields,
              message: policySupported ? "" : "请先在「网关设置」升级 VPS 网关，以设置模型权限和失效时间。") { [expiryToggle] in
@@ -721,6 +726,10 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
                     return
                 }
                 args["expires_at"] = seconds as Any? ?? NSNull()
+            }
+            let allowDevice = devicePolicy.indexOfSelectedItem == 0
+            if devicePolicySupported && (key == nil || allowDevice != (key?["device_access"] as? Bool == true)) {
+                args["device_access"] = allowDevice
             }
             if needsActivation { args["activation_code"] = activation.stringValue }
             if let id = key?["id"] as? String { args["id"] = id }

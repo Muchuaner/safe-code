@@ -149,12 +149,30 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(!response.IsSuccessStatusCode)
         {
             if(optional&&response.StatusCode==HttpStatusCode.NotFound)return null;
-            if(optional&&response.StatusCode==HttpStatusCode.Forbidden)
+            try
             {
-                using var error=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
-                if(error.RootElement.TryGetProperty("error",out var details)&&details.TryGetProperty("message",out var message)
-                    &&message.GetString()=="Device control is unavailable for this Key")return null;
+                using var error = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
+                if(error.RootElement.ValueKind==JsonValueKind.Object &&
+                    error.RootElement.TryGetProperty("error",out var details) && details.ValueKind==JsonValueKind.Object)
+                {
+                    if(optional && response.StatusCode==HttpStatusCode.Forbidden &&
+                        details.TryGetProperty("message",out var message) &&
+                        message.GetString()=="Device control is unavailable for this Key")return null;
+                    if(details.TryGetProperty("code",out var code) && code.ValueKind==JsonValueKind.String)
+                    {
+                        string? explanation = code.GetString() switch
+                        {
+                            "device_not_configured" => "此 VPS 尚未安装私有设备服务。请在「网关设置」升级或修复网关。",
+                            "device_not_allowed" => "此 Key 没有设备配对权限。请让签发人在「管理网关」将接入用途改为「Safe Code 桌面接入」。",
+                            "device_auth_unavailable" => "VPS 的设备鉴权服务未就绪。请在「网关设置」运行故障修复。",
+                            "device_frp_unavailable" => "VPS 的私有 FRP 服务未就绪。请在「网关设置」运行故障修复。",
+                            _ => null
+                        };
+                        if(explanation!=null)throw new InvalidOperationException(explanation);
+                    }
+                }
             }
+            catch(JsonException){}
             throw new InvalidOperationException("网关未能完成本机远程控制操作（HTTP "+(int)response.StatusCode+"）。请检查该 Key 的设备授权与 FRP 状态。");
         }
         using var document=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));

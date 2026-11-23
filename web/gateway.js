@@ -568,6 +568,10 @@ byId('reload-models').onclick = loadModelOptions;
 
 function showEditor(key) {
   editingKey = key;
+  const devicePolicy = byId('device-policy');
+  devicePolicy.disabled = snapshot.device_policy_supported !== true;
+  byId('device-policy-field').hidden = devicePolicy.disabled;
+  devicePolicy.value = !key || key.device_access === true ? 'desktop' : 'api';
   editorEpoch++;
   catalogLoaded = catalogPending = false;
   const policySupported = snapshot.key_policy_supported === true;
@@ -838,6 +842,10 @@ byId('key-form').onsubmit = event => {
     options.expires_at = expiry;
   }
   void changeKey(async () => {
+    const devicePolicy = byId('device-policy');
+    const allowDevice = devicePolicy.value === 'desktop';
+    if (!devicePolicy.disabled && (!editingKey || allowDevice !== (editingKey.device_access === true)))
+      options.device_access = allowDevice;
     const budget = byId('budget');
     if (!budget.disabled) options.budget_cents = budget.value === '' ? null : Math.round(budget.valueAsNumber * 100);
     if (editingKey) {

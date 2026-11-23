@@ -151,7 +151,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let publicGatewayCreatedAccount;
     let publicGatewayEnabled=false,publicGatewayLoading=false,publicGatewayReachable=false,publicGatewayMissing=false;
     let publicGatewayUpgrade=false,publicGatewayNeedsCloudKey=false;
-    const requiredGatewayRevision=10;
+    const requiredGatewayRevision=12;
     let publicGatewayTask,publicGatewayTimer;
     let publicGatewaySubscription;
     let startupRetryTimer;

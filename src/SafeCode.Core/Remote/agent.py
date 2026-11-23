@@ -1019,7 +1019,7 @@ API_DIRECTORY=Path('/opt/safe-code/desktop-api')
 API_UNIT=Path('/etc/systemd/system/safe-code-desktop-api.service')
 CLOUD_UNIT=Path('/etc/systemd/system/safe-code-cloudcli.service')
 API_FILES={'install.sh','desktop_gateway.py','server.py','management.py','claude_usage.py',
-           'pricing.py','configure_cloudcli.py','host_control_mcp.py','device_bridge.py','prompt_review.py','codex_bridge.zip'}
+           'pricing.py','configure_cloudcli.py','host_control_mcp.py','device_bridge.py','device_service.py','prompt_review.py','codex_bridge.zip'}
 API_STATE='.local/state/safe-code-desktop-api'
 
 def safe_code_api(options):
@@ -1214,6 +1214,10 @@ def repair_safe_code_api(entry, command, options, work_python):
             return replace_gateway_programs(entry,command,source,state,work_python,revision,
                                             (cloud,cloud_unit,cloud_script) if with_cloud else None)
 
+def provision_gateway_devices(entry, state):
+    run(['/usr/bin/python3','-B',str(API_DIRECTORY/'device_service.py'),
+         entry.pw_name,str(API_DIRECTORY),str(state)],timeout=110)
+
 def replace_gateway_programs(entry, command, source, state, work_python, revision, cloud_install):
     log('正在准备当前客户端内置的网关安装组件…')
     program=Path(tempfile.mkdtemp(prefix='.desktop-api-repair-',dir=API_DIRECTORY.parent))
@@ -1267,6 +1271,7 @@ def replace_gateway_programs(entry, command, source, state, work_python, revisio
             swapped.append((target,backup))
             (backup/'new').rename(target)
         run(['systemctl','daemon-reload'],timeout=15)
+        provision_gateway_devices(entry,state)
         for unit in reversed(units):
             run(['systemctl','start',unit.name],timeout=30)
         deadline=time.monotonic()+20
@@ -1395,7 +1400,7 @@ def install_safe_code_api(entry, command, options, work_python):
                     if existing.get('enabled') and safe_code_api_admin(command, {'action':'settings'}).get('busy'):
                         rollback_config()
                         raise RuntimeError('网关还有请求正在处理，请等网关空闲后再升级。')
-                    return installed(upgrade_safe_code_api(command, Path(folder), rollback_config))
+                    return installed(upgrade_safe_code_api(command, Path(folder), rollback_config, entry))
                 try:
                     run(['/bin/bash',str(Path(folder)/'install.sh'),entry.pw_name,bind,'45143'],
                         env={**os.environ,'SAFECODE_INITIAL_API_INSTALL':'1'},timeout=60)
@@ -1419,7 +1424,7 @@ def install_safe_code_api(entry, command, options, work_python):
                     rollback_config()
                     raise
 
-def upgrade_safe_code_api(command, source, rollback_config):
+def upgrade_safe_code_api(command, source, rollback_config, entry):
     names = sorted(name for name in API_FILES if name.endswith('.py'))
     original = {}
     for name in names:
@@ -1431,6 +1436,7 @@ def upgrade_safe_code_api(command, source, rollback_config):
     try:
         for name in names:
             write_api_component(API_DIRECTORY/name, (source/name).read_bytes())
+        provision_gateway_devices(entry,Path(entry.pw_dir)/API_STATE)
         run(['systemctl','restart',API_UNIT.name],timeout=30)
         deadline = time.monotonic()+8
         while time.monotonic()<deadline:

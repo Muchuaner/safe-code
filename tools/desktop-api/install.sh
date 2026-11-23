@@ -5,12 +5,12 @@ dir=$(cd "$(dirname "$0")" && pwd)
 
 stage_program() {
     local target=$1
-    for file in desktop_gateway.py server.py management.py claude_usage.py pricing.py configure_cloudcli.py host_control_mcp.py device_bridge.py prompt_review.py codex_bridge.zip; do
+    for file in desktop_gateway.py server.py management.py claude_usage.py pricing.py configure_cloudcli.py host_control_mcp.py device_bridge.py device_service.py prompt_review.py codex_bridge.zip; do
         [[ -f "$dir/$file" ]] || { printf 'Missing SafeCode gateway component: %s\n' "$file" >&2; exit 1; }
     done
     install -d -m 755 "$target"
     install -m 644 "$dir"/{desktop_gateway,server,management,claude_usage,pricing,prompt_review}.py "$target/"
-    install -m 644 "$dir"/{configure_cloudcli,host_control_mcp,device_bridge}.py "$target/"
+    install -m 644 "$dir"/{configure_cloudcli,host_control_mcp,device_bridge,device_service}.py "$target/"
     python3 - "$dir/codex_bridge.zip" "$target" <<'PY'
 import hashlib,sys,zipfile
 from pathlib import Path
@@ -100,6 +100,7 @@ PY
 if [[ ! -e "$state/key.pem" && ! -e "$state/cert.pem" ]]; then
     runuser -u "$user" -- openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 730 -subj '/CN=SafeCode Desktop API' -keyout "$state/key.pem" -out "$state/cert.pem"
 fi
+/usr/bin/python3 -B "$app/device_service.py" "$user" "$app" "$state"
 write_unit /etc/systemd/system/safe-code-desktop-api.service
 systemctl daemon-reload
 systemctl enable safe-code-desktop-api.service

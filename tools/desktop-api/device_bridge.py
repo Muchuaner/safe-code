@@ -4,6 +4,7 @@ from contextlib import closing, contextmanager
 import fcntl
 import hashlib
 import hmac
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -46,6 +47,30 @@ def write_file(path, content):
             staged.replace(path)
         finally:
             staged.unlink(missing_ok=True)
+
+
+def device_service_problem(config):
+    port = config.get('deviceFrpPort')
+    if type(port) is not int or not 1024 <= port <= 65535:
+        return 'device_not_configured'
+    if config.get('managedDeviceService'):
+        auth_port = config.get('deviceAuthPort')
+        callback = config.get('deviceAuthCallback')
+        if (type(auth_port) is not int or not 1024 <= auth_port <= 65535
+                or not isinstance(callback,str) or not re.fullmatch(r'/[a-f0-9]{48}',callback)):
+            return 'device_auth_unavailable'
+        try:
+            with closing(HTTPConnection('127.0.0.1',auth_port,timeout=.8)) as http:
+                http.request('GET',callback)
+                if http.getresponse().status != 204:
+                    return 'device_auth_unavailable'
+        except (OSError, HTTPException):
+            return 'device_auth_unavailable'
+    try:
+        with socket.create_connection(('127.0.0.1',port),timeout=.8):
+            return None
+    except OSError:
+        return 'device_frp_unavailable'
 
 
 class OwnerHosts:
@@ -150,6 +175,22 @@ class Devices:
     def permitted(self, owner):
         return bool(KEY_ID.fullmatch(owner) and (self.state/'keys'/owner).is_file()
                     and (self.state/'device-access'/owner).is_file())
+
+    def set_access(self, owner, enabled):
+        if not KEY_ID.fullmatch(owner):
+            raise DeviceError('Invalid Key ID')
+        access = self.state/'device-access'
+        flag = access/owner
+        if enabled:
+            access.mkdir(mode=0o700,exist_ok=True)
+            flag.touch(mode=0o600,exist_ok=True)
+        else:
+            flag.unlink(missing_ok=True)
+            with closing(self.connect()) as db, db:
+                db.execute('BEGIN IMMEDIATE')
+                for row in db.execute('SELECT id FROM devices WHERE owner=?',(owner,)):
+                    self.remove_identity(row['id'])
+                db.execute('DELETE FROM devices WHERE owner=?',(owner,))
 
     def required(self, owner):
         return bool(KEY_ID.fullmatch(owner) and (self.state/'device-required'/owner).is_file())
@@ -338,6 +379,10 @@ class FrpAuthorization(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def do_GET(self):
+        self.send_response(204 if hmac.compare_digest(self.path,self.server.callback) else 404)
+        self.end_headers()
 
     def do_POST(self):
         try:

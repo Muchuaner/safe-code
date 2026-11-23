@@ -51,6 +51,8 @@ python3 /opt/safe-code/desktop-api/server.py --state "$state" revoke "$key_id"
 ```
 ### Key 模式的设备控制
 
-网关预留了 Key 模式设备配对接口。仅在服务器配置中启用私有 FRP 监听，并为指定 Key 开通设备配对后可用。旧客户端能继续使用现有接入。支持设备配对的客户端在验证 Key 后应打开原有「本机远程控制」授权窗口，验证远端能通过 SSH 登录本机之后才保存 Claude Desktop 接入配置。用户关闭授权窗口时应结束待配对状态并返回主界面。
+标准安装、升级和故障修复会准备官方 FRP 的独立 `safe-code-desktop-frps.service` 和本机鉴权服务。它们都只监听 VPS 回环地址。已有自管 FRP 配置的 VPS 继续使用原有服务。
+
+创建或编辑密钥时，可选择「Safe Code 桌面接入」或「普通 API」。桌面接入需要私有设备服务健康，原有密钥可授权配对，无需重新签发。客户端通过现有 HTTPS 入口建立 FRP 隧道，仍须经本机明确授权并验证 VPS 的 SSH 回连，才会保存 Claude Desktop 配置。改回普通 API 会取消该 Key 的 FRP 设备配对。
 
 独立 frps 实例应仅允许受信任的传输入口访问。将代理监听设为回环，强制 TLS，并将 `Login`、`NewProxy`、`Ping`、`NewWorkConn` 和 `NewUserConn` 接入 SafeCode 的设备授权回调。回调检查设备凭据有效期、所属 Key，以及代理类型、别名和端口。网关为每台设备分配单独的 SSH 身份和项目目录。选中同名目录的设备用不同的 SSH 别名作为项目名称后缀。设备证明只随 SafeCode 发往网关的请求传输。

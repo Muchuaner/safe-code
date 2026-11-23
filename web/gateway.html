@@ -225,6 +225,9 @@
         <label>备注<input type="text" id="note" maxlength="120" placeholder="例如：工作笔记本"></label>
         <label>每分钟请求上限<input type="number" id="rpm" min="0" max="600" step="1" value="0" required><small>设为 0 时不限频。</small></label>
         <label id="budget-field" hidden>累计额度（美元）<input type="number" id="budget" min="0" max="1000000" step="0.01" placeholder="留空不限额" disabled><small id="budget-detail">从额度扣除估算费用。余额用完后暂停新请求。</small></label>
+        <label id="device-policy-field" hidden>接入用途<select id="device-policy" disabled>
+          <option value="desktop">Safe Code 桌面接入</option><option value="api">普通 API</option>
+        </select><small>桌面接入允许设备配对，使用者仍须在本机确认授权。</small></label>
         <div class="key-policy-fields">
           <label><span id="model-policy-label">模型管理</span><select id="model-policy" aria-labelledby="model-policy-label"><option value="all">全部模型</option><option value="selected">仅允许所选模型</option></select></label>
           <label><span id="expiry-policy-label">失效时间</span><select id="expiry-policy" aria-labelledby="expiry-policy-label"><option value="never">永不过期</option><option value="scheduled">指定时间</option></select></label>
