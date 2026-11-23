@@ -1819,6 +1819,9 @@ class CloudCliBackend:
                        'position INTEGER NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (scope, session))')
             db.execute('CREATE TABLE IF NOT EXISTS stopped_before_anchor (scope TEXT NOT NULL, session TEXT NOT NULL, '
                        'prefix TEXT NOT NULL, prior_anchor TEXT, PRIMARY KEY (scope,session))')
+            db.execute('CREATE TABLE IF NOT EXISTS anchor_receipts (scope TEXT NOT NULL, session TEXT NOT NULL, '
+                       'prefix TEXT NOT NULL, position INTEGER NOT NULL, fingerprint TEXT NOT NULL, '
+                       'dispatched INTEGER NOT NULL, ended INTEGER NOT NULL, PRIMARY KEY (scope,session))')
 
     def verified_model_options(self):
         if not self.config.get('desktopQuestions'):
@@ -2294,21 +2297,26 @@ class CloudCliBackend:
         except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
             return None
 
-    def turn_anchor(self, progress, session):
-        if not self.config.get('desktopQuestions') or not progress.forwarded_text or progress.dispatch_ms is None:
-            return None
-        ended = int(time.time()*1000)
+    def resolve_turn_anchor(self, session, fingerprint, dispatched, ended):
         try:
-            users = self.history_users(session, since=progress.dispatch_ms)
+            users = self.history_users(session, since=dispatched)
         except CloudCliError:
             return None
-        matching = {row['transcriptAnchorId'] for row in users if row.get('content') == progress.forwarded_text
-                    and isinstance(row.get('transcriptAnchorId'), str)
+        matching = {row['transcriptAnchorId'] for row in users
+                    if isinstance(row.get('content'),str)
+                    and hashlib.sha256(row['content'].encode()).hexdigest() == fingerprint
+                    and isinstance(row.get('transcriptAnchorId'),str)
                     and CLOUDCLI_SESSION_ID.fullmatch(row['transcriptAnchorId'])
-                    and (seen := self.history_timestamp(row)) is not None and progress.dispatch_ms <= seen <= ended}
+                    and (seen := self.history_timestamp(row)) is not None and dispatched <= seen <= ended}
         if len(matching) != 1 or users[-1].get('transcriptAnchorId') not in matching:
             return None
         return users[-1]['transcriptAnchorId']
+
+    def turn_anchor(self, progress, session):
+        if not self.config.get('desktopQuestions') or not progress.forwarded_text or progress.dispatch_ms is None:
+            return None
+        fingerprint = hashlib.sha256(progress.forwarded_text.encode()).hexdigest()
+        return self.resolve_turn_anchor(session,fingerprint,progress.dispatch_ms,int(time.time()*1000))
 
     def running_sessions(self):
         result = self.web_request('GET', '/api/providers/sessions/running')
@@ -2621,6 +2629,13 @@ class CloudCliBackend:
     def save_turn_state(db, namespace, session, prefix, progress, anchor):
         now = time.time()
         db.execute('DELETE FROM stopped_before_anchor WHERE scope=? AND session=?',(namespace,session))
+        db.execute('DELETE FROM anchor_receipts WHERE scope=? AND session=?',(namespace,session))
+        if anchor is None and progress.forwarded_text and progress.dispatch_ms is not None:
+            # CloudCLI can publish its transcript after the final response. Keep
+            # just enough information to verify that same native prompt later.
+            fingerprint = hashlib.sha256(progress.forwarded_text.encode()).hexdigest()
+            db.execute('INSERT INTO anchor_receipts VALUES (?,?,?,?,?,?,?)',
+                       (namespace,session,prefix,progress.turn_position,fingerprint,progress.dispatch_ms,int(now*1000)))
         db.execute('INSERT OR REPLACE INTO session_state VALUES (?, ?, ?, ?, ?)',
                    (namespace, session, progress.model, anchor, now))
         if progress.edit_anchor is not None:
@@ -2659,9 +2674,18 @@ class CloudCliBackend:
                         return binding, None
                     target = db.execute('SELECT anchor FROM edit_turns WHERE scope=? AND session=? AND prefix=? '
                                         'AND position=?', (namespace, binding[0], prefix, position)).fetchone()
-                    if target and binding[4]:
-                        return binding, (target[0], binding[4])
+                    if target:
+                        tip = binding[4] or self.recover_tip(db,namespace,binding[0])
+                        if tip:
+                            return binding, (target[0],tip)
                     if binding[4] is None:
+                        receipt_matches = db.execute('SELECT 1 FROM anchor_receipts WHERE scope=? AND session=? '
+                                                     'AND prefix=? AND position=?',
+                                                     (namespace,binding[0],prefix,position)).fetchone()
+                        if receipt_matches:
+                            tip = self.recover_tip(db,namespace,binding[0])
+                            if tip:
+                                return binding, (tip,tip)
                         anchor = self.stopped_edit_anchor(db, namespace, prefix, binding[0])
                         if anchor is not None:
                             return binding, (anchor, anchor)
@@ -2688,6 +2712,11 @@ class CloudCliBackend:
         # a verified unchanged transcript accepts the edit as a normal send.
         return (users[-1].get('transcriptAnchorId') if users else None) == checkpoint[0]
 
+    def recover_tip(self, db, namespace, session):
+        receipt = db.execute('SELECT fingerprint,dispatched,ended FROM anchor_receipts WHERE scope=? AND session=?',
+                             (namespace,session)).fetchone()
+        return self.resolve_turn_anchor(session,*receipt) if receipt else None
+
     def desktop_branch_source(self, db, namespace, prefix, interrupted_prefixes):
         # A local rewind may have a new Desktop UUID. Only branch a verified
         # prefix from this same gateway binding (the database is per device).
@@ -2699,14 +2728,25 @@ class CloudCliBackend:
                 SELECT s.scope,s.session,p.project,p.workspace,t.model,t.tip_anchor,NULL
                 FROM sessions s JOIN session_state t USING (scope,session)
                 LEFT JOIN session_projects p USING (session)
-                WHERE s.scope LIKE ? AND s.scope<>? AND s.history=? AND t.tip_anchor IS NOT NULL LIMIT 2
+                WHERE s.scope LIKE ? AND s.scope<>? AND s.history=?
+                  AND (t.tip_anchor IS NOT NULL OR EXISTS (SELECT 1 FROM anchor_receipts r
+                       WHERE r.scope=s.scope AND r.session=s.session)) LIMIT 2
                 """,(same_binding,namespace,candidate)).fetchall()
             if not candidates:
                 candidates = db.execute("""
                     SELECT e.scope,e.session,p.project,p.workspace,t.model,t.tip_anchor,e.anchor
                     FROM edit_turns e JOIN session_state t USING (scope,session)
                     LEFT JOIN session_projects p USING (session)
-                    WHERE e.scope LIKE ? AND e.scope<>? AND e.prefix=? AND t.tip_anchor IS NOT NULL LIMIT 2
+                    WHERE e.scope LIKE ? AND e.scope<>? AND e.prefix=?
+                      AND (t.tip_anchor IS NOT NULL OR EXISTS (SELECT 1 FROM anchor_receipts r
+                           WHERE r.scope=e.scope AND r.session=e.session)) LIMIT 2
+                    """,(same_binding,namespace,candidate)).fetchall()
+            if not candidates:
+                candidates = db.execute("""
+                    SELECT r.scope,r.session,p.project,p.workspace,t.model,t.tip_anchor,''
+                    FROM anchor_receipts r JOIN session_state t USING (scope,session)
+                    LEFT JOIN session_projects p USING (session)
+                    WHERE r.scope LIKE ? AND r.scope<>? AND r.prefix=? LIMIT 2
                     """,(same_binding,namespace,candidate)).fetchall()
             if len(candidates) == 1:
                 return candidates[0]
@@ -2719,6 +2759,13 @@ class CloudCliBackend:
         with self.conversation_slot(source_scope):
             if any(not isinstance(row,dict) or row.get('sessionId') == source for row in self.running_sessions()):
                 raise CloudCliError('The original CloudCLI conversation is still running', 409)
+            if tip is None:
+                with closing(sqlite3.connect(self.path)) as db:
+                    tip = self.recover_tip(db,source_scope,source)
+                if tip is None:
+                    raise CloudCliError('CloudCLI has not published the verified Desktop anchor',409)
+            if anchor == '':
+                anchor = tip
             users = self.history_users(source)
             if not users or users[-1].get('transcriptAnchorId') != tip:
                 raise CloudCliError('CloudCLI history changed after the last Desktop turn', 409)
@@ -2818,6 +2865,7 @@ class CloudCliBackend:
             db.execute('DELETE FROM session_state WHERE scope=? AND session=?', (namespace, session))
             db.execute('DELETE FROM workspace_prompts WHERE scope=? AND session=?', (namespace, session))
             db.execute('DELETE FROM stopped_before_anchor WHERE scope=? AND session=?', (namespace, session))
+            db.execute('DELETE FROM anchor_receipts WHERE scope=? AND session=?', (namespace, session))
 
     @contextmanager
     def conversation_slot(self, conversation):
@@ -2968,6 +3016,9 @@ class CloudCliBackend:
                     db.execute('DELETE FROM stopped_before_anchor WHERE NOT EXISTS '
                                '(SELECT 1 FROM sessions WHERE sessions.scope=stopped_before_anchor.scope '
                                'AND sessions.session=stopped_before_anchor.session)')
+                    db.execute('DELETE FROM anchor_receipts WHERE NOT EXISTS '
+                               '(SELECT 1 FROM sessions WHERE sessions.scope=anchor_receipts.scope '
+                               'AND sessions.session=anchor_receipts.session)')
                 prior = db.execute('SELECT reply FROM requests WHERE identity=?', (identity,)).fetchone()
                 if prior is not None:
                     if prior[0] is None:
