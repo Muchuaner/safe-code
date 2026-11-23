@@ -703,8 +703,10 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         let devicePolicySupported = snapshot["device_policy_supported"] as? Bool == true
         if devicePolicySupported { fields.append(("接入用途", devicePolicy)) }
         if needsActivation { fields.append(("激活码", activation)) }
-        form(key == nil ? "创建密钥":"编辑密钥", fields,
-             message: policySupported ? "" : "请先在「网关设置」升级 VPS 网关，以设置模型权限和失效时间。") { [expiryToggle] in
+        let message = !policySupported ? "请先在「网关设置」升级 VPS 网关，以设置模型权限和失效时间。" :
+            snapshot["device_service_problem"] as? String != nil ?
+                "设备服务尚未就绪。请在网关设置中运行故障修复，或先选择普通 API。" : ""
+        form(key == nil ? "创建密钥":"编辑密钥", fields,message:message) { [expiryToggle] in
             let maxRate = Int(rpm.stringValue.trimmingCharacters(in: .whitespaces))
             let rawBudget = budget.stringValue.trimmingCharacters(in: .whitespaces)
             let cents = Decimal(string:rawBudget,locale:Locale(identifier:"en_US_POSIX")).map { $0*100 }

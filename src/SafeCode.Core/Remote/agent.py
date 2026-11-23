@@ -1436,7 +1436,10 @@ def upgrade_safe_code_api(command, source, rollback_config, entry):
     try:
         for name in names:
             write_api_component(API_DIRECTORY/name, (source/name).read_bytes())
-        provision_gateway_devices(entry,Path(entry.pw_dir)/API_STATE)
+        try:
+            provision_gateway_devices(entry,Path(entry.pw_dir)/API_STATE)
+        except (OSError,RuntimeError,subprocess.TimeoutExpired):
+            log('私有设备服务尚未就绪，普通 API 可继续使用。请在网关设置中运行故障修复。')
         run(['systemctl','restart',API_UNIT.name],timeout=30)
         deadline = time.monotonic()+8
         while time.monotonic()<deadline:

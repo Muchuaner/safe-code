@@ -601,6 +601,7 @@ class PublicServer(ThreadingHTTPServer):
             result = {'keys':keys,'origin':self.public_origin,
                       'activation_required':any(key['enabled'] for key in keys),
                       'can_delete_revoked_keys': True, 'key_policy_supported': True, 'device_policy_supported': True,
+                      'device_service_problem': device_service_problem(self.config),
                       'billing': {'cost_nanos': sum(key['cost_nanos'] for key in keys),
                                   'unpriced_tokens': sum(key['unpriced_tokens'] for key in keys)},
                       'active':bool(active),'active_count':sum(active.values()),'waiting':sum(waiters.values()),

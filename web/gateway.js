@@ -572,6 +572,9 @@ function showEditor(key) {
   devicePolicy.disabled = snapshot.device_policy_supported !== true;
   byId('device-policy-field').hidden = devicePolicy.disabled;
   devicePolicy.value = !key || key.device_access === true ? 'desktop' : 'api';
+  byId('device-policy-help').textContent = snapshot.device_service_problem
+    ? '设备服务尚未就绪。请在网关设置中运行故障修复，或先选择普通 API。'
+    : '桌面接入允许设备配对，使用者仍须在本机确认授权。';
   editorEpoch++;
   catalogLoaded = catalogPending = false;
   const policySupported = snapshot.key_policy_supported === true;

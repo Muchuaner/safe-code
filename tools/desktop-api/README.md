@@ -51,7 +51,7 @@ python3 /opt/safe-code/desktop-api/server.py --state "$state" revoke "$key_id"
 ```
 ### Key 模式的设备控制
 
-标准安装、升级和故障修复会准备官方 FRP 的独立 `safe-code-desktop-frps.service` 和本机鉴权服务。它们都只监听 VPS 回环地址。已有自管 FRP 配置的 VPS 继续使用原有服务。
+标准安装、升级和故障修复会准备官方 FRP 的独立 `safe-code-desktop-frps.service` 和本机鉴权服务。它们都只监听 VPS 回环地址。已有自管 FRP 配置的 VPS 继续使用原有服务。设备服务未就绪时仍可以使用普通 API。
 
 创建或编辑密钥时，可选择「Safe Code 桌面接入」或「普通 API」。桌面接入需要私有设备服务健康，原有密钥可授权配对，无需重新签发。客户端通过现有 HTTPS 入口建立 FRP 隧道，仍须经本机明确授权并验证 VPS 的 SSH 回连，才会保存 Claude Desktop 配置。改回普通 API 会取消该 Key 的 FRP 设备配对。
 
