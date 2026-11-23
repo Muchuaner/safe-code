@@ -208,7 +208,7 @@ try{
   Assert(latestBeta.AtomRequests==1,"latest fallback was not requested");
  }
  var formalRelease=new UpdateHandler{ApiStatus=HttpStatusCode.Forbidden,AtomFeed=AtomFeed("v0.4.4","Beta-0.4.4.18","Beta-0.4.4.17")};
- using(var client=new ClientServices(Path.Combine(directory,"rate-beta-to-formal"),formalRelease,currentVersion:"Beta-0.4.4.17"))
+ using(var client=new ClientServices(Path.Combine(directory,"rate-beta-to-formal"),formalRelease,updateAssetSuffix:"Setup-x64.exe",currentVersion:"Beta-0.4.4.17"))
  {
   var update=await client.CheckUpdateAsync(true,default);
   Assert(update.Version=="0.4.4"&&!update.CanInstall&&update.Page=="https://github.com/Muchuaner/safe-code/releases/tag/v0.4.4","beta fallback missed a newer formal release");
