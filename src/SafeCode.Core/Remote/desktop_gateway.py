@@ -2119,35 +2119,59 @@ class CloudCliBackend:
         except (OSError, HTTPException, ValueError, RecursionError):
             raise CloudCliError('CloudCLI did not return a valid web API response', 502) from None
 
-    def history_users(self, session):
+    def history_users(self, session, since=None):
         if not CLOUDCLI_SESSION_ID.fullmatch(session):
             raise CloudCliError('CloudCLI returned an invalid session identifier')
-        result = self.web_request('GET', f'/api/providers/sessions/{session}/messages?limit=64',
-                                  timeout=5, response_limit=CLOUDCLI_HISTORY_LIMIT)
-        data = result.get('data') if isinstance(result, dict) else None
-        rows = data.get('messages') if isinstance(data, dict) else None
-        if not isinstance(rows, list):
-            raise CloudCliError('CloudCLI did not return conversation anchors')
-        return [row for row in rows if isinstance(row, dict) and row.get('sessionId') == session
-                and row.get('role') == 'user' and row.get('kind') == 'text']
+        # CloudCLI returns the newest page first, ordered oldest-to-newest
+        # within each page. A single tool-heavy turn can fill several pages.
+        deadline = time.monotonic() + 12
+        total = None
+        users = []
+        for offset in range(0, 1024, 64):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            path = f'/api/providers/sessions/{session}/messages?limit=64&offset={offset}'
+            result = self.web_request('GET', path, timeout=min(5, remaining), response_limit=CLOUDCLI_HISTORY_LIMIT)
+            data = result.get('data') if isinstance(result, dict) else None
+            rows = data.get('messages') if isinstance(data, dict) else None
+            if not isinstance(rows, list):
+                raise CloudCliError('CloudCLI did not return conversation anchors')
+            if offset and (data.get('offset') != offset or data.get('total') != total):
+                raise CloudCliError('CloudCLI history changed while locating conversation anchors', 409)
+            total = data.get('total')
+            page_users = [row for row in rows if isinstance(row, dict) and row.get('sessionId') == session
+                          and row.get('role') == 'user' and row.get('kind') == 'text']
+            users[:0] = page_users
+            has_more = data.get('hasMore')
+            if has_more is not True or (users and since is None):
+                return users
+            if any((seen := self.history_timestamp(row)) is not None and seen < since for row in page_users):
+                return users
+            if len(rows) != 64 or type(total) is not int or total <= offset + len(rows):
+                raise CloudCliError('CloudCLI did not return its history pagination')
+        raise CloudCliError('CloudCLI history anchor search reached the gateway limit')
+
+    @staticmethod
+    def history_timestamp(row):
+        try:
+            seen = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
+            return round(seen.timestamp()*1000) if seen.tzinfo is not None else None
+        except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+            return None
 
     def turn_anchor(self, progress, session):
         if not self.config.get('desktopQuestions') or not progress.forwarded_text or progress.dispatch_ms is None:
             return None
         ended = int(time.time()*1000)
         try:
-            users = self.history_users(session)
+            users = self.history_users(session, since=progress.dispatch_ms)
         except CloudCliError:
             return None
-        def within_turn(row):
-            try:
-                seen = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
-                return seen.tzinfo is not None and progress.dispatch_ms <= round(seen.timestamp()*1000) <= ended
-            except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
-                return False
         matching = {row['transcriptAnchorId'] for row in users if row.get('content') == progress.forwarded_text
                     and isinstance(row.get('transcriptAnchorId'), str)
-                    and CLOUDCLI_SESSION_ID.fullmatch(row['transcriptAnchorId']) and within_turn(row)}
+                    and CLOUDCLI_SESSION_ID.fullmatch(row['transcriptAnchorId'])
+                    and (seen := self.history_timestamp(row)) is not None and progress.dispatch_ms <= seen <= ended}
         if len(matching) != 1 or users[-1].get('transcriptAnchorId') not in matching:
             return None
         return users[-1]['transcriptAnchorId']
@@ -2487,10 +2511,47 @@ class CloudCliBackend:
                                         'AND position=?', (namespace, binding[0], prefix, position)).fetchone()
                     if target and binding[4]:
                         return binding, (target[0], binding[4])
+                    if binding[4] is None:
+                        anchor = self.stopped_edit_anchor(db, namespace, prefix, binding[0])
+                        if anchor is not None:
+                            return binding, (anchor, anchor)
                 raise CloudCliError('No verified CloudCLI message anchor for this Desktop edit', 409)
         if position:
             raise CloudCliError('No matching CloudCLI session; start a new Desktop conversation', 409)
         return None, None
+
+    def stopped_edit_anchor(self, db, namespace, prefix, session):
+        # Older gateways saved interrupted history hashes without the edit
+        # anchor. An incoming edit may prove its original prefix against the
+        # pending dispatch marker and the latest native user message.
+        checkpoint = db.execute('SELECT updated FROM session_state WHERE scope=? AND session=?',
+                                (namespace, session)).fetchone()
+        pending = db.execute('SELECT identity, created, reply FROM requests WHERE scope=? '
+                             'ORDER BY created DESC LIMIT 1', (namespace,)).fetchone()
+        if checkpoint is None or pending is None or pending[2] is not None or pending[1] > checkpoint[0]:
+            return None
+        dispatched = int(pending[1]*1000)
+        try:
+            users = self.history_users(session, since=dispatched)
+        except CloudCliError:
+            return None
+        if not users:
+            return None
+        last = users[-1]
+        anchor, task = last.get('transcriptAnchorId'), last.get('content')
+        seen = self.history_timestamp(last)
+        if (not isinstance(anchor, str) or not CLOUDCLI_SESSION_ID.fullmatch(anchor)
+                or not isinstance(task, str) or seen is None
+                or not dispatched <= seen <= int(checkpoint[0]*1000)):
+            return None
+        identity = hashlib.sha256(json.dumps([namespace, prefix, task], ensure_ascii=False).encode()).hexdigest()
+        if identity != pending[0]:
+            return None
+        if any(row.get('content') == task and row.get('transcriptAnchorId') != anchor
+               and (timestamp := self.history_timestamp(row)) is not None and timestamp >= dispatched
+               for row in users):
+            return None
+        return anchor
 
     def invalidate_edit(self, namespace, session, progress):
         if progress.edit_anchor is None or not progress.dispatched:

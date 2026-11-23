@@ -21,6 +21,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,7 +91,13 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.split('?')[0] == f'/api/providers/sessions/{CLOUD_SESSION}/messages':
-            self.send_json({'data': {'messages': self.server.history}})
+            query = parse_qs(urlsplit(self.path).query)
+            limit = int(query.get('limit', ['64'])[0])
+            offset = int(query.get('offset', ['0'])[0])
+            history = self.server.history
+            end = max(0, len(history) - offset)
+            self.send_json({'data': {'messages': history[max(0, end - limit):end],
+                                     'offset': offset, 'total': len(history), 'hasMore': end > limit}})
             return
         if self.path == '/api/providers/sessions/running':
             started = self.server.running_since
@@ -146,6 +153,7 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
         server.requests.append((self.path, self.headers.get('x-api-key'), data))
         if server.track_history:
             server.history.append(cloud_user(data['message']))
+            server.history.extend(getattr(server, 'turn_history_tail', ()))
         if server.track_running:
             server.running_since = int(time.time()*1000)
         status, payload = server.reply
@@ -831,10 +839,11 @@ class CloudCLIGatewayTests(unittest.TestCase):
         broken = conversation('unused', stream=True, messages=[*history, {'role': 'user', 'content': 'Broken turn.'}])
         self.cloud.reply = (200, [{'type': 'session-id', 'sessionId': CLOUD_SESSION},
                                   {'kind': 'stream_delta', 'content': 'Partial reply.'}])
+        self.cloud.turn_history_tail = [{'kind': 'tool_use', 'content': 'fixture'}] * 130
         status, interrupted = self.request(broken)
         self.assertEqual(status, 200)
         self.assertEqual(interrupted[-1]['type'], 'error')
-        failed_anchor = self.cloud.history[-1]['transcriptAnchorId']
+        failed_anchor = [row for row in self.cloud.history if row.get('role') == 'user'][-1]['transcriptAnchorId']
         self.assertEqual(self.request(broken)[0], 409)
         self.assertEqual(len(self.cloud.requests), 2)
 
@@ -851,6 +860,36 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual((action['type'], action['sessionId'], action['anchorId'], action['content']),
                          ('chat.edit-send', CLOUD_SESSION, failed_anchor, replacement['content']))
         self.assertEqual(len(self.cloud.requests), 2)
+
+    def test_old_interrupted_checkpoint_recovers_only_its_proven_edit(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.track_history = True
+        first = conversation('First confirmed turn.')
+        status, reply = self.request(first)
+        self.assertEqual(status, 200)
+        prefix = [*first['messages'], {'role': 'assistant', 'content': reply['content']}]
+        broken = conversation('unused', stream=True, messages=[*prefix, {'role': 'user', 'content': 'Previous task.'}])
+        self.cloud.reply = (200, [{'type': 'session-id', 'sessionId': CLOUD_SESSION},
+                                  {'kind': 'stream_delta', 'content': 'Partial reply.'}])
+        self.assertEqual(self.request(broken)[1][-1]['type'], 'error')
+        anchor = self.cloud.history[-1]['transcriptAnchorId']
+        self.cloud.history.extend([{'kind': 'thinking', 'content': 'fixture'}] * 80)
+        with closing(sqlite3.connect(self.manager.cloudcli.path)) as db, db:
+            db.execute('UPDATE session_state SET tip_anchor=NULL WHERE session=?', (CLOUD_SESSION,))
+            db.execute('DELETE FROM edit_turns WHERE anchor=?', (anchor,))
+        self.assertEqual(self.request(broken)[0], 409)
+        actions = []
+        events = [{'kind': 'text', 'role': 'assistant', 'sessionId': CLOUD_SESSION, 'content': 'Edited reply.'},
+                  {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0}]
+        replacement = {'role': 'user', 'content': 'Replacement task.'}
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *args, **kwargs: ChatSocketFixture(actions.append, events), OSError)):
+            self.assertEqual(self.request(conversation('unused', messages=[*prefix[:-1], replacement]))[0], 409)
+            self.assertFalse(actions)
+            self.assertEqual(self.request(conversation('unused', messages=[*prefix, replacement]))[0], 200)
+        action, = actions
+        self.assertEqual((action['type'], action['sessionId'], action['anchorId']),
+                         ('chat.edit-send', CLOUD_SESSION, anchor))
 
     def test_interrupted_turn_can_continue_with_its_visible_partial_reply(self):
         self.enable_cloudcli_web_fixture()
