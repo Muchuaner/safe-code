@@ -188,6 +188,11 @@ class ChatSocketFixture:
         event = next(self.events, None)
         return json.dumps(event) if event is not None else ''
 
+    def recv_data(self, *, control_frame):
+        from websocket import ABNF
+        text = self.recv()
+        return (ABNF.OPCODE_TEXT, text.encode()) if text else (ABNF.OPCODE_CLOSE, b'')
+
     def close(self):
         pass
 
@@ -214,6 +219,28 @@ class CloudCLIStreamTests(unittest.TestCase):
                 self.consume(frames)
             self.assertEqual(failed.exception.status, 504)
             self.assertIn(message, str(failed.exception))
+
+    def test_websocket_ping_does_not_keep_an_idle_stream_alive(self):
+        from websocket import ABNF
+        clock = 0
+
+        class Socket(ChatSocketFixture):
+            def recv_data(self, *, control_frame):
+                nonlocal clock
+                self.assert_control_frames = control_frame
+                clock += 30
+                return ABNF.OPCODE_PING, b''
+
+        socket = Socket(None)
+        response = gateway.CloudCliSocketEvents(socket, CLOUD_SESSION)
+        progress = gateway.CloudCliProgress(None, None)
+        with patch.object(gateway.time, 'monotonic', side_effect=lambda: clock):
+            with self.assertRaises(gateway.CloudCliError) as failed:
+                next(gateway.cloudcli_events(response, progress))
+        self.assertEqual(failed.exception.status, 504)
+        self.assertIn('report progress', str(failed.exception))
+        self.assertTrue(socket.assert_control_frames)
+        self.assertEqual(clock, 120)
 
     def consume(self, frames):
         clock = 0

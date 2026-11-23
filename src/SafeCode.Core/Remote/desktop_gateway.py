@@ -1528,7 +1528,7 @@ class CloudCliSocketEvents:
         return self.read_event(limit, deadline)
 
     def read_event(self, limit, deadline):
-        from websocket import WebSocketTimeoutException
+        from websocket import ABNF, WebSocketTimeoutException
         for _ in range(50000):
             remaining = deadline - time.monotonic()
             if self.review_deadline is not None:
@@ -1540,11 +1540,16 @@ class CloudCliSocketEvents:
                 raise TimeoutError()
             self.connection.settimeout(remaining)
             try:
-                line = self.connection.recv()
+                # Surface ping/pong so they cannot reset the socket timeout unnoticed.
+                opcode, line = self.connection.recv_data(control_frame=True)
             except WebSocketTimeoutException:
                 if self.review_deadline is not None and self.review_deadline <= deadline:
                     raise CloudCliError('CloudCLI prompt review timed out', 504) from None
                 raise TimeoutError() from None
+            if opcode == ABNF.OPCODE_CLOSE:
+                return b''
+            if opcode in (ABNF.OPCODE_PING, ABNF.OPCODE_PONG):
+                continue
             if not line:
                 return b''
             if len(line) > limit:
