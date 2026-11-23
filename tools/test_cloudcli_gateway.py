@@ -821,6 +821,57 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 self.assertEqual(len(self.cloud.requests), count_before + 1)
         self.assertNoNativeFallback()
 
+    def test_interrupted_turn_can_be_edited_without_replaying_it(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.track_history = True
+        first = conversation('First confirmed turn.')
+        status, reply = self.request(first)
+        self.assertEqual(status, 200)
+        history = [*first['messages'], {'role': 'assistant', 'content': reply['content']}]
+        broken = conversation('unused', stream=True, messages=[*history, {'role': 'user', 'content': 'Broken turn.'}])
+        self.cloud.reply = (200, [{'type': 'session-id', 'sessionId': CLOUD_SESSION},
+                                  {'kind': 'stream_delta', 'content': 'Partial reply.'}])
+        status, interrupted = self.request(broken)
+        self.assertEqual(status, 200)
+        self.assertEqual(interrupted[-1]['type'], 'error')
+        failed_anchor = self.cloud.history[-1]['transcriptAnchorId']
+        self.assertEqual(self.request(broken)[0], 409)
+        self.assertEqual(len(self.cloud.requests), 2)
+
+        actions = []
+        events = [{'kind': 'text', 'role': 'assistant', 'sessionId': CLOUD_SESSION, 'content': 'Edited reply.'},
+                  {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0}]
+        replacement = {'role': 'user', 'content': 'Explicit replacement for broken turn.'}
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *args, **kwargs: ChatSocketFixture(actions.append, events), OSError)):
+            status, response = self.request(conversation('unused', messages=[*history, replacement]))
+        self.assertEqual(status, 200)
+        self.assertIn('Edited reply.', response['content'][0]['text'])
+        action, = actions
+        self.assertEqual((action['type'], action['sessionId'], action['anchorId'], action['content']),
+                         ('chat.edit-send', CLOUD_SESSION, failed_anchor, replacement['content']))
+        self.assertEqual(len(self.cloud.requests), 2)
+
+    def test_interrupted_turn_can_continue_with_its_visible_partial_reply(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.track_history = True
+        broken = conversation('Interrupted first task.', stream=True)
+        self.cloud.reply = (200, [{'type': 'session-id', 'sessionId': CLOUD_SESSION},
+                                  {'kind': 'stream_delta', 'content': 'Partial reply.'}])
+        status, events = self.request(broken)
+        self.assertEqual(status, 200)
+        self.assertEqual(events[-1]['type'], 'error')
+        stream = gateway.StreamMessage()
+        for event in events[:-1]:
+            stream.feed(event)
+        self.cloud.reply = (200, cloud_turn('Continued after interruption.'))
+        messages = [*broken['messages'], {'role': 'assistant', 'content': stream.partial()},
+                    {'role': 'user', 'content': 'Continue the task without repeating the last action.'}]
+        status, response = self.request(conversation('unused', messages=messages))
+        self.assertEqual(status, 200)
+        self.assertIn('Continued after interruption.', response['content'][0]['text'])
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
     def test_upstream_error_is_not_treated_as_assistant_text(self):
         self.cloud.reply = (200, cloud_turn('API Error: 400 private provider detail'))
         status, response = self.request(conversation('Return the answer'))

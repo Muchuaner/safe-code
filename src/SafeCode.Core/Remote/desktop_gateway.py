@@ -2152,13 +2152,16 @@ class CloudCliBackend:
             return None
         return users[-1]['transcriptAnchorId']
 
-    def running_since(self, session):
+    def running_sessions(self):
         result = self.web_request('GET', '/api/providers/sessions/running')
         data = result.get('data') if isinstance(result, dict) else None
         sessions = data.get('sessions') if isinstance(data, dict) else None
         if not isinstance(sessions, list):
-            return None
-        return next((entry['startedAt'] for entry in sessions if isinstance(entry, dict)
+            raise CloudCliError('CloudCLI did not return its running sessions')
+        return sessions
+
+    def running_since(self, session):
+        return next((entry['startedAt'] for entry in self.running_sessions() if isinstance(entry, dict)
                      and entry.get('sessionId') == session and entry.get('provider') == 'claude'
                      and entry.get('background') is not True and entry.get('canInterrupt') is not False
                      and type(entry.get('startedAt')) is int), None)
@@ -2386,14 +2389,8 @@ class CloudCliBackend:
         try:
             question = next(events)
         except CloudCliStopped:
-            if namespace.rpartition(':')[2] and progress.session:
-                content = progress.take_content()
-                histories = [history_signature(messages, 'cloudcli')]
-                if content:
-                    histories.append(history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli'))
-                with closing(sqlite3.connect(self.path)) as db, db:
-                    self.save_session(db, namespace, previous_history, progress.session, project, workspace, histories)
-                    self.save_turn_state(db, namespace, progress.session, previous_history, progress, None)
+            self.save_interrupted_turn(messages, namespace, progress, previous_history, project, workspace,
+                                       stopped=True)
             raise
         except StopIteration as complete:
             session, content, usage = complete.value
@@ -2425,6 +2422,31 @@ class CloudCliBackend:
         model = progress.reported_model or progress.model
         manager.count_usage({'id': result['id'], 'model': model, 'usage': usage}, result['id'])
         return result
+
+    def save_interrupted_turn(self, messages, namespace, progress, prefix, project, workspace, *, stopped=False):
+        session = progress.session
+        if not namespace.rpartition(':')[2] or not session or not progress.dispatched:
+            return False
+        anchor = self.turn_anchor(progress, session)
+        if not stopped:
+            if anchor is None:
+                return False
+            try:
+                running = self.running_sessions()
+            except CloudCliError:
+                return False
+            if any(not isinstance(entry, dict) or entry.get('sessionId') == session for entry in running):
+                return False
+        # Keep the original request marker. A continuation or an explicit edit can
+        # use this checkpoint, but an identical retry must never rerun the task.
+        content = progress.take_content()
+        histories = [history_signature(messages, 'cloudcli')]
+        if content:
+            histories.append(history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli'))
+        with closing(sqlite3.connect(self.path)) as db, db:
+            self.save_session(db, namespace, prefix, session, project, workspace, histories)
+            self.save_turn_state(db, namespace, session, prefix, progress, anchor)
+        return True
 
     @staticmethod
     def save_turn_state(db, namespace, session, prefix, progress, anchor):
@@ -2683,7 +2705,10 @@ class CloudCliBackend:
                 if not progress.dispatched or isinstance(error, CloudCliEditRefused):
                     with closing(sqlite3.connect(self.path)) as db, db:
                         db.execute('DELETE FROM requests WHERE identity=? AND reply IS NULL', (identity,))
-                if not isinstance(error, CloudCliEditRefused):
+                recovered = (isinstance(error, (CloudCliError, ConnectionAbortedError))
+                             and not isinstance(error, CloudCliEditRefused)
+                             and self.save_interrupted_turn(messages, namespace, progress, before, project, workspace))
+                if not recovered and not isinstance(error, CloudCliEditRefused):
                     self.invalidate_edit(namespace, payload.get('sessionId'), progress)
                 raise
 
