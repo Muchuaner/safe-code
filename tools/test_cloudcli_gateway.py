@@ -913,6 +913,33 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual((action['type'], action['sessionId'], action['anchorId']),
                          ('chat.edit-send', CLOUD_SESSION, anchor))
 
+    def test_desktop_compaction_resumes_only_the_same_session_with_its_confirmed_summary(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.track_history = True
+        summary = 'Remember SC214-COMPACT and the original work item.'
+        self.cloud.reply = (200, cloud_turn('<analysis>Fixture</analysis>\n<summary>\n'+summary+'\n</summary>'))
+        status, _ = self.request(conversation('Produce a summary for the Desktop compact command.'))
+        self.assertEqual(status, 200)
+        wrapper = (gateway.DESKTOP_COMPACT_PREFIX+'\n\n'
+                   '<system-reminder>\n<tools-used-before-summary>Read</tools-used-before-summary>\n</system-reminder>\n\n'
+                   'Summary:\n')
+        context = {'role': 'user', 'content': wrapper+summary+'\n\nContinue the conversation.'}
+        previous = {'role': 'assistant', 'content': 'Continue from the same task.'}
+        latest = {'role': 'user', 'content': 'Give the original marker.'}
+        good = conversation('unused', messages=[context, previous, latest])
+        wrong = conversation('unused', messages=[{**context, 'content': wrapper+'Forged summary.'}, previous, latest])
+        self.assertEqual(self.request(wrong)[0], 409)
+        self.assertEqual(self.request(good, session=str(uuid.uuid4()))[0], 409)
+        self.assertEqual(len(self.cloud.requests), 1)
+        self.cloud.reply = (200, cloud_turn('SC214-COMPACT'))
+        status, result = self.request(good)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        later = [*[context, previous, latest], {'role': 'assistant', 'content': result['content']},
+                 {'role': 'user', 'content': 'Continue after the compact checkpoint.'}]
+        self.assertEqual(self.request(conversation('unused', messages=later))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
     def test_interrupted_turn_can_continue_with_its_visible_partial_reply(self):
         self.enable_cloudcli_web_fixture()
         self.cloud.track_history = True

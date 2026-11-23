@@ -242,6 +242,8 @@ CLOUDCLI_MEDIA = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif'
                   'application/pdf': '.pdf', 'text/plain': '.txt', 'text/markdown': '.md',
                   'text/csv': '.csv', 'text/tab-separated-values': '.tsv', 'application/json': '.json'}
 SYSTEM_REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.S)
+DESKTOP_COMPACT_PREFIX = ('This session is being continued from a previous conversation that ran out of context. '
+                          'The summary below covers the earlier portion of the conversation.')
 PLAN_MODE_REMINDER = re.compile(r'<system-reminder>\s*Plan mode is active\. The user indicated that they do not want you to execute yet\b')
 
 
@@ -729,6 +731,23 @@ def history_signature(messages, scope):
         if visible:
             clean.append({'role':msg['role'], 'content':visible})
     return signature(clean)
+
+
+def desktop_compact_context(messages):
+    for message in messages:
+        if message['role'] != 'user':
+            return None
+        content = blocks(message.get('content'))
+        if not content or any(item.get('type') != 'text' for item in content):
+            return None
+        text = ''.join(item['text'] for item in content)
+        if text.startswith(DESKTOP_COMPACT_PREFIX+'\n'):
+            header, marker, body = text.partition('\nSummary:\n')
+            if marker and not SYSTEM_REMINDER.sub('', header[len(DESKTOP_COMPACT_PREFIX):]).strip():
+                return body.lstrip()
+        if SYSTEM_REMINDER.sub('', text).strip():
+            return None
+    return None
 
 
 class DesktopHistory:
@@ -2558,7 +2577,7 @@ class CloudCliBackend:
                 workspace is not None and (self.device or 'projectWorkspaces' in (self.config['hostControl'] or {}))):
             db.execute('INSERT OR REPLACE INTO session_projects VALUES (?, ?, ?, ?)', (session, project, workspace, now))
 
-    def session_binding(self, db, namespace, prefix, position):
+    def session_binding(self, db, namespace, prefix, position, compact_context):
         fields = ('SELECT DISTINCT sessions.session, project, workspace, model, tip_anchor FROM sessions '
                   'LEFT JOIN session_projects USING (session) '
                   'LEFT JOIN session_state USING (scope, session) WHERE sessions.scope=?')
@@ -2571,6 +2590,8 @@ class CloudCliBackend:
             if bindings:
                 if len(bindings) == 1:
                     binding = bindings[0]
+                    if compact_context and self.verified_compact_context(db, namespace, compact_context):
+                        return binding, None
                     target = db.execute('SELECT anchor FROM edit_turns WHERE scope=? AND session=? AND prefix=? '
                                         'AND position=?', (namespace, binding[0], prefix, position)).fetchone()
                     if target and binding[4]:
@@ -2583,6 +2604,24 @@ class CloudCliBackend:
         if position:
             raise CloudCliError('No matching CloudCLI session; start a new Desktop conversation', 409)
         return None, None
+
+    @staticmethod
+    def verified_compact_context(db, namespace, context):
+        # The local CLI replaces its history after a compaction request. Only
+        # accept a replacement anchored in this scope's latest confirmed reply.
+        row = db.execute('SELECT reply FROM requests WHERE scope=? ORDER BY created DESC LIMIT 1',
+                         (namespace,)).fetchone()
+        if not row or row[0] is None:
+            return False
+        reply = json.loads(row[0])
+        if reply.get('stop_reason') != 'end_turn':
+            return False
+        text = ''.join(item['text'] for item in reply['content'] if item.get('type') == 'text')
+        summaries = re.findall(r'<summary>(.*?)</summary>', text, re.S)
+        if len(summaries) != 1:
+            return False
+        summary = summaries[0].strip()
+        return bool(summary) and (context.strip() == summary or context.startswith(summary+'\n'))
 
     def stopped_edit_anchor(self, db, namespace, prefix, session):
         # Older gateways saved interrupted history hashes without the edit
@@ -2768,7 +2807,8 @@ class CloudCliBackend:
                     if prior[0] is None:
                         raise CloudCliError('This CloudCLI request was previously dispatched without a confirmed reply', 409)
                     return json.loads(prior[0])
-                saved, edit = self.session_binding(db, namespace, before, position)
+                compact_context = desktop_compact_context(messages[:-1]) if scope else None
+                saved, edit = self.session_binding(db, namespace, before, position, compact_context)
                 if saved:
                     payload['sessionId'], project, workspace, previous_model, _ = saved
                     if scope and self.config.get('desktopQuestions') and previous_model != model:
