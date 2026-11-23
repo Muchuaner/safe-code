@@ -2066,7 +2066,10 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.enable_cloudcli_web_fixture()
         self.cloud.track_history = True
         prompt = conversation('Original conversation context.')
-        status, reply = self.request(prompt)
+        backend = self.manager.cloudcli
+        # A completed stream can precede publication of the native user record.
+        with patch.object(backend,'resolve_turn_anchor',return_value=None):
+            status, reply = self.request(prompt)
         self.assertEqual(status, 200)
         original = self.cloud.history[-1].copy()
         fork_id = 'native-cloudcli-fork-fixture'
@@ -2074,7 +2077,6 @@ class CloudCLIGatewayTests(unittest.TestCase):
         branch = conversation('unused',messages=[*prefix,{'role':'user','content':'Continue this branch.'}])
         corrupted = conversation('unused',messages=[*prefix[:-1],{'role':'assistant','content':'Different history.'},
                                                      branch['messages'][-1]])
-        backend = self.manager.cloudcli
         requests = []
         native_request = backend.web_request
 
@@ -2086,10 +2088,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
         self.cloud.track_history = False
         self.cloud.reply = (200,cloud_turn('Continued the fork.',session_id=fork_id))
-        with patch.object(backend,'history_users',side_effect=lambda *a, **kw:[original]), \
-                patch.object(backend,'web_request',side_effect=web_request):
-            self.assertEqual(self.request(corrupted,session=str(uuid.uuid4()))[0],409)
-            self.assertEqual(self.request(branch,session=str(uuid.uuid4()))[0],200)
+        with patch.object(backend,'web_request',side_effect=web_request):
+            with patch.object(backend,'history_users',return_value=[{**original,'content':'Unexpected native prompt.'}]):
+                self.assertEqual(self.request(branch,session=str(uuid.uuid4()))[0],409)
+            with patch.object(backend,'history_users',return_value=[original]):
+                self.assertEqual(self.request(corrupted,session=str(uuid.uuid4()))[0],409)
+                self.assertEqual(self.request(branch,session=str(uuid.uuid4()))[0],200)
         self.assertEqual(requests,[('POST',f'/api/providers/sessions/{CLOUD_SESSION}/fork',{})])
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'],fork_id)
         self.assertEqual(self.cloud.history[-1],original)
