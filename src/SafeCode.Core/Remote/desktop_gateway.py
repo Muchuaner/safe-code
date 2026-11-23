@@ -2254,12 +2254,12 @@ class CloudCliBackend:
         except (OSError, HTTPException, ValueError, RecursionError):
             raise CloudCliError('CloudCLI did not return a valid web API response', 502) from None
 
-    def history_users(self, session, *, since=None, anchor=None, minimum=1):
+    def history_users(self, session, *, since=None, anchor=None, minimum=1, timeout=12):
         if not CLOUDCLI_SESSION_ID.fullmatch(session):
             raise CloudCliError('CloudCLI returned an invalid session identifier')
         # CloudCLI returns the newest page first, ordered oldest-to-newest
         # within each page. A single tool-heavy turn can fill several pages.
-        deadline = time.monotonic() + 12
+        deadline = time.monotonic() + timeout
         total = None
         users = []
         for offset in range(0, 1024, 64):
@@ -2297,9 +2297,9 @@ class CloudCliBackend:
         except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
             return None
 
-    def resolve_turn_anchor(self, session, fingerprint, dispatched, ended):
+    def resolve_turn_anchor(self, session, fingerprint, dispatched, ended, *, timeout=12):
         try:
-            users = self.history_users(session, since=dispatched)
+            users = self.history_users(session, since=dispatched, timeout=timeout)
         except CloudCliError:
             return None
         matching = {row['transcriptAnchorId'] for row in users
@@ -2715,7 +2715,17 @@ class CloudCliBackend:
     def recover_tip(self, db, namespace, session):
         receipt = db.execute('SELECT fingerprint,dispatched,ended FROM anchor_receipts WHERE scope=? AND session=?',
                              (namespace,session)).fetchone()
-        return self.resolve_turn_anchor(session,*receipt) if receipt else None
+        if receipt is None:
+            return None
+        # The terminal event can arrive just before CloudCLI publishes the user
+        # record. Re-read history briefly without submitting the prompt again.
+        deadline = time.monotonic() + 2
+        while (remaining := deadline-time.monotonic()) > 0:
+            anchor = self.resolve_turn_anchor(session, *receipt, timeout=remaining)
+            if anchor:
+                return anchor
+            time.sleep(min(.2,max(0,deadline-time.monotonic())))
+        return None
 
     def desktop_branch_source(self, db, namespace, prefix, interrupted_prefixes):
         # A local rewind may have a new Desktop UUID. Only branch a verified

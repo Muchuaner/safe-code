@@ -2091,9 +2091,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
         with patch.object(backend,'web_request',side_effect=web_request):
             with patch.object(backend,'history_users',return_value=[{**original,'content':'Unexpected native prompt.'}]):
                 self.assertEqual(self.request(branch,session=str(uuid.uuid4()))[0],409)
-            with patch.object(backend,'history_users',return_value=[original]):
+            histories = [[], [original]]
+            with patch.object(backend,'history_users',side_effect=lambda *args, **kwargs:
+                              histories.pop(0) if len(histories) > 1 else histories[0]):
                 self.assertEqual(self.request(corrupted,session=str(uuid.uuid4()))[0],409)
                 self.assertEqual(self.request(branch,session=str(uuid.uuid4()))[0],200)
+            self.assertEqual(histories,[[original]])
         self.assertEqual(requests,[('POST',f'/api/providers/sessions/{CLOUD_SESSION}/fork',{})])
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'],fork_id)
         self.assertEqual(self.cloud.history[-1],original)
