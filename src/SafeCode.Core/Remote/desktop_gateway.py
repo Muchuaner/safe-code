@@ -1962,6 +1962,14 @@ class CloudCliBackend:
         if self.device:
             if self.allowed_workspace(cwd):
                 return cwd
+            # Desktop can append Environment as a system message while the
+            # top-level system blocks contain only the static prompt.
+            hints = {path for message in data.get('messages', ())
+                     if isinstance(message, dict) and message.get('role') == 'system'
+                     if (path := desktop_working_directory({'system': message.get('content')})) is not None
+                     and self.allowed_workspace(path)}
+            if len(hints) == 1:
+                return hints.pop()
             if scope and self.device['platform'] == 'macos':
                 try:
                     from host_control_mcp import exchange_ssh, REMOTE_COMMAND, ToolError

@@ -1918,6 +1918,18 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(json.loads(data), {'name': 'desktop_workspace', 'session': session})
         self.assertIn('desk-mac', argv)
 
+    def test_paired_mac_reads_environment_system_message_on_the_first_turn(self):
+        self.manager.cloudcli.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
+                                       'alias': 'desk-mac', 'command': 'ssh desk-mac'}
+        request = conversation('unused', system='Static instructions.', messages=[
+            {'role': 'user', 'content': 'Check the selected folder.'},
+            {'role': 'system', 'content': desktop_environment('/Users/example/Desktop')},
+        ])
+        with patch('host_control_mcp.exchange_ssh') as lookup:
+            self.assertEqual(self.request(request)[0], 200)
+        lookup.assert_not_called()
+        self.assertIn('当前工作目录为 `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
+
     def test_plan_confirmation_displays_full_plan_and_requires_explicit_approval(self):
         self.enable_cloudcli_web_fixture()
         plan = 'Fixture plan body\n'+('Review before making local changes.\n'*180)+'Last step visible.'
