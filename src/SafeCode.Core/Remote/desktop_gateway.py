@@ -241,6 +241,7 @@ CLOUDCLI_USAGE_FIELDS = {
 CLOUDCLI_MEDIA = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
                   'application/pdf': '.pdf', 'text/plain': '.txt', 'text/markdown': '.md',
                   'text/csv': '.csv', 'text/tab-separated-values': '.tsv', 'application/json': '.json'}
+SYSTEM_REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.S)
 PLAN_MODE_REMINDER = re.compile(r'<system-reminder>\s*Plan mode is active\. The user indicated that they do not want you to execute yet\b')
 
 
@@ -720,7 +721,7 @@ def history_signature(messages, scope):
             if item.get('type') in ('thinking', 'redacted_thinking'):
                 continue
             if item.get('type') == 'text':
-                value = re.sub(r'<system-reminder>.*?</system-reminder>', '', item['text'], flags=re.S)
+                value = SYSTEM_REMINDER.sub('', item['text'])
                 if not value.strip():
                     continue
                 item['text'] = value
@@ -865,6 +866,45 @@ def cloudcli_attachment(block, number):
     if not name.lower().endswith(extension):
         name += extension
     return name, media, data
+
+
+def desktop_read_attachments(messages, task, first_number):
+    # Claude Desktop represents files opened in its composer as a native Read
+    # preview. Only pair explicit references in this turn with their preview.
+    candidates = []
+    for message in reversed(messages):
+        if message['role'] != 'user':
+            break
+        texts = [block.get('text') for block in blocks(message.get('content')) if block.get('type') == 'text']
+        if candidates and (not texts or any(SYSTEM_REMINDER.sub('', text).strip()
+                                            for text in texts if isinstance(text, str))):
+            break
+        candidates[:0] = [text for text in texts if isinstance(text, str)]
+    files = []
+    path = None
+    for text in candidates:
+        input_prefix = '<system-reminder>\nCalled the Read tool with the following input: '
+        result_prefix = '<system-reminder>\nResult of calling the Read tool:\n'
+        trailer = '\n</system-reminder>'
+        if text.startswith(input_prefix) and text.endswith(trailer):
+            path = None
+            try:
+                candidate = json.loads(text[len(input_prefix):-len(trailer)]).get('file_path')
+            except (ValueError, AttributeError):
+                continue
+            if (valid_mac_workspace(candidate) and f'@"{candidate}"' in task
+                    and PurePosixPath(candidate).name.lower().endswith(('.txt', '.md', '.csv', '.tsv', '.json'))):
+                path = candidate
+        elif path and text.startswith(result_prefix) and text.endswith(trailer):
+            preview = text[len(result_prefix):-len(trailer)]
+            lines = preview.split('\n')
+            if lines and all(re.match(r'^\s*\d+\t', line) for line in lines):
+                contents = '\n'.join(line.partition('\t')[2] for line in lines)
+                if contents:
+                    files.append(cloudcli_attachment({'type': 'document', 'title': PurePosixPath(path).name,
+                        'source': {'type': 'text', 'data': contents}}, first_number+len(files)))
+            path = None
+    return files
 
 
 def cloudcli_failure(event):
@@ -2650,7 +2690,11 @@ class CloudCliBackend:
             else:
                 raise CloudCliError('CloudCLI cannot use this Desktop content block', 400)
         plan_mode = any(PLAN_MODE_REMINDER.search(text) for text in texts)
-        task = '\n'.join(re.sub(r'<system-reminder>.*?</system-reminder>', '', text, flags=re.S) for text in texts).strip()
+        task = '\n'.join(SYSTEM_REMINDER.sub('', text) for text in texts).strip()
+        if scope and self.device and self.device['platform'] == 'macos':
+            attachments.extend(desktop_read_attachments(messages, task, len(attachments)+1))
+        if len(attachments) > 10:
+            raise CloudCliError('Desktop can send up to 10 attachments per turn', 413)
         chat_mode = bool(attachments) or plan_mode
         tool_approvals = self.config.get('desktopToolApprovals', False)
         if chat_mode and not self.config.get('desktopQuestions'):
@@ -2707,7 +2751,7 @@ class CloudCliBackend:
                         if (tool_choice.get('type') in (None, 'auto', 'any')
                                 or (tool_choice.get('type') == 'tool' and tool_choice.get('name') == name)):
                             native_tools.add(name)
-            position = len(messages)-1
+            position = 0 if before == history_signature([], 'cloudcli') else len(messages)-1
             workspace_prompt_fingerprint = None
             with closing(sqlite3.connect(self.path)) as db, db:
                 with db:
@@ -2770,6 +2814,9 @@ class CloudCliBackend:
                         # Keep the user's opening words available for the CloudCLI title.
                         payload['message'] += '\n\n'+host_instruction
                         workspace_prompt_fingerprint = fingerprint
+                if attachments:
+                    payload['message'] += ('\n\n本轮上传的文件请通过 CloudCLI 提供的附件读取。'
+                                           '附带的本机路径只是原始引用，本机项目文件仍走已授权设备。')
                 self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
                 # cause an automatic second dispatch of this scoped task.

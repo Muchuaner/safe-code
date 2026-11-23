@@ -1846,6 +1846,35 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertTrue(command['content'].startswith('请查看本轮附加的文件。'))
         self.assertEqual([len(data) for _, _, data in self.cloud.uploads], [len(inline['source']['data']), len(raw), len(raw)])
 
+    def test_desktop_native_text_attachment_preview_does_not_block_first_turn(self):
+        self.enable_cloudcli_web_fixture()
+        self.manager.cloudcli.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
+                                       'alias': 'desk-mac', 'command': 'ssh desk-mac'}
+        actions = []
+        path = '/Users/example/fixture.txt'
+        reminder = {'role': 'user', 'content': '<system-reminder>\nCalled the Read tool with the following input: '
+                    + json.dumps({'file_path': path}) + '\n</system-reminder>'}
+        task = {'role': 'user', 'content': [
+            {'type': 'text', 'text': '<system-reminder>\nResult of calling the Read tool:\n1\tSC214-UI-fixture\n2\t\n</system-reminder>'},
+            {'type': 'text', 'text': '<system-reminder>\nExtra context is not a preceding turn.\n</system-reminder>'},
+            {'type': 'text', 'text': f'@"{path}"\nRead the attachment.'},
+        ]}
+        events = [{'kind': 'text', 'role': 'assistant', 'content': 'Fixture received.', 'sessionId': CLOUD_SESSION},
+                  {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION}]
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
+            status, reply = self.request(conversation('unused', messages=[reminder, task],
+                system=desktop_environment('/Users/example/Work')))
+        self.assertEqual(status, 200)
+        self.assertEqual(self.cloud.uploads, [('fixture.txt', 'text/plain', b'SC214-UI-fixture\n')])
+        self.assertNotIn('Result of calling the Read tool', actions[0]['content'])
+        self.assertEqual(len(actions[0]['options']['attachments']), 1)
+        followup = [reminder, task, {'role': 'assistant', 'content': reply['content']},
+                    {'role': 'user', 'content': 'Continue the same conversation.'}]
+        self.assertEqual(self.request(conversation('unused', messages=followup))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        self.assertEqual(len(self.cloud.uploads), 1)
+
     def test_paired_mac_recovers_workspace_from_the_matching_desktop_session(self):
         self.manager.cloudcli.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
                                        'alias': 'desk-mac', 'command': 'ssh -F /trusted/fixture desk-mac'}
