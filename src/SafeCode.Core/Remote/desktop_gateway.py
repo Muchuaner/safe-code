@@ -244,6 +244,14 @@ CLOUDCLI_MEDIA = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif'
 SYSTEM_REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.S)
 DESKTOP_LOCAL_COMMAND = re.compile(
     r'<(local-command-caveat|local-command-stdout|command-name|command-message|command-args)>.*?</\1>', re.S)
+DESKTOP_MODEL_COMMAND = re.compile(
+    r'<command-name>[ \t]*/model[ \t]*</command-name>\s*'
+    r'<command-message>[ \t]*model[ \t]*</command-message>\s*'
+    r'<command-args>[^<]{0,256}</command-args>')
+DESKTOP_MODEL_NOTICE = re.compile(
+    r"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, "
+    r"and its output goes straight to the user\. It's recorded here as context for later messages\.</local-command-caveat>"
+    r"|<local-command-stdout>Set model to [^<\r\n]{1,256}</local-command-stdout>")
 DESKTOP_COMPACT_PREFIX = ('This session is being continued from a previous conversation that ran out of context. '
                           'The summary below covers the earlier portion of the conversation.')
 PLAN_MODE_REMINDER = re.compile(r'<system-reminder>\s*Plan mode is active\. The user indicated that they do not want you to execute yet\b')
@@ -712,6 +720,37 @@ def webfetch_summary_request(data):
             and '\n---\n\n' in text
             and '\nProvide a concise response based only on the content above. In your response:\n' in text
             and text.endswith(' - Never produce or reproduce exact song lyrics.'))
+
+
+def without_desktop_model_commands(messages):
+    """Remove the Desktop /model transcript records while preserving the task and tools."""
+    if not any(DESKTOP_MODEL_COMMAND.search(item.get('text', ''))
+               for message in messages if message['role'] == 'user'
+               for item in blocks(message.get('content', [])) if item.get('type') == 'text'):
+        return messages
+    clean = []
+    for message in messages:
+        if message['role'] != 'user':
+            clean.append(message)
+            continue
+        content = blocks(message.get('content', []))
+        filtered = []
+        changed = False
+        for item in content:
+            if item.get('type') == 'text':
+                text = item.get('text', '')
+                value = DESKTOP_MODEL_NOTICE.sub('', DESKTOP_MODEL_COMMAND.sub('', text))
+                if value != text:
+                    changed = True
+                    if not value.strip():
+                        continue
+                    item['text'] = value
+            filtered.append(item)
+        if filtered:
+            clean.append({**message, 'content': filtered} if changed else message)
+        elif not changed:
+            clean.append(message)
+    return clean
 
 
 def history_signature(messages, scope):
@@ -2798,12 +2837,14 @@ class CloudCliBackend:
         return history_signature([*partial_history[:-1], reply], 'cloudcli')
 
     def session_binding(self, db, namespace, prefix, position, compact_context, interrupted_prefixes=(),
-                        partial_history=None):
+                        partial_history=None, legacy_prefix=None):
         fields = ('SELECT DISTINCT sessions.session, project, workspace, model, tip_anchor FROM sessions '
                   'LEFT JOIN session_projects USING (session) '
                   'LEFT JOIN session_state USING (scope, session) WHERE sessions.scope=?')
         if position:
-            for candidate in (prefix,*interrupted_prefixes):
+            for candidate in (prefix, *interrupted_prefixes, legacy_prefix):
+                if candidate is None:
+                    continue
                 current = db.execute(fields+' AND history=?', (namespace, candidate)).fetchone()
                 if current is not None:
                     return current, None
@@ -3109,7 +3150,8 @@ class CloudCliBackend:
                        for item in messages)
                 or messages[-1]['role'] != 'user'):
             return
-        _, _, _, stopped = split_desktop_interruptions([item for item in messages if item['role'] != 'system'])
+        visible = without_desktop_model_commands([item for item in messages if item['role'] != 'system'])
+        _, _, _, stopped = split_desktop_interruptions(visible)
         if not stopped:
             return
         with self.active_lock:
@@ -3138,8 +3180,12 @@ class CloudCliBackend:
         interrupted_prefixes = []
         partial_history = None
         stopped_requests = ()
+        legacy_prefix = None
         if scope:
-            messages, interrupted_prefixes, partial_history, stopped_requests = split_desktop_interruptions(messages)
+            visible = without_desktop_model_commands(messages)
+            if visible is not messages:
+                legacy_prefix = history_signature(messages[:-1], 'cloudcli')
+            messages, interrupted_prefixes, partial_history, stopped_requests = split_desktop_interruptions(visible)
         if not messages or messages[-1]['role'] != 'user':
             raise CloudCliError('CloudCLI requires a new user task after stopping', 400)
         latest = blocks(messages[-1].get('content'))
@@ -3253,7 +3299,7 @@ class CloudCliBackend:
                     return json.loads(prior[0])
                 compact_context = desktop_compact_context(messages[:-1]) if scope else None
                 saved, edit = self.session_binding(db, namespace, before, position, compact_context,
-                                                   interrupted_prefixes, partial_history)
+                                                   interrupted_prefixes, partial_history, legacy_prefix)
                 if saved:
                     payload['sessionId'], project, workspace, previous_model, _ = saved
                     if scope and self.config.get('desktopQuestions') and previous_model != model:

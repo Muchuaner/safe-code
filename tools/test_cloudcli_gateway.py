@@ -2367,29 +2367,50 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertFalse(progress.stopping.is_set())
 
     def test_switching_model_uses_the_existing_cloudcli_session(self):
-        opus = 'claude-opus-5-5'
+        sonnet, opus = 'claude-sonnet-5-5', 'claude-opus-5-5'
         self.config['models'].append(opus)
         self.enable_cloudcli_web_fixture()
-        first = conversation('Start on the configured default.')
+        first = conversation('Remember the original task.', model=opus)
         status, original = self.request(first)
         self.assertEqual(status, 200)
-        updated = [*first['messages'], {'role': 'assistant', 'content': original['content']},
-                   {'role': 'user', 'content': 'Continue on the new model.'}]
+        previous = [*first['messages'], {'role': 'assistant', 'content': original['content']}]
+
+        def switch_context(model):
+            return [
+                "<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, "
+                "and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>",
+                "<command-name>/model</command-name>\\n<command-message>model</command-message>\\n"
+                f"<command-args>{model}</command-args>",
+                f"<local-command-stdout>Set model to \`{model}\`</local-command-stdout>",
+            ]
+
         actions = []
-        events = [{'kind': 'text', 'role': 'assistant', 'content': 'The selected model replied.',
-                   'model': opus, 'sessionId': CLOUD_SESSION},
-                  {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION}]
-        payload = conversation('unused', model=opus, messages=updated)
-        with patch.object(gateway, 'cloudcli_websocket', return_value=(
-                lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
-            status, switched = self.request(payload)
-            self.assertEqual(status, 200)
-            self.assertEqual(self.request(payload), (200, switched))
+        for model, prompt, coalesced in (
+                (sonnet, 'Continue on Sonnet.', False),
+                (opus, 'Continue back on Opus.', True)):
+            switch = switch_context(model)
+            if coalesced:
+                history = [*previous, {'role': 'user', 'content':
+                           [{'type': 'text', 'text': text} for text in [*switch, prompt]]}]
+            else:
+                history = [*previous, *({'role': 'user', 'content': text} for text in [*switch, prompt])]
+            events = [{'kind': 'text', 'role': 'assistant', 'content': 'The selected model replied.',
+                       'model': model, 'sessionId': CLOUD_SESSION},
+                      {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION}]
+            payload = conversation('unused', model=model, messages=history)
+            with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                    lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
+                status, switched = self.request(payload)
+                self.assertEqual(status, 200, switched)
+                self.assertEqual(self.request(payload), (200, switched))
+            self.assertEqual(switched['model'], model)
+            self.assertEqual(actions[-1]['content'], prompt)
+            previous = [*history, {'role': 'assistant', 'content': switched['content']}]
+
         self.assertEqual(len(self.cloud.requests), 1)
         self.assertFalse(self.cloud.created_sessions)
-        self.assertEqual(len(actions), 1)
-        self.assertEqual((actions[0]['type'], actions[0]['sessionId'], actions[0]['options']['model']),
-                         ('chat.send', CLOUD_SESSION, opus))
+        self.assertEqual([(a['type'], a['sessionId'], a['options']['model']) for a in actions],
+                         [('chat.send', CLOUD_SESSION, sonnet), ('chat.send', CLOUD_SESSION, opus)])
 
     def test_edit_only_rewinds_to_a_verified_anchor_in_the_same_conversation(self):
         self.enable_cloudcli_web_fixture()

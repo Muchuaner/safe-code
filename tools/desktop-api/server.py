@@ -34,7 +34,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 16
+GATEWAY_REVISION = 17
 PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
