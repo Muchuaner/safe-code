@@ -211,8 +211,12 @@ def commit(token):
     path,record=load_pending(token)
     if not record.get('ready',record.get('applied')):raise PolicyError('deployment_busy','网络策略尚未应用。')
     policy=valid_policy(record['policy'])
-    actual=run(['curl','--noproxy','*','-4','-fsS','--connect-timeout','5','--max-time','12','https://api.ipify.org']).stdout.strip()
-    if policy.get('lockEgress') and actual!=policy['egressIp']:raise PolicyError('operation_failed','出口验证未通过：外部看到的 IP 与所选住宅出口不一致，将自动回退。')
+    probe=run(['curl','--noproxy','*','-4','-fsS','--connect-timeout','5','--max-time','12','https://api.ipify.org'],False)
+    try:actual=str(ipaddress.IPv4Address(probe.stdout.strip())) if probe.returncode==0 else ''
+    except ValueError:actual=''
+    if policy.get('lockEgress'):
+        if not actual:raise PolicyError('operation_failed','新入口 SSH 已连通，但未能从外部确认出口 IP，将回退。请检查服务器的外网连接。')
+        if actual!=policy['egressIp']:raise PolicyError('operation_failed','出口验证未通过：外部看到的 IP 与所选住宅出口不一致，将自动回退。')
     unit='''[Unit]\nDescription=Safe Code assigned IP policy\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/python3 /opt/safe-code/network.py boot\n[Install]\nWantedBy=multi-user.target\n'''
     unit_path=Path('/etc/systemd/system/safe-code-ip-policy.service')
     if unit_path.exists() and 'Safe Code assigned IP policy' not in unit_path.read_text():raise PolicyError('operation_failed','同名启动服务并非本软件创建。')

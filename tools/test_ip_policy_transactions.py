@@ -57,6 +57,22 @@ class Transactions(unittest.TestCase):
         with patch.object(n,'apply_rules'),patch.object(n,'replace_source'):n.apply(token)
         self.assertTrue(n.status(token)['ready'])
         self.assertTrue(any(args[0]=='systemd-run' and '--on-active=120s' in args for args,_ in self.commands))
+    def test_external_probe_failure_depends_on_egress_lock(self):
+        for locked in (True,False):
+            token=n.prepare({**self.policy,'lockEgress':locked})['token']
+            with patch.object(n,'apply_rules'),patch.object(n,'replace_source'):n.apply(token)
+            run=n.run
+            def offline(args,*rest,**kwargs):
+                if args[0]=='curl':return subprocess.CompletedProcess(args,28,'','timed out')
+                return run(args,*rest,**kwargs)
+            with patch.object(n,'run',offline):
+                if locked:
+                    with self.assertRaisesRegex(n.PolicyError,'未能从外部确认出口'):n.commit(token)
+                    self.assertTrue(n.rollback(token)['rolledBack'])
+                else:
+                    result=n.commit(token)
+                    self.assertTrue(result['committed'])
+                    self.assertEqual(result['observedEgress'],'')
     def test_persistence_failure_restores_previous_boot_configuration(self):
         old_policy={**self.policy,'lockIngress':False};(self.state/'ip-policy.json').write_text(json.dumps(old_policy))
         self.unit.write_text('Safe Code assigned IP policy\nold-unit');(self.opt/'network.py').write_text('old-module')

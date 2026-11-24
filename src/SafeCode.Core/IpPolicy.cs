@@ -22,24 +22,26 @@ public sealed partial class SshSession
     private async Task WaitIpPolicyAsync(string token,string ingress,CancellationToken ct)
     {
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(IpVerificationTimeout);
+        string phase="未能通过新入口建立并验证 SSH 连接。请检查新地址的 SSH 端口和服务商入站规则。";
         while(true)
         {
             if(ct.IsCancellationRequested)ct.ThrowIfCancellationRequested();
             // 独立 deadline 到期是验证超时，不是用户取消；保留可区分的错误类别。
-            if(deadline.IsCancellationRequested)throw new TimeoutException("等待新入口生效超时。");
+            if(deadline.IsCancellationRequested)throw new TimeoutException("等待新入口生效超时。"+phase);
             try
             {
                 using var probe=await ProbeIngressAsync(ingress,deadline.Token);
+                phase="新入口 SSH 已连通，但服务器尚未确认网络规则生效。";
                 using var command=probe.CreateCommand(prefix+"python3 -u "+Quote("/opt/safe-code/network-apply-"+token+".py")+" status "+Quote(token));command.CommandTimeout=TimeSpan.FromSeconds(5);
                 await command.ExecuteAsync(deadline.Token);
                 if(command.ExitStatus==0){using var doc=JsonDocument.Parse(command.Result);if(doc.RootElement.GetProperty("ready").GetBoolean())return;}
             }
             catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
-            catch(OperationCanceledException){throw new TimeoutException("等待新入口生效超时。");}
+            catch(OperationCanceledException){throw new TimeoutException("等待新入口生效超时。"+phase);}
             catch(Exception){Log?.Invoke("等待网络规则生效，正在重新验证入口…");}
             try{await Task.Delay(750,deadline.Token);}
             catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
-            catch(OperationCanceledException){throw new TimeoutException("等待新入口生效超时。");}
+            catch(OperationCanceledException){throw new TimeoutException("等待新入口生效超时。"+phase);}
         }
     }
     private async Task<T> RequestOverControlAsync<T>(string operation, object? options, CancellationToken ct)
@@ -66,6 +68,9 @@ public sealed partial class SshSession
             }
         }
     }
+    private static bool ConfirmedIpRollback(JsonElement reply) =>
+        reply.ValueKind==JsonValueKind.Object && reply.TryGetProperty("rolledBack",out var result) && result.ValueKind==JsonValueKind.True;
+
     private async Task<bool> TryRollbackIpAsync(string token,string originalIngress,string proposedIngress)
     {
         using var deadline=new CancellationTokenSource(IpRollbackTimeout);
@@ -76,7 +81,11 @@ public sealed partial class SshSession
                 using var recovery=await ProbeIngressAsync(ingress,deadline.Token);
                 using var command=recovery.CreateCommand(prefix+"python3 -u "+Quote("/opt/safe-code/network-apply-"+token+".py")+" rollback "+Quote(token));command.CommandTimeout=TimeSpan.FromSeconds(10);
                 await command.ExecuteAsync(deadline.Token);
-                if(command.ExitStatus==0)return true;
+                if(command.ExitStatus==0)
+                {
+                    using var reply=JsonDocument.Parse(command.Result);
+                    if(ConfirmedIpRollback(reply.RootElement))return true;
+                }
             }
             catch(Exception){}
         }
@@ -126,11 +135,11 @@ public sealed partial class SshSession
                 {
                     using var rollbackDeadline=CancellationTokenSource.CreateLinkedTokenSource(ct);rollbackDeadline.CancelAfter(IpSessionRollbackTimeout);
                     var result=await RequestOverControlAsync<JsonElement>("ip_rollback",new{token=prepared.Token},rollbackDeadline.Token);
-                    rollbackRequested=result.ValueKind!=JsonValueKind.Object||!result.TryGetProperty("rolledBack",out var rolledBack)||rolledBack.ValueKind!=JsonValueKind.False;
+                    rollbackRequested=ConfirmedIpRollback(result);
                 }
                 catch(Exception){}
             }
-            string suffix=applied?(rollbackRequested?"验证未通过，已执行回退。请重新连接原入口确认状态。":"验证未通过；服务器设有 120 秒独立回退保护，请稍后重新连接原入口确认状态。") :"未提交网络变更，原网络设置保留。";
+            string suffix=rollbackRequested?"验证未通过，已执行回退。请重新连接原入口确认状态。":applied?"验证未通过；服务器设有 120 秒独立回退保护，请稍后重新连接原入口确认状态。":"未收到网络变更和回退的确认，请重新连接原入口检查状态。";
             Exception cause=error;
             if(error is OperationCanceledException&&!ct.IsCancellationRequested)cause=new TimeoutException("等待新入口生效超时。",error);
             throw new InvalidOperationException(error.Message+"\n"+suffix,cause);
