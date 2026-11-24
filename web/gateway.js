@@ -120,6 +120,13 @@ function renderOverview() {
   reviewState.hidden = !review;
   reviewState.textContent = review?.enabled ? '已开启' : '关闭';
   reviewState.dataset.enabled = String(review?.enabled === true);
+  const keyQueue = snapshot.key_queue;
+  byId('gateway-key-queue').disabled = !keyQueue;
+  byId('gateway-key-queue').title = keyQueue ? '' : '更新 VPS 网关后可配置 API 排队';
+  const keyQueueState = byId('key-queue-state');
+  keyQueueState.hidden = !keyQueue;
+  keyQueueState.textContent = keyQueue?.enabled ? '已开启' : '关闭';
+  keyQueueState.dataset.enabled = String(keyQueue?.enabled === true);
   const concurrencyButton = byId('gateway-concurrency');
   concurrencyButton.disabled = !snapshot.concurrency_text;
   concurrencyButton.textContent = '处理槽位 ' + slotLabel(snapshot);
@@ -144,8 +151,11 @@ function renderOverview() {
     : '并发上限 ' + slotLabel(snapshot);
   const queue = byId('queue-strip');
   queue.hidden = false;
-  queue.dataset.active = String(running > 0);
-  byId('queue-current').textContent = running === 1 && current ? '正在处理 · ' + keyName(current)
+  const owner = keyQueue?.enabled && keyQueue.key_id && keys.find(key => key.id === keyQueue.key_id);
+  const release = owner && keyQueue.release_in;
+  queue.dataset.active = String(running > 0 || release > 0);
+  byId('queue-current').textContent = release > 0 ? keyName(owner) + ' · ' + fmt(release) + ' 秒后释放'
+    : running === 1 && current ? '正在处理 · ' + keyName(current)
     : running ? '正在处理 ' + fmt(running) + ' 个请求' : '网关空闲';
   const unlimited = unlimitedSlots(snapshot);
   const progress = byId('queue-capacity');
@@ -749,6 +759,30 @@ byId('prompt-review-form').onsubmit = async event => {
   }
 };
 
+const keyQueueDialog = byId('key-queue-dialog');
+const keyQueueEnabled = byId('key-queue-enabled');
+byId('gateway-key-queue').onclick = () => {
+  keyQueueEnabled.checked = snapshot.key_queue.enabled;
+  notice('key-queue-status', '');
+  keyQueueDialog.showModal();
+};
+byId('key-queue-form').onsubmit = async event => {
+  event.preventDefault();
+  if (operationPending) return;
+  const save = byId('save-key-queue');
+  operationPending = save.disabled = keyQueueEnabled.disabled = true;
+  notice('key-queue-status', '正在保存…');
+  try {
+    await refreshTask;
+    await manage('set_key_queue', {enabled: keyQueueEnabled.checked});
+    keyQueueDialog.close();
+    await refresh(false);
+  } catch (error) {
+    notice('key-queue-status', error.message, true);
+  } finally {
+    operationPending = save.disabled = keyQueueEnabled.disabled = false;
+  }
+};
 byId('gateway-concurrency').onclick = () => {
   const input = byId('concurrency-value');
   input.value = snapshot.concurrency_text;

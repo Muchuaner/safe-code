@@ -33,12 +33,53 @@ class DeviceError(ValueError):
     pass
 
 
+class DeviceAlreadyBound(DeviceError):
+    """The Key already belongs to another Safe Code device."""
+
+
 class DeviceOffline(DeviceError):
     """An authorized device whose return connection is unavailable."""
 
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+@contextmanager
+def pairing_lock(state, owner):
+    if not isinstance(owner, str) or not KEY_ID.fullmatch(owner):
+        raise DeviceError('Invalid Key ID')
+    folder = state/'device-locks'
+    folder.mkdir(mode=0o700, exist_ok=True)
+    fd = os.open(folder/owner, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def paired_device(state, owner, db=None):
+    """Honor one existing verified binding across both device transports."""
+    database = state/'device-bridge.sqlite3'
+    if db is None and database.is_file():
+        with closing(sqlite3.connect(database)) as connection:
+            return paired_device(state, owner, connection)
+    row = None if db is None else db.execute(
+        'SELECT id, ready FROM devices WHERE owner=? AND (ready=1 OR expires>?) ORDER BY ready DESC,rowid LIMIT 1',
+        (owner, int(time.time())),
+    ).fetchone()
+    if row and row[1]:
+        return row[0]
+    if not (state/'device-required'/owner).is_file():
+        matches = [path for path in (state/'ssh-devices').glob(owner+'-ssh-*')
+                   if SSH_DEVICE.fullmatch(path.name[len(owner)+1:]) and not path.is_symlink()]
+        if matches:
+            return min(matches).name[len(owner)+1:]
+    return row[0] if row else None
+
+
+def require_paired_device(state, owner, device):
+    if paired_device(state, owner) != device:
+        raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
 
 
 def write_file(path, content):
@@ -93,14 +134,6 @@ class OwnerHosts:
     def active_key(self, owner):
         return (self.state/'keys'/owner).is_file() and not (self.state/'device-required'/owner).is_file()
 
-    @contextmanager
-    def locked(self, target):
-        target.parent.mkdir(mode=0o700, exist_ok=True)
-        fd = os.open(target.parent/'.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'wb') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            yield
-
     def identity(self, device):
         client_id = device[4:]
         folder = self.home/'.ssh/safe-code-host'/client_id
@@ -129,7 +162,12 @@ class OwnerHosts:
             raise DeviceError('Invalid SSH device name')
         alias, identity, _ = self.identity(device)
         proof = secrets.token_urlsafe(32)
-        with self.locked(target):
+        with pairing_lock(self.state, owner):
+            target = self.path(owner, device)
+            current = paired_device(self.state, owner)
+            if current not in (None, device):
+                raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
+            target.parent.mkdir(mode=0o700, exist_ok=True)
             write_file(target, json.dumps({'proof':digest(proof),'identity':identity,'hostname':hostname.strip()}))
         return {'deviceId':device,'deviceProof':proof,'alias':alias}
 
@@ -148,13 +186,14 @@ class OwnerHosts:
 
     def chat_binding(self, owner, platform, device, proof):
         _, record = self.authenticate(owner, platform, device, proof)
+        require_paired_device(self.state, owner, device)
         alias, identity, command = self.identity(device)
         if not hmac.compare_digest(identity, record['identity']):
             raise DeviceError('The SSH device was changed')
         return {'id':device,'platform':platform,'hostname':record['hostname'],'alias':alias,'command':command}
 
     def revoke(self, owner, platform, device, proof):
-        with self.locked(self.path(owner, device)):
+        with pairing_lock(self.state, owner):
             target, _ = self.authenticate(owner, platform, device, proof)
             target.unlink(missing_ok=True)
 
@@ -207,14 +246,16 @@ class Devices:
         return (isinstance(proof, str) and PROOF.fullmatch(proof)
                 and hmac.compare_digest(row['proof'], digest(proof)))
 
-    def enrolled(self, owner, platform, device, proof):
+    def enrolled(self, owner, platform, device, proof, *, require_current=True):
         if not isinstance(device, str) or not DEVICE.fullmatch(device) or not self.permitted(owner):
             raise DeviceError('Device pairing is unavailable')
         with closing(self.connect()) as db:
             row = db.execute('SELECT * FROM devices WHERE id=? AND owner=? AND platform=?',
                              (device, owner, platform)).fetchone()
-        if row is None or not self.proof_matches(row, proof):
-            raise DeviceError('Unknown device pairing')
+            if row is None or not self.proof_matches(row, proof):
+                raise DeviceError('Unknown device pairing')
+            if require_current and paired_device(self.state, owner, db) != device:
+                raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
         return row
 
     def prepare(self, owner, platform, hostname):
@@ -227,15 +268,17 @@ class Devices:
         alias = ('win-' if platform == 'windows' else 'mac-')+device
         proof = secrets.token_urlsafe(32)
         folder = self.ssh_folder(device)
-        with closing(self.connect()) as db, db:
+        with pairing_lock(self.state, owner), closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
+            if not self.permitted(owner):
+                raise DeviceError('Device pairing is unavailable')
             pending = db.execute('SELECT * FROM devices WHERE owner=? AND ready=0 AND expires<=?',
                                  (owner, int(time.time()))).fetchall()
             for row in pending:
                 self.remove_identity(row['id'])
                 db.execute('DELETE FROM devices WHERE id=?', (row['id'],))
-            if db.execute('SELECT COUNT(*) FROM devices WHERE owner=?', (owner,)).fetchone()[0] >= 8:
-                raise DeviceError('Device pairing capacity reached for this Key')
+            if paired_device(self.state, owner, db) is not None:
+                raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
             occupied = {row[0] for row in db.execute('SELECT port FROM devices')}
             port = next((p for p in PORTS if p not in occupied), None)
             if port is None:
@@ -346,6 +389,8 @@ class Devices:
             row = db.execute('SELECT * FROM devices WHERE id=? AND expires>?',
                              (device, int(time.time()))).fetchone()
         if row is None or not self.permitted(row['owner']) or not self.proof_matches(row, proof):
+            return False
+        if paired_device(self.state, row['owner']) != device:
             return False
         if op == 'NewProxy':
             return (payload.get('proxy_type') == 'tcp' and payload.get('proxy_name') == row['alias']

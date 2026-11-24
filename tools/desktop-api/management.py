@@ -338,7 +338,10 @@ class Capacity:
 
 class RequestQueue:
     """Shared Messages capacity, FIFO waiters, per-key and global queue bounds."""
-    def __init__(self, registry, max_wait=45, max_queue=12, per_key=2, concurrency=1):
+    key_idle_seconds = 60
+    key_wait_seconds = 600
+
+    def __init__(self, registry, max_wait=45, max_queue=12, per_key=2, concurrency=1, key_mode=False):
         self.registry = registry
         self.max_wait, self.max_queue, self.per_key = max_wait, max_queue, per_key
         self.changed = threading.Condition()
@@ -346,6 +349,9 @@ class RequestQueue:
         self.active = {}
         self.concurrency = concurrency
         self.recent = defaultdict(deque)
+        self.key_mode = key_mode
+        self.key_owner = None
+        self.key_release = None
 
     def snapshot(self):
         with self.changed:
@@ -360,27 +366,64 @@ class RequestQueue:
         with self.changed:
             self.changed.notify_all()
 
+    def set_key_mode(self, enabled):
+        with self.changed:
+            if self.key_mode == enabled:
+                return
+            self.key_mode = enabled
+            owners = set(self.active.values())
+            self.key_owner = next(iter(owners)) if enabled and len(owners) == 1 else None
+            self.key_release = None
+            self.changed.notify_all()
+
+    def expire_key_owner(self, now):
+        if self.key_release is not None and now >= self.key_release:
+            self.key_owner = self.key_release = None
+
+    def key_status(self):
+        with self.changed:
+            now = time.monotonic()
+            self.expire_key_owner(now)
+            return {
+                'enabled': self.key_mode, 'key_id': self.key_owner, 'idle_seconds': self.key_idle_seconds,
+                'release_in': max(0, int(self.key_release-now+0.999)) if self.key_release is not None else None,
+            }
+
+    def eligible(self, ticket, now):
+        if self.concurrency and len(self.active) >= self.concurrency:
+            return False
+        if not self.key_mode:
+            return self.waiters[0] == ticket
+        self.expire_key_owner(now)
+        if self.key_owner is None:
+            # When enabled during concurrent traffic, let the existing batch drain.
+            return not self.active and self.waiters[0] == ticket
+        key = ticket[1]
+        return key == self.key_owner and next(queued for queued in self.waiters if queued[1] == key) == ticket
+
     @contextmanager
-    def slot(self, key, disconnected=lambda:False):
+    def slot(self, key, disconnected=lambda:False, *, on_wait=None):
         ticket = (object(), key)
         with self.changed:
             threshold = time.monotonic()-60
             self.recent = defaultdict(deque, ((k,t) for k,t in self.recent.items() if t and t[-1]>threshold))
-            if self.concurrency and (len(self.waiters) >= self.max_queue or
+            if (self.concurrency or self.key_mode) and (len(self.waiters) >= self.max_queue or
                                      sum(k == key for _, k in self.waiters) >= self.per_key):
                 raise GatewayError('Safe Code API queue is full; retry later', 429)
             self.waiters.append(ticket)
-            deadline = time.monotonic() + self.max_wait
-            try:
-                while True:
+            queued = time.monotonic()
+        try:
+            while True:
+                with self.changed:
                     now = time.monotonic()
+                    deadline = queued + (max(self.max_wait, self.key_wait_seconds) if self.key_mode else self.max_wait)
                     if not self.registry.enabled(key):
                         raise GatewayError('API Key has expired or been revoked', 401)
                     if disconnected():
                         raise ConnectionAbortedError()
                     if now>=deadline:
                         raise GatewayError('Safe Code API queue wait timed out; retry later', 429)
-                    if (not self.concurrency or len(self.active) < self.concurrency) and self.waiters[0] == ticket:
+                    if self.eligible(ticket, now):
                         if self.registry.balance_exhausted(key):
                             raise GatewayError('Safe Code API Key balance exhausted', 402)
                         recent = self.recent[key]
@@ -392,10 +435,16 @@ class RequestQueue:
                         recent.append(now)
                         if len(recent)>600:
                             recent.popleft()
+                        if self.key_mode:
+                            self.key_owner = key
+                            self.key_release = None
                         self.active[ticket] = key
                         break
                     self.changed.wait(min(0.5, deadline-now))
-            finally:
+                if on_wait is not None and self.key_mode:
+                    on_wait()
+        finally:
+            with self.changed:
                 self.waiters.remove(ticket)
                 self.changed.notify_all()
         try:
@@ -403,6 +452,9 @@ class RequestQueue:
         finally:
             with self.changed:
                 del self.active[ticket]
+                if self.key_mode and not self.active:
+                    self.key_owner = key
+                    self.key_release = time.monotonic() + self.key_idle_seconds
                 self.changed.notify_all()
 
 

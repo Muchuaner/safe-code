@@ -1412,6 +1412,73 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertFalse(listed()['expired'])
         self.assertEqual(request('/v1/messages', 'vendor/model')[0], 200)
 
+    def test_public_device_control_rejects_another_machine_until_unbound(self):
+        state = self.home/'single-public-device'
+        (state/'keys').mkdir(parents=True)
+        token = 'a'*43
+        key = hashlib.sha256(token.encode()).hexdigest()
+        (state/'keys'/key).touch()
+        (state/public_gateway.PUBLIC_ENABLED).touch()
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                        '-subj', '/CN=Fixture', '-keyout', state/'key.pem', '-out', state/'cert.pem'],
+                       check=True, capture_output=True, timeout=5)
+        public = public_gateway.PublicServer(state, {'bind': '127.0.0.1', 'port': 0, 'deviceFrpPort': 45300})
+        public.devices = public_gateway.Devices(state, home=state)
+        public.devices.set_access(key, True)
+        self.start(public)
+
+        def request(path, data, platform='windows'):
+            with closing(http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=4,
+                                                      context=ssl._create_unverified_context())) as connection:
+                connection.request('POST', path, json.dumps(data), {'Authorization':'Bearer '+token,
+                                                                   'X-SafeCode-Platform':platform})
+                reply = connection.getresponse()
+                return reply.status, json.loads(reply.read())
+
+        control = '/v1/device-control'
+        with patch.object(public_gateway, 'device_service_problem', return_value=None):
+            status, first = request(control, {'action':'prepare', 'accepted':True, 'hostname':'First PC'})
+            self.assertEqual(status, 200)
+            status, second = request(control, {'action':'prepare', 'accepted':True, 'hostname':'Second Mac'}, 'macos')
+            self.assertEqual((status, second['error']['code']), (409, 'device_already_bound'))
+            status, bare = request('/v1/messages', conversation('copied Key without proof'))
+            self.assertEqual((status, bare['error']['code']), (403, 'device_pairing_required'))
+            revoke = {'action':'revoke', 'deviceId':first['deviceId'], 'deviceProof':first['deviceProof']}
+            self.assertEqual(request(control, revoke)[0], 200)
+            status, replacement = request(control, {'action':'prepare', 'accepted':True, 'hostname':'Second Mac'}, 'macos')
+            self.assertEqual(status, 200)
+            self.assertNotEqual(first['deviceId'], replacement['deviceId'])
+        self.assertFalse(self.cloud.requests)
+
+    def test_key_queue_sends_ping_before_headers_would_time_out(self):
+        state = self.home/'key-queue-wire'
+        (state/'keys').mkdir(parents=True)
+        tokens = ('a'*43, 'b'*43)
+        keys = tuple(hashlib.sha256(token.encode()).hexdigest() for token in tokens)
+        for key in keys:
+            (state/'keys'/key).touch()
+        (state/public_gateway.PUBLIC_ENABLED).touch()
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                        '-subj', '/CN=Fixture', '-keyout', state/'key.pem', '-out', state/'cert.pem'],
+                       check=True, capture_output=True, timeout=5)
+        public = public_gateway.PublicServer(state, {'bind':'127.0.0.1','port':0})
+        self.start(public)
+        public.manage({'action':'set_key_queue','enabled':True})
+        public.queue.key_idle_seconds = .08
+        with closing(http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=9,
+                                                  context=ssl._create_unverified_context())) as connection:
+            with public.queue.slot(keys[0]):
+                connection.request('POST', '/v1/messages', json.dumps(conversation('Wait politely.',stream=True)),
+                                   {'Authorization':'Bearer '+tokens[1]})
+                reply = connection.getresponse()
+                self.assertEqual(reply.status,200)
+                self.assertEqual(reply.readline(),b'event: ping\n')
+                self.assertFalse(self.cloud.requests)
+            events = reply.read()
+        self.assertEqual(events.count(b'event: message_start'), 1)
+        self.assertIn(b'event: message_stop', events)
+        self.assertEqual(len(self.cloud.requests), 1)
+
     def test_public_gateway_reviews_only_the_latest_user_prompt_before_dispatch(self):
         state = self.home/'public-review'
         (state/'keys').mkdir(parents=True)

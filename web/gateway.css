@@ -47,8 +47,8 @@ h2 { font-size: var(--type-large); font-weight: 670; }
 .muted, small { color: var(--muted); font-size: var(--type-small); }
 .actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 #gateway-prompt-review { display: inline-flex; align-items: center; gap: 6px; }
-#prompt-review-state { padding: 1px 5px; border-radius: 4px; color: var(--muted); background: #eef1ee; font-size: var(--type-small); }
-#prompt-review-state[data-enabled="true"] { color: var(--accent); background: var(--accent-wash); }
+:is(#prompt-review-state, #key-queue-state) { padding: 1px 5px; border-radius: 4px; color: var(--muted); background: #eef1ee; font-size: var(--type-small); }
+:is(#prompt-review-state, #key-queue-state)[data-enabled="true"] { color: var(--accent); background: var(--accent-wash); }
 .metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 11px; }
 .metrics > div { display: grid; gap: 4px; min-width: 0; padding: 13px 15px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }
 .metrics > div:last-child { background: var(--accent-wash); border-color: #cedfd2; }

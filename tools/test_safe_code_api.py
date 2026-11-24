@@ -72,6 +72,43 @@ class SafeCodeApiTest(unittest.TestCase):
                 self.fail('timed out')
             time.sleep(0.01)
 
+    def test_key_queue_waits_a_full_minute_after_owner_last_request(self):
+        first, second = self.digests[:2]
+        queue = RequestQueue(self.registry, concurrency=0, key_mode=True)
+        clock = [100.0]
+        admitted = threading.Event()
+        canceled = threading.Event()
+
+        def wait_for_next():
+            with queue.slot(second, canceled.is_set):
+                admitted.set()
+
+        with patch('management.time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time)), ThreadPoolExecutor(1) as pool:
+            try:
+                with queue.slot(first):
+                    request = pool.submit(wait_for_next)
+                    self.wait_for(lambda: queue.snapshot()[1] == {second: 1})
+                    with queue.slot(first):
+                        self.assertEqual(queue.snapshot()[0], {first: 2})
+                    clock[0] += 9
+                    self.assertFalse(admitted.is_set())
+                self.assertEqual(queue.key_status()['release_in'], 60)
+                clock[0] += 59
+                queue.wake()
+                self.assertFalse(admitted.is_set())
+                self.assertEqual(queue.key_status()['release_in'], 1)
+                with queue.slot(first):
+                    self.assertFalse(admitted.is_set())
+                self.assertEqual(queue.key_status()['release_in'], 60)
+                clock[0] += 60
+                queue.wake()
+                request.result(timeout=2)
+                self.assertTrue(admitted.is_set())
+                self.assertEqual(queue.key_status()['key_id'], second)
+            finally:
+                canceled.set()
+                queue.wake()
+
     def test_official_rates_and_historical_migration(self):
         self.assertEqual(estimate('claude-opus-5-5[1m]', [1_000_000]*4, one_hour_writes=500_000),
                          (30_700_000_000, 0))
@@ -646,6 +683,12 @@ if sys.stdin.buffer.read(1) == b'\r':
                     self.assertEqual(manage('public_status', runtime=True)['subscription'], value)
                     lookup.assert_called_once()
                 self.assertEqual(runtime['concurrency'], 0)
+                self.assertFalse(manage('list')['key_queue']['enabled'])
+                self.assertIn('error', admin_request('set_key_queue', enabled='true'))
+                self.assertTrue(manage('set_key_queue', enabled=True)['enabled'])
+                with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0}) as queued:
+                    self.assertTrue(queued.manage({'action':'list'})['key_queue']['enabled'])
+                self.assertFalse(manage('set_key_queue', enabled=False)['enabled'])
                 with ExitStack() as slots:
                     for _ in range(35):
                         slots.enter_context(public.queue.slot(legacy_id))

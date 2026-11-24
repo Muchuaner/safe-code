@@ -166,6 +166,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                         {
                             "device_not_configured" => "此 VPS 尚未安装私有设备服务。请在「网关设置」升级或修复网关。",
                             "device_not_allowed" => "此 Key 没有设备配对权限。请让签发人在「管理网关」将接入用途改为「Safe Code 桌面接入」。",
+                            "device_already_bound" => "这把 Key 已绑定一台 Safe Code 设备。请先在原设备停用接入，或联系签发人处理。",
                             "device_auth_unavailable" => "VPS 的设备鉴权服务未就绪。请在「网关设置」运行故障修复。",
                             "device_frp_unavailable" => "VPS 的私有 FRP 服务未就绪。请在「网关设置」运行故障修复。",
                             "device_ssh_verification_failed" => "VPS 未能验证 SSH 回连。请检查本机远程登录权限，再重新授权。",

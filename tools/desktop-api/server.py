@@ -26,14 +26,16 @@ from urllib.parse import urlsplit
 
 from claude_usage import read_subscription
 from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_MESSAGES_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
-from device_bridge import DeviceError, DeviceOffline, Devices, OwnerHosts, SSH_DEVICE, read_json, device_service_problem
+from device_bridge import (DeviceAlreadyBound, DeviceError, DeviceOffline, Devices, OwnerHosts, SSH_DEVICE,
+                           paired_device, read_json, device_service_problem)
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
 from prompt_review import PromptReviewer
 
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 12
+GATEWAY_REVISION = 13
+PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
 ACTIVATION_CODE_SHA256 = bytes.fromhex('89debb851e3fc69c8e163a3b6462a3493e93d38ae8cf0132e419bd9e0b32d2b9')
@@ -273,8 +275,11 @@ class PublicHandler(Handler):
                        active=min(1000000, sum(active.values())), waiting=min(1000000, sum(waiting.values())),
                        slots=min(1000000, slots))
         if device is None and proof is None:
-            if (self.headers.get('X-SafeCode-Client') == 'safecode-desktop'
-                    or (self.server.root/'device-required'/self.digest).is_file()):
+            try:
+                required = self.requires_device()
+            except (OSError, sqlite3.Error):
+                return self.reject_device_message(503, '暂时无法检查本机设备状态，请稍后重试。', 'device_state_unavailable')
+            if required:
                 return self.reject_device_message(403, '请先在 Safe Code 完成本机设备配对。', 'device_pairing_required')
         else:
             diagnostic(stage='device_check')
@@ -287,13 +292,41 @@ class PublicHandler(Handler):
             except DeviceOffline:
                 return self.reject_device_message(503, '本机连接暂不可用。请在 Safe Code 恢复设备连接后继续。',
                                                   'device_offline')
+            except DeviceAlreadyBound as error:
+                return self.reject_device_message(409, str(error), 'device_already_bound')
             except DeviceError:
                 return self.reject_device_message(403, '本机设备授权无效。请在 Safe Code 重新验证设备。',
                                                   'device_pairing_rejected')
-            except sqlite3.Error:
+            except (OSError, sqlite3.Error):
                 return self.reject_device_message(503, '暂时无法检查本机设备状态，请稍后重试。',
                                                   'device_state_unavailable')
         super().handle_messages()
+
+    def requires_device(self):
+        return (self.headers.get('X-SafeCode-Client') == 'safecode-desktop'
+                or (self.server.root/'device-required'/self.digest).is_file()
+                or paired_device(self.server.root, self.digest) is not None)
+
+    def verify_admitted_device(self):
+        if not self.device:
+            if self.requires_device():
+                raise GatewayError('这把 Key 已绑定设备，请从原设备发起请求。', 403)
+            return
+        device = self.device['id']
+        proof = self.headers.get('X-SafeCode-Device-Proof')
+        try:
+            if SSH_DEVICE.fullmatch(device):
+                if paired_device(self.server.root, self.digest) != device:
+                    raise DeviceAlreadyBound('设备绑定已变更')
+                self.server.owner_hosts.authenticate(self.digest, self.platform, device, proof)
+            else:
+                row = self.server.devices.enrolled(self.digest, self.platform, device, proof)
+                if row['expires'] <= time.time():
+                    raise DeviceOffline('设备连接已超时')
+        except DeviceOffline as error:
+            raise GatewayError(str(error), 503) from None
+        except DeviceError:
+            raise GatewayError('设备授权已失效，请在 Safe Code 重新验证设备。', 403) from None
 
     def reject_device_message(self, status, message, code=None):
         # Read a bounded request before closing TLS so the rejection body reaches the relay.
@@ -342,7 +375,8 @@ class PublicHandler(Handler):
                 if request.get('accepted') is not True:
                     raise DeviceError('Local control consent is required')
                 return self.reply(200, devices.prepare(self.digest, self.platform, request.get('hostname')))
-            row = devices.enrolled(self.digest, self.platform, request.get('deviceId'), request.get('deviceProof'))
+            row = devices.enrolled(self.digest, self.platform, request.get('deviceId'), request.get('deviceProof'),
+                                   require_current=action != 'revoke')
             if action == 'verify':
                 try:
                     command = devices.configure(row, request.get('username'), request.get('hostKey'))
@@ -357,6 +391,8 @@ class PublicHandler(Handler):
                 devices.revoke(row)
                 return self.reply(200, {'revoked': True})
             raise DeviceError('Unknown device action')
+        except DeviceAlreadyBound as error:
+            return self.device_error(409, str(error), 'device_already_bound')
         except (DeviceError, ValueError, TypeError):
             return self.device_error(400, 'SafeCode could not apply the device request')
         except (OSError, sqlite3.Error):
@@ -384,7 +420,10 @@ class PublicHandler(Handler):
         record = {'model': model, 'outcome': 'success', 'status': 200, 'wait_ms': 0, 'duration_ms': None}
         diagnostic(stage='gateway_queue')
         try:
-            with self.server.queue.slot(self.digest, lambda: peer_disconnected(self.connection)):
+            stream = options.get('stream')
+            with self.server.queue.slot(self.digest, lambda: peer_disconnected(self.connection),
+                                        on_wait=stream.queue_ping if stream is not None else None):
+                self.verify_admitted_device()
                 started = time.monotonic()
                 diagnostic(stage='gateway_validation', waitMs=round((started-enqueued)*1000))
                 manager = self.manager
@@ -460,7 +499,8 @@ class PublicServer(ThreadingHTTPServer):
             concurrency = int((root/PUBLIC_CONCURRENCY).read_text())
         except (FileNotFoundError, ValueError):
             concurrency = 0
-        self.queue = RequestQueue(self.registry, concurrency=max(0, concurrency))
+        self.queue = RequestQueue(self.registry, concurrency=max(0, concurrency),
+                                  key_mode=(root/PUBLIC_KEY_QUEUE).is_file())
         # CLI turns can retain their processes between HTTP requests while awaiting tools.
         self.turns = Capacity(lambda: self.queue.concurrency + 2 if self.queue.concurrency else 0)
         self.webfetch_turns = Capacity(lambda: self.queue.concurrency)
@@ -551,6 +591,17 @@ class PublicServer(ThreadingHTTPServer):
             return {'enabled': self.public_enabled, 'backend': 'cloudcli', 'gatewayRevision': GATEWAY_REVISION}
         if not self.public_enabled:
             raise ValueError(PUBLIC_DISABLED_MESSAGE)
+        if operation == 'set_key_queue':
+            enabled = request.get('enabled')
+            if type(enabled) is not bool:
+                raise ValueError('请选择是否开启 API 排队。')
+            with self.lock:
+                if enabled:
+                    atomic_write(self.root/PUBLIC_KEY_QUEUE, '1\n')
+                else:
+                    (self.root/PUBLIC_KEY_QUEUE).unlink(missing_ok=True)
+                self.queue.set_key_mode(enabled)
+                return self.queue.key_status()
         if operation == 'set_prompt_review':
             with self.lock:
                 return self.review_prompt.update(request, atomic_write)
@@ -620,7 +671,8 @@ class PublicServer(ThreadingHTTPServer):
                                   'unpriced_tokens': sum(key['unpriced_tokens'] for key in keys)},
                       'active':bool(active),'active_count':sum(active.values()),'waiting':sum(waiters.values()),
                       'concurrency':concurrency,'concurrency_text':str(concurrency),'queue_limit':self.queue.max_queue,
-                      'wait_limit':self.queue.max_wait, 'prompt_review':self.review_prompt.status()}
+                      'wait_limit':max(self.queue.max_wait, self.queue.key_wait_seconds) if self.queue.key_mode else self.queue.max_wait,
+                      'key_queue':self.queue.key_status(), 'prompt_review':self.review_prompt.status()}
             if request.get('details') is True:
                 result.update(self.registry.overview(), recent=self.registry.recent_requests())
                 result['subscription'] = self.subscription
@@ -846,6 +898,8 @@ if __name__=='__main__':
             options = json.loads(sys.stdin.buffer.read(4096))
             binding = OwnerHosts(args.state).bind(options['keyId'], options['hostClientId'], options['hostname'])
             print(json.dumps({'value':binding}))
+        except DeviceAlreadyBound as error:
+            print(json.dumps({'error':str(error)},ensure_ascii=False))
         except (OSError, ValueError, KeyError, TypeError):
             print(json.dumps({'error':'无法将 Key 绑定到已验证的本机远程控制，请重新验证该设备。'}))
     elif args.command=='admin':

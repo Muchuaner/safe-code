@@ -3741,6 +3741,7 @@ class CloudCliMessagesStream:
         self.model = model
         self.message_id = 'msg_'+uuid.uuid4().hex
         self.started = False
+        self.queued = False
         self.index = 0
         self.open_kind = None
         self.wire_lock = threading.Lock()
@@ -3748,7 +3749,7 @@ class CloudCliMessagesStream:
 
     def ping_if_idle(self, finished):
         with self.wire_lock:
-            if finished.is_set() or not self.started or time.monotonic()-self.last_output < CLOUDCLI_SSE_PING_INTERVAL:
+            if finished.is_set() or not (self.started or self.queued) or time.monotonic()-self.last_output < CLOUDCLI_SSE_PING_INTERVAL:
                 return True
             try:
                 self.handler.send_sse('ping', {'type': 'ping'})
@@ -3756,6 +3757,13 @@ class CloudCliMessagesStream:
                 return True
             except OSError:
                 return False
+
+    def queue_ping(self):
+        if time.monotonic()-self.last_output >= 5:
+            self.handler.start_sse()
+            self.handler.send_sse('ping', {'type': 'ping'})
+            self.queued = True
+            self.last_output = time.monotonic()
 
     def disconnected(self):
         connection = self.handler.connection
@@ -3829,6 +3837,7 @@ class CloudCliMessagesStream:
 
 
 class Handler(BaseHTTPRequestHandler):
+    sse_started = False
     def log_message(self, *args):pass
 
     @property
@@ -3870,11 +3879,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def start_sse(self):
+        if self.sse_started:
+            return
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
         self.send_header('X-Accel-Buffering', 'no')
         self.end_headers()
+        self.sse_started = True
 
     def send_sse(self, event, payload):
         self.wfile.write(('event: '+event+'\ndata: '+json.dumps(payload, ensure_ascii=False)+'\n\n').encode())
@@ -3883,7 +3895,7 @@ class Handler(BaseHTTPRequestHandler):
     def message_error(self, stream, code, error_type, message):
         payload = {'type': 'error', 'error': {'type': error_type, 'message': message}}
         try:
-            if stream is not None and stream.started:
+            if stream is not None and self.sse_started:
                 report = self.diagnostic_result(code, error_type)
                 if report is not None:
                     payload['safeCodeDiagnostic'] = report
