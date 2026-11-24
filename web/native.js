@@ -1076,6 +1076,20 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     const keyListDialog=$('#key-list-dialog'), keyList=$('#key-list'), keyForm=$('#key-add-form');
     const keyMessage=$('#key-list-status');
     let libraryBusy=false, switchPending=false, listGeneration=0;
+    let editingKeyId=null;
+    function editKeyForm(entry){
+      editingKeyId=entry?.id??null;
+      keyForm.reset();
+      keyForm.hidden=false;
+      const code=$('#key-code'), label=$('#key-label');
+      code.hidden=code.labels[0].hidden=!!entry;
+      code.required=!entry;
+      label.labels[0].textContent=entry?'编辑备注':'名称';
+      label.value=entry?.name??'';
+      keyForm.querySelector('[type=submit]').textContent=entry?'保存备注':'保存 Key';
+      keyMessage.textContent='';
+      label.focus();label.select();
+    }
     function lockLibrary(busy){
       libraryBusy=busy;
       for(const field of keyListDialog.querySelectorAll('button,input'))field.disabled=busy;
@@ -1090,7 +1104,12 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         const row=document.createElement('div'), info=document.createElement('div');
         row.className='key-row'+(entry.running?' current':'');
         const name=document.createElement('strong'), balance=document.createElement('small');
-        name.textContent=entry.name;balance.textContent='余额查询中…';info.append(name,balance);
+        const heading=document.createElement('div'), edit=document.createElement('button');
+        heading.className='key-row-name';edit.className='text-button';edit.type='button';
+        name.textContent=entry.name;edit.textContent='编辑备注';
+        edit.setAttribute('aria-label','编辑备注：'+entry.name);
+        edit.onclick=()=>editKeyForm(entry);
+        heading.append(name,edit);balance.textContent='余额查询中…';info.append(heading,balance);
         const action=document.createElement(entry.running?'span':'button');
         action.className=entry.running?'key-current':'key-secondary';
         action.textContent=entry.running?'正在使用':'切换';
@@ -1156,13 +1175,15 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#key-list-close').onclick=()=>keyListDialog.close();
     keyListDialog.addEventListener('cancel',event=>{if(libraryBusy)event.preventDefault();});
     keyListDialog.addEventListener('close',()=>{keyForm.reset();listGeneration++;});
-    $('#key-add').onclick=()=>{keyForm.hidden=false;$('#key-label').focus();};
+    $('#key-add').onclick=()=>editKeyForm(null);
     $('#key-add-cancel').onclick=()=>{keyForm.hidden=true;keyForm.reset();};
     keyForm.onsubmit=async event=>{
       event.preventDefault();if(libraryBusy)return;
       lockLibrary(true);
       try{
-        await native('desktopKey.save',{name:$('#key-label').value.trim(),key:$('#key-code').value.trim()});
+        const name=$('#key-label').value.trim();
+        if(editingKeyId)await native('desktopKey.rename',{id:editingKeyId,name});
+        else await native('desktopKey.save',{name,key:$('#key-code').value.trim()});
         keyForm.reset();keyForm.hidden=true;keyMessage.textContent='';
         await loadKeyList();
       }catch(error){keyMessage.textContent=error.message;}

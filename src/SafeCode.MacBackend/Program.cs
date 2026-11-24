@@ -235,6 +235,9 @@ internal sealed class MacBackend : IDisposable
             case "desktopKey.save":
                 await KeyAccess().SaveKeyAsync(Read("key"),Read("name"),ct);
                 return true;
+            case "desktopKey.rename":
+                await KeyAccess().RenameKeyAsync(Read("id"),Read("name"),ct);
+                return true;
             case "desktopKey.forget":
                 await KeyAccess().ForgetKeyAsync(Read("id"),ct);
                 return true;

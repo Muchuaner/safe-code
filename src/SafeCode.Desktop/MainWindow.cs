@@ -430,6 +430,9 @@ public sealed class MainWindow : Window
             case "desktopKey.save":
                 await KeyAccess.SaveKeyAsync(Read("key"),Read("name"),lifetime.Token);
                 return true;
+            case "desktopKey.rename":
+                await KeyAccess.RenameKeyAsync(Read("id"),Read("name"),lifetime.Token);
+                return true;
             case "desktopKey.forget":
                 await KeyAccess.ForgetKeyAsync(Read("id"),lifetime.Token);
                 return true;

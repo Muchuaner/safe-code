@@ -30,6 +30,8 @@ with sync_playwright() as pw:
             case 'desktopKey.balance':result={usedNanos:1200000000,remainingNanos:98800000000,models:[]};break;
             case 'desktopKey.list':result=keys.map(k=>({...k,running:k.id===current,current:k.id===current}));break;
             case 'desktopKey.save':keys.push({id:'second',name:args.name});result=true;break;
+            case 'desktopKey.rename':
+              keys.find(key=>key.id===args.id).name=args.name;result=true;break;
             case 'desktopKey.savedBalance':result={remainingNanos:args.id==='first'?98800000000:null};break;
             case 'desktopKey.enable':
               if(window.failSwitch)error='目标网关暂不可用';
@@ -68,24 +70,36 @@ with sync_playwright() as pw:
     expect(rows.nth(0)).to_contain_text("余额 $98.80")
     expect(rows.nth(1)).to_contain_text("不限额")
     expect(rows.nth(0)).to_contain_text("正在使用")
+    for old, new in (("测试网关", "本地测试"), ("VPS 环境", "工作网关")):
+        page.get_by_role("button", name="编辑备注："+old).click()
+        expect(page.locator("#key-code")).to_be_hidden()
+        expect(page.locator("#key-label")).to_have_value(old)
+        page.locator("#key-label").fill(new)
+        page.get_by_role("button", name="保存备注").click()
+        expect(page.get_by_role("button", name="编辑备注："+new)).to_be_visible()
+    page.locator("#key-list-close").click()
+    picker.click()
+    expect(rows.nth(0)).to_contain_text("本地测试")
+    expect(rows.nth(0)).to_contain_text("正在使用")
+    assert page.evaluate("launches===0")
     if args.screenshots:
         page.screenshot(path=str(args.screenshots / "key-list.png"))
     page.evaluate("window.failSwitch=true")
-    page.get_by_role("button", name="切换到 VPS 环境").click()
+    page.get_by_role("button", name="切换到 工作网关").click()
     expect(page.locator("#key-list-status")).to_have_text("目标网关暂不可用")
     assert page.evaluate("launches===0")
     page.evaluate("window.failSwitch=false")
-    page.get_by_role("button", name="切换到 VPS 环境").click()
+    page.get_by_role("button", name="切换到 工作网关").click()
     expect(page.locator("#host-dialog")).to_be_visible()
     page.locator("#host-close").click()
     expect(rows.nth(0)).to_contain_text("正在使用")
-    page.get_by_role("button", name="切换到 VPS 环境").click()
+    page.get_by_role("button", name="切换到 工作网关").click()
     page.locator("#host-risk").check()
     page.locator("#host-enable").click()
     expect(page.locator("#key-list-dialog")).not_to_be_visible()
     picker.click()
     expect(rows.nth(1)).to_contain_text("正在使用")
-    page.get_by_role("button", name="切换到 测试网关").click()
+    page.get_by_role("button", name="切换到 本地测试").click()
     page.wait_for_function("launches===2")
     assert not errors, errors
     context.close()

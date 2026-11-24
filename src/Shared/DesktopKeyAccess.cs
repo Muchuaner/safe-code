@@ -430,10 +430,28 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         finally{gate.Release();}
     }
-    internal async Task SaveKeyAsync(string code,string name,CancellationToken ct)
+    private static string KeyName(string name)
     {
         name=name.Trim();
         if(name.Length is 0 or >64)throw new InvalidOperationException("请输入 1 至 64 个字符的 Key 名称。");
+        return name;
+    }
+    internal async Task RenameKeyAsync(string id,string name,CancellationToken ct)
+    {
+        name=KeyName(name);
+        await gate.WaitAsync(ct);
+        try
+        {
+            var entries=ReadEntries();
+            var item=FindEntry(entries,id);
+            entries[entries.IndexOf(item)]=item with {Name=name};
+            WriteEntries(entries);
+        }
+        finally{gate.Release();}
+    }
+    internal async Task SaveKeyAsync(string code,string name,CancellationToken ct)
+    {
+        name=KeyName(name);
         var ticket=Ticket.Parse(code.Trim());
         await gate.WaitAsync(ct);
         try

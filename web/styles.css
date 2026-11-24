@@ -480,3 +480,7 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
 #key-list-status{color:var(--green);margin:8px 0;font-size:var(--type-small)}
 #key-list-status:empty{display:none}
 .key-row-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}
+
+.key-row-name{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.key-row-name .text-button{font-size:var(--type-small);white-space:nowrap}
+#key-add-form [hidden]{display:none!important}
