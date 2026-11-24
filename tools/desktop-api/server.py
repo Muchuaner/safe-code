@@ -29,12 +29,13 @@ from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_P
 from device_bridge import (DeviceAlreadyBound, DeviceError, DeviceOffline, Devices, OwnerHosts, SSH_DEVICE,
                            paired_device, read_json, device_service_problem)
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
+from pricing import usage_price
 from prompt_review import PromptReviewer
 
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 18
+GATEWAY_REVISION = 19
 PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
@@ -497,6 +498,11 @@ class PublicServer(ThreadingHTTPServer):
         self.lock = threading.Lock()
         self.usage_lock = threading.Lock()
         self.subscription = {'state': 'unavailable', 'windows': {}}
+        self.subscription_path = root/'subscription-snapshot.json'
+        try:
+            self.subscription = self.subscription_snapshot(json.loads(self.subscription_path.read_text()))
+        except (OSError, ValueError):
+            pass
         self.registry = KeyRegistry(root)
         self.catalog_backend = None
         self.registry.prune_requests()
@@ -572,12 +578,70 @@ class PublicServer(ThreadingHTTPServer):
                 folder.mkdir(mode=0o700, parents=True, exist_ok=True)
                 m = PublicManager(folder, {**self.config, 'instance':digest[:32], 'clientPlatform':platform,
                                            'pairedDevice':device}, review_prompt=self.review_prompt)
+                m.account_footer = lambda model, usage: self.account_footer(digest, model, usage)
                 if m.cloudcli:
                     m.cloudcli.parallel = True
                 m.live_slots = self.turns
                 m.webfetch_slots = self.webfetch_turns
                 self.accounts[identity] = m
             return self.accounts[identity]
+
+    @staticmethod
+    def subscription_snapshot(sample):
+        if not isinstance(sample, dict) or type(sample.get('sampled_at')) is not int or not isinstance(sample.get('windows'), dict):
+            raise ValueError('无效的额度快照。')
+        windows = {}
+        for key in ('five_hour', 'seven_day'):
+            window = sample['windows'].get(key)
+            if not isinstance(window, dict):
+                continue
+            used = window.get('used')
+            if type(used) not in (int, float) or not 0 <= used <= 100:
+                continue
+            windows[key] = {'used': used}
+            if type(window.get('resets_at')) is int:
+                windows[key]['resets_at'] = window['resets_at']
+        if not windows:
+            raise ValueError('额度快照缺少有效窗口。')
+        return {'state': 'available', 'windows': windows, 'sampled_at': sample['sampled_at']}
+
+    def remember_subscription(self, sample):
+        value = self.subscription_snapshot(sample)
+        if value['sampled_at'] >= self.subscription.get('sampled_at', 0):
+            atomic_write(self.subscription_path, json.dumps(value))
+            self.subscription = value
+        return self.subscription
+
+    def account_footer(self, digest, model, usage):
+        # The response is saved for replay before the handler posts the charge.
+        # Include this turn once, using the same prices as the ledger.
+        amount = '暂不可用'
+        try:
+            balance = self.registry.balance(digest)
+            if balance is not None:
+                remaining = balance['remaining_nanos']
+                if remaining is None:
+                    amount = '不限额'
+                else:
+                    cost, _ = usage_price(model, usage)
+                    nanos = max(0, remaining - cost)
+                    amount = '< $0.0001' if 0 < nanos < 100_000 else f'${nanos / 1_000_000_000:.4f}'
+        except sqlite3.Error:
+            pass
+
+        sample = self.subscription
+        windows = sample['windows']
+        values = []
+        for key, label in (('five_hour', '5 小时'), ('seven_day', '7 天')):
+            window = windows.get(key, {})
+            used = window.get('used')
+            reset = window.get('resets_at')
+            if type(used) in (int, float) and 0 <= used <= 100 and (not reset or reset > time.time()):
+                values.append(f'{label}剩余 {int(100 - used + 0.5)}%')
+            else:
+                values.append(f'{label}暂无记录')
+        quota = ' · '.join(values) if windows else '暂无记录'
+        return (f'Key 余额 {amount}', f'账户额度（上次查询） · {quota}')
 
     def manage(self, request):
         operation = request.get('action')
@@ -622,6 +686,9 @@ class PublicServer(ThreadingHTTPServer):
                     folder.mkdir(mode=0o700, exist_ok=True)
                     self.catalog_backend = CloudCliBackend(folder, self.config['cloudcli'])
             return {'models': self.catalog_backend.managed_models()}
+        if operation == 'remember_subscription':
+            with self.usage_lock:
+                return self.remember_subscription(request.get('sample'))
         if operation == 'refresh_subscription':
             if not self.usage_lock.acquire(blocking=False):
                 return {'state': 'loading', 'windows': self.subscription['windows']}
@@ -631,7 +698,7 @@ class PublicServer(ThreadingHTTPServer):
                 except (OSError, ValueError, AttributeError, TypeError):
                     windows = {}
                 if windows:
-                    self.subscription = {'state': 'available', 'windows': windows, 'sampled_at': int(time.time())}
+                    self.remember_subscription({'windows': windows, 'sampled_at': int(time.time())})
                 else:
                     self.subscription = {**self.subscription, 'state': 'stale' if self.subscription['windows'] else 'unavailable'}
                 return self.subscription

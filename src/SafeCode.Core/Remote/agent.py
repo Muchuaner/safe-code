@@ -1053,11 +1053,15 @@ def safe_code_api(options):
     if action == 'set_port':
         return change_safe_code_api_port(command, options)
     if action == 'refresh_subscription':
-        if not safe_code_api_admin(command, {'action':'public_status'}).get('enabled'):
+        status = safe_code_api_admin(command, {'action':'public_status'})
+        if not status.get('enabled'):
             raise ValueError('请先启用 Safe Code API 公网服务。')
         source = Path(__file__).with_name('claude_usage.py').read_text()
         output = run([*work_python, '-I', '-'], stdin=source, timeout=18)
-        return json.loads(output.stdout)
+        sample = json.loads(output.stdout)
+        if status.get('gatewayRevision', 0) >= 19 and sample.get('state') == 'available':
+            return safe_code_api_admin(command, {'action':'remember_subscription', 'sample':sample})
+        return sample
     if action in ('key_host_reuse','bind_ssh_device'):
         settings = safe_code_api_admin(command, {'action':'settings'})
         # CloudCLI's gateway requires a loopback bind and uses its own device routing.

@@ -12,7 +12,7 @@ import threading
 import time
 
 from desktop_gateway import GatewayError
-from pricing import TOKEN_FIELDS, estimate
+from pricing import TOKEN_FIELDS, estimate, usage_price
 
 
 KEY_ID = re.compile(r'[a-f0-9]{64}')
@@ -168,8 +168,7 @@ class KeyRegistry:
 
     def record(self, key_id, model, failed, tokens, *, request=None):
         counts = [tokens.get(k, 0) for k in TOKEN_FIELDS]
-        cost, unpriced = estimate(model, [max(0, count) for count in counts],
-                                  one_hour_writes=max(0, tokens.get('one_hour_cache_writes', 0)))
+        cost, unpriced = usage_price(model, tokens)
         now = int(time.time())
         with self.connect() as db:
             db.execute("""

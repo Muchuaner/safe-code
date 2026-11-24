@@ -1481,6 +1481,10 @@ class CloudCLIGatewayTests(unittest.TestCase):
             events = reply.read()
         self.assertEqual(events.count(b'event: message_start'), 1)
         self.assertIn(b'event: message_stop', events)
+        text = ''.join(json.loads(line[6:]).get('delta', {}).get('text', '')
+                       for line in events.splitlines() if line.startswith(b'data: '))
+        self.assertEqual(text.count('Key 余额 不限额'), 1)
+        self.assertEqual(text.count('账户额度（上次查询） · 暂无记录'), 1)
         self.assertEqual(len(self.cloud.requests), 1)
 
     def test_public_gateway_reviews_only_the_latest_user_prompt_before_dispatch(self):

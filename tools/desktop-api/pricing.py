@@ -37,3 +37,9 @@ def estimate(model, tokens, *, one_hour_writes=0, historical=False):
         rates = (500, 2500, 50, 625)
     total = sum(count * rate for count, rate in zip(tokens, rates))
     return total + min(tokens[3], one_hour_writes) * (2 * rates[0] - rates[3]), 0
+
+def usage_price(model, usage):
+    cache = usage.get('cache_creation') or {}
+    hour = usage.get('one_hour_cache_writes', cache.get('ephemeral_1h_input_tokens', 0))
+    return estimate(model, [max(0, usage.get(k, 0)) for k in TOKEN_FIELDS],
+                    one_hour_writes=max(0, hour))

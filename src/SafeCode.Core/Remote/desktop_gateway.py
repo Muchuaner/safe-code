@@ -1270,6 +1270,7 @@ class CloudCliProgress:
         self.questions = {}
         self.unrecognized = set()
         self.context_budget = None
+        self.account_footer = None
         self.model = model
         self.reported_model = None
         self.other_models = set()
@@ -1571,7 +1572,7 @@ class CloudCliProgress:
                 self.unrecognized.add(kind)
                 self.notice('CloudCLI 返回了当前版本未识别的事件', kind)
 
-    def finish(self):
+    def finish(self, usage=None):
         for data in self.deferred_questions:
             self.question(data, 'tool_use', action='可以在当前 Desktop 对话中回复。')
         self.summarize_activity()
@@ -1586,6 +1587,9 @@ class CloudCliProgress:
                         action=self.open_session()+'查看状态。')
         if not self.has_assistant_text and not self.sent:
             self.notice('CloudCLI 已完成本轮，未返回额外的助手文字')
+        if self.account_footer is not None and usage is not None:
+            for line in self.account_footer(self.reported_model or self.model, usage):
+                self.notice(line)
         return self.take_content()
 
     def take_content(self):
@@ -1700,7 +1704,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
             if progress.session and complete:
                 if progress.awaiting_decision:
                     raise CloudCliError('CloudCLI did not confirm the Desktop answer', 409)
-                return progress.session, progress.finish(), usage
+                return progress.session, progress.finish(usage), usage
             break
         if progress.awaiting_decision and event.get('requestId') == progress.awaiting_decision:
             if kind == 'permission_cancelled':
@@ -3377,6 +3381,7 @@ class CloudCliBackend:
                 manager.started += 1
             progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model, tool_approvals,
                                         self.device)
+            progress.account_footer = manager.account_footer
             progress.stop_requested = active_turn.stop_requested
             progress.forwarded_text = payload['message']
             progress.workspace_prompt_fingerprint = workspace_prompt_fingerprint
@@ -3712,6 +3717,7 @@ class Conversation:
 
 
 class Manager:
+    account_footer = None
     unrestricted_tools = False
 
     def __init__(self, directory, config, *, require_cloudcli=False, review_prompt=None):

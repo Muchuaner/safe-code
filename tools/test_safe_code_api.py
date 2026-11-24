@@ -65,6 +65,29 @@ class SafeCodeApiTest(unittest.TestCase):
             (self.root/'keys'/key).touch()
         self.registry = KeyRegistry(self.root)
 
+    def test_turn_footer_uses_key_ledger_and_cached_windows_only(self):
+        gateway = object.__new__(server.PublicServer)
+        gateway.registry = self.registry
+        gateway.subscription = {'windows': {}}
+        gateway.subscription_path = self.root/'snapshot'
+        digest, other = self.digests[:2]
+        self.registry.update(digest, '', 0, budget_nanos=1_000_000_000)
+        model = 'claude-sonnet-5-5'
+        usage = {'input_tokens': 40_000}
+        with patch.object(server, 'read_subscription', side_effect=AssertionError('Unexpected quota probe')):
+            sample = {'sampled_at': 100, 'windows': {'five_hour': {'used': 25}, 'seven_day': {'used': 9}}}
+            gateway.remember_subscription(sample)
+            gateway.remember_subscription({**sample, 'sampled_at': 50, 'windows': {'five_hour': {'used': 100}}})
+            self.assertEqual(json.loads(gateway.subscription_path.read_text()), gateway.subscription)
+            self.registry.record(other, model, False, usage)
+            self.assertEqual(gateway.account_footer(digest, model, usage),
+                             ('Key 余额 $0.9200', '账户额度（上次查询） · 5 小时剩余 75% · 7 天剩余 91%'))
+            self.registry.record(digest, model, False, usage)
+            self.assertEqual(self.registry.balance(digest)['remaining_nanos'], 920_000_000)
+            self.assertEqual(gateway.account_footer(other, model, usage)[0], 'Key 余额 不限额')
+            gateway.remember_subscription({'sampled_at': 101, 'windows': {'five_hour': {'used': 0, 'resets_at': 1}}})
+            self.assertIn('5 小时暂无记录 · 7 天暂无记录', gateway.account_footer(digest, model, {})[1])
+
     def wait_for(self, predicate):
         start=time.monotonic()
         while not predicate():
