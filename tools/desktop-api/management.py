@@ -48,7 +48,8 @@ class KeyRegistry:
             """)
             db.execute('BEGIN IMMEDIATE')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(keys)')}
-            for column, kind in (('budget_nanos', 'INTEGER'), ('expires_at', 'INTEGER'), ('allowed_models', 'TEXT')):
+            for column, kind in (('budget_nanos', 'INTEGER'), ('expires_at', 'INTEGER'), ('allowed_models', 'TEXT'),
+                                 ('unrestricted', 'INTEGER NOT NULL DEFAULT 0')):
                 if column not in columns:
                     db.execute(f'ALTER TABLE keys ADD COLUMN {column} {kind}')
             if 'cost_nanos' not in {row['name'] for row in db.execute('PRAGMA table_info(usage)')}:
@@ -80,11 +81,15 @@ class KeyRegistry:
         if not self.has_marker(key_id):
             return None
         with self.connect() as db:
-            return db.execute('SELECT allowed_models FROM keys WHERE id=? AND revoked=0 '
+            return db.execute('SELECT allowed_models, unrestricted FROM keys WHERE id=? AND revoked=0 '
                               'AND (expires_at IS NULL OR expires_at>?)', (key_id, time.time())).fetchone()
 
     def enabled(self, key_id):
         return self.active_policy(key_id) is not None
+
+    def unrestricted(self, key_id):
+        policy = self.active_policy(key_id)
+        return bool(policy and policy['unrestricted'])
 
     def model_policy(self, key_id):
         policy = self.active_policy(key_id)
@@ -98,7 +103,7 @@ class KeyRegistry:
                        (key_id, note, rpm, int(time.time()), budget_nanos))
 
     def issue(self, key_id, note='', rpm=0, budget_nanos=None, *, activated=False,
-              expires_at=None, allowed_models=None):
+              expires_at=None, allowed_models=None, unrestricted=False):
         marker = self.root/'keys'/key_id
         created = False
         try:
@@ -109,8 +114,9 @@ class KeyRegistry:
                     raise ValueError('添加更多 API Key 需要正确的激活码。')
                 if len(ids) >= 500:
                     raise ValueError('Key 记录已达到 500 条上限。')
-                db.execute('INSERT INTO keys(id,note,rpm,created,budget_nanos,expires_at,allowed_models) VALUES(?,?,?,?,?,?,?)',
-                           (key_id, note, rpm, int(time.time()), budget_nanos, expires_at, allowed_models))
+                db.execute('INSERT INTO keys(id,note,rpm,created,budget_nanos,expires_at,allowed_models,unrestricted) '
+                           'VALUES(?,?,?,?,?,?,?,?)',
+                           (key_id, note, rpm, int(time.time()), budget_nanos, expires_at, allowed_models, unrestricted))
                 marker.touch(mode=0o600, exist_ok=False)
                 created = True
         except BaseException:
@@ -143,11 +149,11 @@ class KeyRegistry:
         return {'budget_nanos': budget, 'used_nanos': used,
                 'remaining_nanos': None if budget is None else max(0, budget-used), 'models': models}
 
-    def update(self, key_id, note, rpm, *, budget_nanos=..., expires_at=..., allowed_models=...):
+    def update(self, key_id, note, rpm, *, budget_nanos=..., expires_at=..., allowed_models=..., unrestricted=...):
         with self.connect() as db:
             if not db.execute('UPDATE keys SET note=?, rpm=? WHERE id=?', (note,rpm,key_id)).rowcount:
                 raise ValueError('找不到该 Key。')
-            for column, value in (('budget_nanos', budget_nanos), ('expires_at', expires_at), ('allowed_models', allowed_models)):
+            for column, value in (('budget_nanos', budget_nanos), ('expires_at', expires_at), ('allowed_models', allowed_models), ('unrestricted', unrestricted)):
                 if value is not ...:
                     db.execute(f'UPDATE keys SET {column}=? WHERE id=?', (value, key_id))
 
@@ -205,7 +211,7 @@ class KeyRegistry:
     def list(self):
         with self.connect() as db:
             rows = db.execute('''
-                SELECT k.id,k.note,k.rpm,k.created,k.budget_nanos,k.expires_at,k.allowed_models,k.revoked,
+                SELECT k.id,k.note,k.rpm,k.created,k.budget_nanos,k.expires_at,k.allowed_models,k.revoked,k.unrestricted,
                        COALESCE(SUM(u.cost_nanos),0) AS cost_nanos,
                        COALESCE(SUM(u.unpriced_tokens),0) AS unpriced_tokens,
                        COALESCE(SUM(u.requests),0) AS requests,COALESCE(SUM(u.failures),0) AS failures,
@@ -220,6 +226,7 @@ class KeyRegistry:
             key = dict(row)
             enabled = not key.pop('revoked') and self.has_marker(key['id'])
             key['enabled'] = enabled
+            key['unrestricted'] = bool(key['unrestricted'])
             key['expired'] = enabled and key['expires_at'] is not None and key['expires_at'] <= now
             if key['allowed_models'] is not None:
                 key['allowed_models'] = json.loads(key['allowed_models'])

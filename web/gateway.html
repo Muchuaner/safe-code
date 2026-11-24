@@ -241,6 +241,9 @@
         <label id="device-policy-field" hidden>接入用途<select id="device-policy" disabled>
           <option value="desktop">Safe Code 桌面接入</option><option value="api">普通 API</option>
         </select><small id="device-policy-help">桌面接入允许设备配对，使用者仍须在本机确认授权。</small></label>
+        <label id="tool-permission-field" hidden>CloudCLI 工具权限<select id="tool-permission" disabled>
+          <option value="default">按需确认</option><option value="unrestricted">无限制</option>
+        </select><small>配对的桌面会话使用 CloudCLI 原生权限模式。无限制会跳过普通工具的逐次确认，计划模式照常生效。</small></label>
         <div class="key-policy-fields">
           <label><span id="model-policy-label">模型管理</span><select id="model-policy" aria-labelledby="model-policy-label"><option value="all">全部模型</option><option value="selected">仅允许所选模型</option></select></label>
           <label><span id="expiry-policy-label">失效时间</span><select id="expiry-policy" aria-labelledby="expiry-policy-label"><option value="never">永不过期</option><option value="scheduled">指定时间</option></select></label>

@@ -576,12 +576,22 @@ function renderPolicyFields() {
 modelPolicy.onchange = expiryPolicy.onchange = renderPolicyFields;
 byId('reload-models').onclick = loadModelOptions;
 
+function renderToolPermission() {
+  const field = byId('tool-permission');
+  field.disabled = snapshot.unrestricted_supported !== true
+    || byId('device-policy').disabled || byId('device-policy').value !== 'desktop';
+  byId('tool-permission-field').hidden = field.disabled;
+}
+byId('device-policy').addEventListener('change', renderToolPermission);
+
 function showEditor(key) {
   editingKey = key;
   const devicePolicy = byId('device-policy');
   devicePolicy.disabled = snapshot.device_policy_supported !== true;
   byId('device-policy-field').hidden = devicePolicy.disabled;
   devicePolicy.value = !key || key.device_access === true ? 'desktop' : 'api';
+  byId('tool-permission').value = key?.unrestricted ? 'unrestricted' : 'default';
+  renderToolPermission();
   byId('device-policy-help').textContent = snapshot.device_service_problem
     ? '设备服务尚未就绪。请在网关设置中运行故障修复，或先选择普通 API。'
     : '桌面接入允许设备配对，使用者仍须在本机确认授权。';
@@ -883,6 +893,8 @@ byId('key-form').onsubmit = event => {
     const allowDevice = devicePolicy.value === 'desktop';
     if (!devicePolicy.disabled && (!editingKey || allowDevice !== (editingKey.device_access === true)))
       options.device_access = allowDevice;
+    const permission = byId('tool-permission');
+    if (!permission.disabled) options.unrestricted = permission.value === 'unrestricted';
     const budget = byId('budget');
     if (!budget.disabled) options.budget_cents = budget.value === '' ? null : Math.round(budget.valueAsNumber * 100);
     if (editingKey) {

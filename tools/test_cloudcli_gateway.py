@@ -2135,6 +2135,56 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertTrue(task.startswith('Continue after stopping.'))
         self.assertNotIn('An earlier rejected local attempt',task)
 
+    def test_marked_followup_stops_the_matching_turn_while_its_stream_stays_open(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.track_running = True
+        self.cloud.pause_after_frame = 0
+        self.cloud.release_stream = threading.Event()
+        self.addCleanup(self.cloud.release_stream.set)
+        self.cloud.reply = (200, [{'type': 'session-id', 'sessionId': CLOUD_SESSION},
+                                  {'kind': 'complete', 'exitCode': 0, 'aborted': True}])
+        aborts = []
+
+        def stop(action):
+            aborts.append(action)
+            self.cloud.reply = (200, cloud_turn('Continuation after stopping.'))
+            self.cloud.pause_after_frame = None
+            self.cloud.release_stream.set()
+
+        original = conversation('Wait before completing.', stream=True)
+        headers = {'Authorization': f'Bearer {DESKTOP_TOKEN}', 'x-claude-code-session-id': self.session}
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *a, **kw: ChatSocketFixture(stop), OSError)):
+            with closing(http.client.HTTPConnection(*self.desktop.server_address, timeout=3)) as conn:
+                conn.request('POST', '/v1/messages', json.dumps(original), headers)
+                response = conn.getresponse()
+                self.assertEqual(response.status, 200)
+                while True:
+                    line = response.readline()
+                    self.assertTrue(line, 'the prior stream must remain open')
+                    if line.startswith(b'data: '):
+                        data = json.loads(line[6:])
+                        if data['type'] == 'content_block_delta':
+                            break
+                partial = {'role': 'assistant', 'content': data['delta']['text']}
+                placeholder = {'role': 'assistant', 'content': 'No response requested.'}
+                stopped = {'role': 'user', 'content': '[Request interrupted by user]'}
+                followup = {'role': 'user', 'content': 'Send only this new task.'}
+                history = [*original['messages'], partial, stopped, placeholder, followup]
+                for rejected in (
+                    [*original['messages'], partial, followup],
+                    [{'role': 'user', 'content': 'A different turn.'}, *history[1:]],
+                ):
+                    self.assertEqual(self.request(conversation('unused', messages=rejected))[0], 409)
+                    self.assertFalse(aborts)
+                status, reply = self.request(conversation('unused', messages=history))
+                self.assertEqual(status, 200)
+                self.assertIn('Continuation after stopping.', reply['content'][0]['text'])
+        self.assertEqual(aborts, [{'type': 'chat.abort', 'sessionId': CLOUD_SESSION}])
+        self.assertEqual(len(self.cloud.requests), 2)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        forwarded = self.cloud.requests[-1][2]['message'].partition('\n\n')[0]
+        self.assertEqual(forwarded, followup['content'])
     def test_desktop_can_resume_a_completed_turn_after_its_stream_was_interrupted(self):
         original = conversation('Retain this context.', stream=True)
         status, events = self.request(original)
@@ -2399,6 +2449,24 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(actions[-1]['anchorId'], first_anchor)
         self.assertTrue(actions[-1]['content'].startswith('Replace the first question\n\n本机是'))
         self.assertIn('/Users/example/Work', actions[-1]['content'])
+
+    def test_unrestricted_dispatch_uses_native_cloudcli_mode_and_preserves_plan(self):
+        self.enable_cloudcli_web_fixture()
+        self.manager.cloudcli.config['desktopToolApprovals'] = True
+        sent = []
+        events = [{'kind': 'text', 'role': 'assistant', 'sessionId': CLOUD_SESSION, 'content': 'Fixture reply.'},
+                  {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0}]
+        cases = ((False, 'Prepare a normal task.', 'default'),
+                 (True, 'Prepare a separate task.', 'bypassPermissions'),
+                 (True, '<system-reminder>Plan mode is active. The user indicated that they do not want you to execute yet'
+                        '</system-reminder>Prepare a plan.', 'plan'))
+        tools = [{'name': 'AskUserQuestion', 'input_schema': {'type': 'object'}}]
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *args, **kwargs: ChatSocketFixture(sent.append, events), OSError)):
+            for unrestricted, prompt, expected in cases:
+                self.manager.run(conversation(prompt, tools=tools), session_header=uuid.uuid4().hex,
+                                 unrestricted=unrestricted)
+                self.assertEqual(sent[-1]['options']['permissionMode'], expected)
 
     def test_desktop_one_time_permission_confirms_the_original_remote_operation(self):
         self.config['desktopToolApprovals'] = True

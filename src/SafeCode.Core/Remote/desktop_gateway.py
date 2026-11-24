@@ -782,20 +782,27 @@ def split_desktop_interruptions(messages):
     # A rejected attempt can still appear in the UI even though the gateway
     # never ran it. Try earlier checkpoints only through marked user turns.
     prefixes = []
+    stopped_requests = set()
     index = len(result)-2
     while index in stopped:
         prefixes.append(history_signature(result[:index],'cloudcli'))
+        stopped_requests.add(history_signature(result[:index+1], 'cloudcli'))
         index -= 1
     # Desktop may display its own placeholder after a canceled local attempt.
     # Ignore it here only next to an explicit stop while locating the partial reply.
     while index > 0:
-        if index in stopped or ((index-1 in stopped or index-1 in interrupted_replies)
-                                and desktop_assistant_text(result[index]) == 'No response requested.'):
+        if index in stopped:
+            stopped_requests.add(history_signature(result[:index+1], 'cloudcli'))
+            index -= 1
+        elif ((index-1 in stopped or index-1 in interrupted_replies)
+              and desktop_assistant_text(result[index]) == 'No response requested.'):
             index -= 1
         else:
             break
     partial_history = result[:index+1] if index in interrupted_replies else None
-    return result, prefixes, partial_history
+    if partial_history:
+        stopped_requests.add(history_signature(partial_history[:-1], 'cloudcli'))
+    return result, prefixes, partial_history, stopped_requests
 
 
 def desktop_compact_context(messages):
@@ -1175,6 +1182,7 @@ class CloudCliProgress:
         self.awaiting_decision = None
         self.on_session = None
         self.on_disconnect = None
+        self.stop_requested = threading.Event()
         self.output_closed = False
         self.stopping = threading.Event()
         self.dispatched = False
@@ -1796,7 +1804,8 @@ class CloudCliStopWatch:
             pass
         while not self.finished.wait(.25):
             stream = self.progress.stream
-            if stream is not None and (stream.disconnected() or not stream.ping_if_idle(self.finished)):
+            if stream is not None and (self.progress.stop_requested.is_set() or stream.disconnected()
+                                       or not stream.ping_if_idle(self.finished)):
                 self.stop(stream)
                 return
 
@@ -1854,6 +1863,13 @@ def native_cloudcli_options():
         return _native_catalog_options
 
 
+class ActiveCloudCliTurn:
+    def __init__(self, history):
+        self.history = history
+        self.stop_requested = threading.Event()
+        self.finished = threading.Event()
+
+
 class CloudCliBackend:
     project_lock = threading.Lock()
 
@@ -1861,7 +1877,7 @@ class CloudCliBackend:
         self.config = config
         self.device = device
         self.parallel = False
-        self.active_conversations = set()
+        self.active_conversations = {}
         self.active_lock = threading.Lock()
         self.paused_turns = {}
         self.approval_lock = threading.Lock()
@@ -2494,7 +2510,7 @@ class CloudCliBackend:
                        header={'Authorization': 'Bearer '+self.question_token()}, timeout=timeout,
                        suppress_origin=True, http_no_proxy=['127.0.0.1'])
 
-    def call_chat(self, payload, progress, attachments, plan_mode, edit=None, *, title_text, review=False):
+    def call_chat(self, payload, progress, attachments, plan_mode, edit=None, *, title_text, review=False, unrestricted=False):
         connect, websocket_error = cloudcli_websocket()
         session = payload.get('sessionId')
         try:
@@ -2520,7 +2536,8 @@ class CloudCliBackend:
                     session = created.get('data', {}).get('sessionId')
                     if not isinstance(session, str) or not CLOUDCLI_SESSION_ID.fullmatch(session):
                         raise CloudCliError('CloudCLI did not return an attachment session identifier')
-                permission = 'default' if progress.native_tools or progress.tool_approvals else 'bypassPermissions'
+                permission = ('default' if not unrestricted and (progress.native_tools or progress.tool_approvals)
+                              else 'bypassPermissions')
                 options = {'model': payload['model'], 'attachments': descriptors, 'unattended': True,
                            'permissionMode': 'plan' if plan_mode else permission}
                 if review:
@@ -2791,6 +2808,10 @@ class CloudCliBackend:
                 if current is not None:
                     return current, None
             if partial_history and namespace.rpartition(':')[2]:
+                checkpoint = history_signature(partial_history, 'cloudcli')
+                current = db.execute(fields+' AND history=?', (namespace, checkpoint)).fetchone()
+                if current is not None:
+                    return current, None
                 confirmed = self.confirmed_partial_history(db, namespace, partial_history)
                 if confirmed is not None:
                     current = db.execute(fields+' AND history=?', (namespace, confirmed)).fetchone()
@@ -3036,16 +3057,32 @@ class CloudCliBackend:
             db.execute('DELETE FROM anchor_receipts WHERE scope=? AND session=?', (namespace, session))
 
     @contextmanager
-    def conversation_slot(self, conversation):
+    def conversation_slot(self, conversation, history=None, stopped_requests=(), stream=None):
+        turn = ActiveCloudCliTurn(history)
         with self.active_lock:
-            if conversation in self.active_conversations:
+            active = self.active_conversations.get(conversation)
+            if active is None:
+                self.active_conversations[conversation] = turn
+            elif active.history not in stopped_requests:
                 raise CloudCliError('Another turn is already running in this CloudCLI conversation', 409)
-            self.active_conversations.add(conversation)
+        if active is not None:
+            # Desktop may send the next message before the relay closes the old
+            # stream. Only a stop marker for that exact request can cancel it.
+            active.stop_requested.set()
+            if not active.finished.wait(15):
+                raise CloudCliError('CloudCLI is still stopping the previous Desktop turn', 409)
+            if stream is not None and stream.disconnected():
+                raise ConnectionAbortedError('Desktop disconnected while stopping the previous turn')
+            with self.active_lock:
+                if conversation in self.active_conversations:
+                    raise CloudCliError('Another turn is already running in this CloudCLI conversation', 409)
+                self.active_conversations[conversation] = turn
         try:
-            yield
+            yield turn
         finally:
             with self.active_lock:
-                self.active_conversations.remove(conversation)
+                del self.active_conversations[conversation]
+                turn.finished.set()
 
     @contextmanager
     def configuration_lock(self):
@@ -3064,7 +3101,24 @@ class CloudCliBackend:
                 raise CloudCliError('CloudCLI is busy; wait for the current operation to finish', 409) from None
             yield
 
-    def run(self, manager, data, context_1m, session_header, stream=None, *, check_model=None):
+    def request_previous_stop(self, data, session_header):
+        scope = conversation_scope(data, session_header)
+        messages = data.get('messages')
+        if (not scope or not isinstance(messages, list) or not messages
+                or any(not isinstance(item, dict) or item.get('role') not in ('user', 'assistant', 'system')
+                       for item in messages)
+                or messages[-1]['role'] != 'user'):
+            return
+        _, _, _, stopped = split_desktop_interruptions([item for item in messages if item['role'] != 'system'])
+        if not stopped:
+            return
+        with self.active_lock:
+            active = self.active_conversations.get(self.identity+':'+scope)
+            if active is not None and active.history in stopped:
+                active.stop_requested.set()
+
+    def run(self, manager, data, context_1m, session_header, stream=None, *, check_model=None,
+            unrestricted=False):
         if not isinstance(data, dict) or not isinstance(data.get('model'), str):
             raise CloudCliError('A configured CloudCLI model is required', 400)
         effort = data.get('output_config', {})
@@ -3084,8 +3138,9 @@ class CloudCliBackend:
         scope = conversation_scope(data, session_header)
         interrupted_prefixes = []
         partial_history = None
+        stopped_requests = ()
         if scope:
-            messages, interrupted_prefixes, partial_history = split_desktop_interruptions(messages)
+            messages, interrupted_prefixes, partial_history, stopped_requests = split_desktop_interruptions(messages)
         if not messages or messages[-1]['role'] != 'user':
             raise CloudCliError('CloudCLI requires a new user task after stopping', 400)
         latest = blocks(messages[-1].get('content'))
@@ -3114,7 +3169,8 @@ class CloudCliBackend:
         # the next message. Keep its raw text only for request identity.
         dispatch_task = DESKTOP_LOCAL_COMMAND.sub('', task).strip() if '<local-command-caveat>' in task else task
         chat_mode = bool(attachments) or plan_mode
-        tool_approvals = self.config.get('desktopToolApprovals', False)
+        unrestricted = unrestricted and not plan_mode
+        tool_approvals = self.config.get('desktopToolApprovals', False) and not unrestricted
         if chat_mode and not self.config.get('desktopQuestions'):
             raise CloudCliError('Desktop attachments and plan mode require the authenticated CloudCLI connection', 503)
         if not dispatch_task and not attachments:
@@ -3153,7 +3209,9 @@ class CloudCliBackend:
         else:
             identity = uuid.uuid4().hex
         conversation = namespace if scope else before if len(messages) > 1 else identity
-        with self.conversation_slot(conversation), self.configuration_lock():
+        history = history_signature(messages, 'cloudcli') if scope and stream is not None else None
+        with (self.conversation_slot(conversation, history, stopped_requests, stream) as active_turn,
+              self.configuration_lock()):
             paused = self.paused_turns.get(namespace)
             if paused is not None:
                 if paused.request == identity:
@@ -3226,7 +3284,7 @@ class CloudCliBackend:
                     project, workspace = self.project_for_directory(self.desktop_directory(data, scope))
                 # The Agent API runs unattended in bypassPermissions and can skip
                 # the permission event that carries a pending AskUserQuestion.
-                chat_mode = chat_mode or bool(native_tools) or edit is not None or tool_approvals
+                chat_mode = chat_mode or bool(native_tools) or edit is not None or tool_approvals or unrestricted
                 if chat_mode:
                     cloudcli_websocket()
                     self.question_token()
@@ -3252,11 +3310,13 @@ class CloudCliBackend:
                 manager.started += 1
             progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model, tool_approvals,
                                         self.device)
+            progress.stop_requested = active_turn.stop_requested
             progress.forwarded_text = payload['message']
             progress.workspace_prompt_fingerprint = workspace_prompt_fingerprint
             progress.turn_position = position
             progress.edit_anchor = edit[0] if edit is not None else None
-            events = (self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=task) if chat_mode
+            events = (self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=task,
+                                     unrestricted=unrestricted) if chat_mode
                       else self.call(payload, progress))
             try:
                 return self.advance(manager, data, messages, stream, namespace, identity, events, progress,
@@ -3654,9 +3714,11 @@ class Manager:
             and any(call['name'].rsplit('__', 1)[-1] == name for call in c.pending.values())
         ), None)
 
-    def run(self, data, context_1m=False, session_header=None, stream=None, *, check_model=None):
+    def run(self, data, context_1m=False, session_header=None, stream=None, *, check_model=None,
+            unrestricted=False):
         if self.cloudcli is not None:
-            return self.cloudcli.run(self, data, context_1m, session_header, stream, check_model=check_model)
+            return self.cloudcli.run(self, data, context_1m, session_header, stream,
+                                     check_model=check_model, unrestricted=unrestricted)
         # TODO: Delete this legacy branch. The API requires CloudCLI and returns an error if it is unavailable.
         requested_model = data.get('model') if isinstance(data, dict) else None
         data=validate_request(data)
