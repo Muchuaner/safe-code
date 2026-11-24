@@ -64,7 +64,8 @@ def paired_device(state, owner, db=None):
         with closing(sqlite3.connect(database)) as connection:
             return paired_device(state, owner, connection)
     row = None if db is None else db.execute(
-        'SELECT id, ready FROM devices WHERE owner=? AND (ready=1 OR expires>?) ORDER BY ready DESC,rowid LIMIT 1',
+        'SELECT id, ready FROM devices WHERE owner=? AND (ready=1 OR expires>?) '
+        'ORDER BY ready DESC,expires DESC,rowid LIMIT 1',
         (owner, int(time.time())),
     ).fetchone()
     if row and row[1]:
