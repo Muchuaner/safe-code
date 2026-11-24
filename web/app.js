@@ -14,6 +14,7 @@ const localePresets = {
   sg: {name:'新加坡',timezone:'Asia/Singapore',language:'英语（新加坡）',locale:'en_SG.UTF-8'},
   gb: {name:'英国',timezone:'Europe/London',language:'英语（英国）',locale:'en_GB.UTF-8'},
   de: {name:'德国',timezone:'Europe/Berlin',language:'德语',locale:'de_DE.UTF-8'},
+  de_fra: {name:'德国 · 法兰克福',timezone:'Europe/Berlin',language:'德语',locale:'de_DE.UTF-8'},
   kr: {name:'韩国',timezone:'Asia/Seoul',language:'韩语',locale:'ko_KR.UTF-8'}
 };
 function currentLocale(){return Object.hasOwn(localePresets,localeSelection)?localePresets[localeSelection]:null;}

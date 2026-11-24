@@ -55,12 +55,14 @@ public static class DeploymentCatalog
         new("新加坡", "Asia/Singapore", "en_SG.UTF-8", "英语"),
         new("英国", "Europe/London", "en_GB.UTF-8", "英语"),
         new("德国", "Europe/Berlin", "de_DE.UTF-8", "德语"),
-        new("韩国", "Asia/Seoul", "ko_KR.UTF-8", "韩语")
+        new("韩国", "Asia/Seoul", "ko_KR.UTF-8", "韩语"),
+        new("德国 · 法兰克福", "Europe/Berlin", "de_DE.UTF-8", "德语")
     ];
     public static LocaleSettings? FindLocale(string region) => region switch
     {
         "jp" => Locales[0], "us_la" => Locales[1], "us_ny" => Locales[2],
         "sg" => Locales[3], "gb" => Locales[4], "de" => Locales[5], "kr" => Locales[6],
+        "de_fra" => Locales[7],
         _ => null
     };
 }
