@@ -273,6 +273,8 @@ public sealed class MainWindow : Window
             if(exitInProgress)throw new InvalidOperationException("正在安全退出，请稍候。");
             if(installingUpdate)throw new InvalidOperationException("正在准备安装更新，请稍候。");
             bool maintenance=operation is "cloud.install" or "cloud.expose" or "mount.install" or "mount.apply" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "bridge.start" or "bridge.stop" or "safeCodeApi.enablePublic" or "safeCodeApi.repair" or "desktopKey.enable" or "desktopKey.authorizeDevice" or "desktopKey.refreshModels" or "desktopKey.disable" or "connection.reauthenticate";
+            bool keyChange=operation is "desktopKey.enable" or "desktopKey.authorizeDevice" or "desktopKey.disable" or "desktopKey.cancelDevice";
+            if(keyChange&&maintenanceOperations>0)throw new InvalidOperationException("请等待当前操作完成。");
             if(maintenance)maintenanceOperations++;
             if(CanReportDiagnostics)
             {
@@ -302,6 +304,14 @@ public sealed class MainWindow : Window
     {
         var setup=pendingKeyDevice??throw new InvalidOperationException("请重新验证接入 Key。");
         if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+        if(setup.Switching)
+        {
+            try{await KeyAccess.DisableAsync(ct);}
+            finally{await StopKeyDeviceAsync();}
+            if(KeyAccess.Configured)throw new InvalidOperationException("原网关尚未确认解绑，请恢复网络后重试。");
+            setup=setup with {Switching=false};
+            pendingKeyDevice=setup;
+        }
         var control=hostControl??=new WindowsHostControl(dataDirectory);
         if(setup.HostSession is { } target)
             return await AuthorizeKeyHostControlAsync(setup,target,control,ct);
@@ -416,16 +426,26 @@ public sealed class MainWindow : Window
             case "desktopKey.status":
                 return await KeyAccess.RestoreAsync(lifetime.Token,
                     interactive:args.TryGetProperty("interactive",out var interactive)&&interactive.ValueKind==JsonValueKind.True);
+            case "desktopKey.list": return await KeyAccess.ListKeysAsync(lifetime.Token);
+            case "desktopKey.save":
+                await KeyAccess.SaveKeyAsync(Read("key"),Read("name"),lifetime.Token);
+                return true;
+            case "desktopKey.forget":
+                await KeyAccess.ForgetKeyAsync(Read("id"),lifetime.Token);
+                return true;
+            case "desktopKey.savedBalance": return await KeyAccess.SavedBalanceAsync(Read("id"),lifetime.Token);
             case "desktopKey.enable":
-                if(keyDeviceTunnel!=null&&hostControl?.Enabled==true)
+                if(Read("savedId")==""&&keyDeviceTunnel!=null&&hostControl?.Enabled==true)
                     throw new InvalidOperationException("请先停用当前 Key 接入，再更换 Key。");
                 pendingKeyDevice=null;
                 var keyResult=await KeyAccess.EnableAsync(Read("key"),lifetime.Token,
                     replace:args.TryGetProperty("replace",out var replaceKey)&&replaceKey.ValueKind==JsonValueKind.True,
                     useSaved:args.TryGetProperty("useSaved",out var useSavedKey)&&useSavedKey.ValueKind==JsonValueKind.True,
-                    checkDevice:true,deviceSession:!connectionPending&&session?.IsConnected==true&&session.Server!=null?session:null);
+                    savedId:Read("savedId"),checkDevice:true,deviceSession:!connectionPending&&session?.IsConnected==true&&session.Server!=null?session:null);
                 if(keyResult is not DesktopKeyAccess.DeviceSetup setup)return keyResult;
                 pendingKeyDevice=setup;
+                if(Read("savedId")!=""&&await KeyAccess.HasDeviceConsentAsync(setup.Remote,lifetime.Token))
+                    return await AuthorizeKeyDeviceAsync(lifetime.Token);
                 var keyHost=setup.HostSession;
                 bool existingControl=keyHost!=null&&hostControl?.IsEnabledFor(keyHost)==true;
                 return new { requiresDevice=true, reuseControl=keyHost!=null, existingControl,
@@ -495,6 +515,7 @@ public sealed class MainWindow : Window
                 gateway.Closed+=(_,_)=>gatewayWindow=null;
                 gateway.Show();
                 return true;
+            case "claudeDesktop.reopen": return await WindowsClients.ReopenClaudeAsync(KeyAccess,lifetime.Token);
             case "claudeDesktop.open": return await WindowsClients.OpenClaudeAsync(KeyAccess,lifetime.Token);
             case "codex.open": return WindowsClients.OpenCodex();
             case "bridge.copy-config": if(claudeBridge==null)throw new InvalidOperationException("请先启动适配器。");Clipboard.SetText(claudeBridge.Configuration);return true;

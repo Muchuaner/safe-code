@@ -35,7 +35,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private const string UnbindPendingMessage="本机接入已停用，网关尚未确认解绑。请在网络恢复后点击「重试解绑」。";
 
     internal sealed record DeviceBinding(string DeviceId,string DeviceProof,string Alias,int Port,string PublicKey);
-    internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing,SshSession? HostSession=null);
+    internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing,SshSession? HostSession=null,bool Switching=false);
     private sealed record Saved(Ticket Remote,string Local,int Port,string Profile,string Previous,JsonNode? Hybrid,bool CreatedMeta=false,
         Dictionary<string,PolicyValue>? WindowsPolicy=null,DeviceBinding? Device=null,bool UnbindPending=false);
     private sealed record Relay(WebApplication App,HttpClient Client,int Port,Func<bool>? HostReady,long StartedAt) : IAsyncDisposable
@@ -68,6 +68,11 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             remote=Load().Remote;
         }
         finally { gate.Release(); }
+        return await FetchBalanceAsync(remote,ct).ConfigureAwait(false);
+    }
+
+    private static async Task<KeyBalance> FetchBalanceAsync(Ticket remote,CancellationToken ct)
+    {
         using var client=Remote(remote);
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(8));
@@ -385,6 +390,91 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         finally{CryptographicOperations.ZeroMemory(data);}
     }
 
+    private sealed record KeyEntry(string Id,string Name,Ticket Remote,bool Authorized);
+    private string KeyListPath=>Path.Combine(dataDirectory,"desktop-key-list.state");
+    private List<KeyEntry> ReadEntries()
+    {
+        var entries=File.Exists(KeyListPath)
+            ? JsonSerializer.Deserialize<List<KeyEntry>>(unprotect(File.ReadAllBytes(KeyListPath)),Json)
+                ?? throw new IOException("无法读取已保存的 Key。")
+            : new List<KeyEntry>();
+        if(Configured)
+        {
+            var current=Load();
+            if(entries.All(item=>item.Remote!=current.Remote))
+            {
+                entries.Add(NewEntry(current.Remote,new Uri(current.Remote.Url).Authority,current.Device!=null));
+                WriteEntries(entries);
+            }
+        }
+        return entries;
+    }
+    private static KeyEntry NewEntry(Ticket ticket,string name,bool authorized)=>
+        new(Guid.NewGuid().ToString("N"),name,ticket,authorized);
+    private void WriteEntries(List<KeyEntry> entries)
+    {
+        var bytes=JsonSerializer.SerializeToUtf8Bytes(entries,Json);
+        try{WriteProfileFile(KeyListPath,protect(bytes));}
+        finally{CryptographicOperations.ZeroMemory(bytes);}
+    }
+    private static KeyEntry FindEntry(List<KeyEntry> entries,string id)=>
+        entries.FirstOrDefault(entry=>entry.Id==id)??throw new InvalidOperationException("找不到该 Key，请重新打开列表。");
+
+    internal async Task<object> ListKeysAsync(CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            var current=Configured?Load().Remote:null;
+            return ReadEntries().Select(e=>new {e.Id,e.Name,current=e.Remote==current,running=e.Remote==current&&Running}).ToArray();
+        }
+        finally{gate.Release();}
+    }
+    internal async Task SaveKeyAsync(string code,string name,CancellationToken ct)
+    {
+        name=name.Trim();
+        if(name.Length is 0 or >64)throw new InvalidOperationException("请输入 1 至 64 个字符的 Key 名称。");
+        var ticket=Ticket.Parse(code.Trim());
+        await gate.WaitAsync(ct);
+        try
+        {
+            var entries=ReadEntries();
+            var existing=entries.FindIndex(e=>e.Remote==ticket);
+            if(existing<0)entries.Add(NewEntry(ticket,name,false));
+            else entries[existing]=entries[existing] with {Name=name};
+            WriteEntries(entries);
+        }
+        finally{gate.Release();}
+    }
+    internal async Task ForgetKeyAsync(string id,CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            var entries=ReadEntries();
+            var item=FindEntry(entries,id);
+            if(Configured&&Load().Remote==item.Remote)
+                throw new InvalidOperationException("请先切换到其他 Key 或停用当前接入。");
+            entries.Remove(item);
+            WriteEntries(entries);
+        }
+        finally{gate.Release();}
+    }
+    internal async Task<KeyBalance> SavedBalanceAsync(string id,CancellationToken ct)
+    {
+        Ticket ticket;
+        await gate.WaitAsync(ct);
+        try{ticket=FindEntry(ReadEntries(),id).Remote;}
+        finally{gate.Release();}
+        return await FetchBalanceAsync(ticket,ct);
+    }
+    internal async Task<bool> HasDeviceConsentAsync(Ticket ticket,CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try{return ReadEntries().Any(e=>e.Remote==ticket&&e.Authorized);}
+        finally{gate.Release();}
+    }
+
     private sealed record PolicyChange(PolicyValue? Before,PolicyValue? After);
     private string WindowsPolicyPath=>windowsPolicyPath??ClaudeDesktopPolicy.RegistryPath;
     private const string WindowsPolicyPermissionMessage="Windows 拒绝访问 Claude Desktop 的本机策略。请先安全退出 Safe Code，再用当前 Windows 账户右键 Safe Code，选择「以管理员身份运行」后重试。若此账户没有管理员权限，或重试后仍失败，请联系管理员检查策略权限。";
@@ -692,16 +782,16 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         finally{gate.Release();}
     }
     internal async Task<object> EnableAsync(string code,CancellationToken ct,bool replace=false,bool useSaved=false,DeviceSetup? verified=null,DeviceBinding? device=null,Func<bool>? hostReady=null,
-        bool checkDevice=false,SshSession? deviceSession=null)
+        bool checkDevice=false,SshSession? deviceSession=null,string savedId="")
     {
         await gate.WaitAsync(ct);
         try
         {
             var previous=Configured?Load():null;
-            if(previous?.UnbindPending==true)throw new InvalidOperationException(UnbindPendingMessage);
+            if(previous?.UnbindPending==true&&(savedId==""||FindEntry(ReadEntries(),savedId).Remote==previous.Remote))throw new InvalidOperationException(UnbindPendingMessage);
             if(useSaved&&previous==null)throw new InvalidOperationException("没有保存的接入 Key，请输入新的 Key。");
             if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」切换已保存的接入。");
-            var t=verified?.Remote??(useSaved?previous!.Remote:Ticket.Parse(code.Trim()));
+            var t=verified?.Remote??(savedId.Length>0?FindEntry(ReadEntries(),savedId).Remote:useSaved?previous!.Remote:Ticket.Parse(code.Trim()));
             bool controlReady=verified?.HostSession==null?device!=null:device!=null&&hostReady?.Invoke()==true;
             if(verified!=null&&(!controlReady||replace!=verified.Replace||useSaved!=verified.UseSaved||
                useSaved&&t!=previous!.Remote))
@@ -725,7 +815,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 {
                     if(!available.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)
                         throw new InvalidOperationException("此网关尚未支持通过 HTTPS 建立本机远程控制。");
-                    return new DeviceSetup(t,replace,useSaved,priorDevice);
+                    return new DeviceSetup(t,replace,useSaved,priorDevice,Switching:savedId.Length>0&&previous!=null&&previous.Remote!=t);
                 }
                 if(priorDevice!=null)throw new InvalidOperationException("该 Key 的设备授权已不可用，请联系网关管理员。");
             }
@@ -767,6 +857,14 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
                 metaWritten=true;
                 if(undoLegacyPolicy!=null)RestoreLegacyWindowsPermissions();
+                if(device!=null)
+                {
+                    var storedKeys=ReadEntries();
+                    var index=storedKeys.FindIndex(e=>e.Remote==t);
+                    if(index<0)storedKeys.Add(NewEntry(t,new Uri(t.Url).Authority,true));
+                    else storedKeys[index]=storedKeys[index] with {Authorized=true};
+                    WriteEntries(storedKeys);
+                }
                 Save(s);
             }
             catch

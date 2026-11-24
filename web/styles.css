@@ -461,3 +461,22 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
 .gateway-repair-dialog .config-footer{justify-content:flex-end;gap:14px}
 .gateway-repair-dialog .config-footer .text-button{color:#62796a}
 .gateway-repair-dialog .config-footer .primary{width:auto;min-width:82px;padding:0 12px}
+
+.key-secondary{border:1px solid #cbd9cf;border-radius:5px;background:#fff;color:var(--green);height:36px;padding:0 15px;font:inherit;font-size:var(--type-small);cursor:pointer}
+.key-secondary:hover:not(:disabled){background:#edf5ef}
+#key-list-dialog{width:min(440px,94vw)}
+.key-library{padding:20px 22px;max-height:80vh;overflow:auto}
+.key-list-heading,.key-row,#key-add-form>div{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.key-list-heading h2{margin:0;font-size:17px}
+#key-list{margin:12px 0;display:grid;gap:8px;max-height:45vh;overflow:auto}
+.key-row{border:1px solid #dbe4dc;border-radius:7px;padding:12px 14px}
+.key-row.current{border-color:#a9cbb6;background:#f1f7f3}
+.key-row strong,.key-row small{display:block;overflow-wrap:anywhere}
+.key-row small,.key-library>small{color:#617468;font-size:var(--type-small)}
+.key-row small{margin-top:4px}
+.key-current{color:var(--green);white-space:nowrap;font-size:var(--type-small);font-weight:600}
+#key-add-form{border-top:1px solid #dbe4dc;padding-top:8px}
+#key-add-form>div{justify-content:flex-end;margin:10px 0}
+#key-list-status{color:var(--green);margin:8px 0;font-size:var(--type-small)}
+#key-list-status:empty{display:none}
+.key-row-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}

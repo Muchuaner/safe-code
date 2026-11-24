@@ -277,6 +277,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                     self.withUnlockedSecrets(replyID:id,diagnostic:.accountCustomization){self.request(op,args,completion:$0)}
                 }else{self.answer(id,with:result)}
             }
+        case "desktopKey.list","desktopKey.save":
+            withUnlockedSecrets(replyID:id,diagnostic:.desktopKeyRestore){self.request(op,args,completion:$0)}
         case "account.draft.save","desktopKey.enable":
             withUnlockedSecrets(replyID:id,diagnostic:op=="desktopKey.enable" ? .desktopKeyEnable : .accountCustomization){self.request(op,args,completion:$0)}
         case "desktopKey.status" where smokeOutput != nil:
@@ -285,6 +287,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             if hasDesktopKey && (op=="desktopKey.disable" || args["interactive"] as? Bool == true) {
                 withUnlockedSecrets(replyID:id,diagnostic:op=="desktopKey.disable" ? .desktopKeyDisable : .desktopKeyRestore){self.request(op,args,completion:$0)}
             }else{send(body)}
+        case "claudeDesktop.reopen":
+            let apps=NSRunningApplication.runningApplications(withBundleIdentifier:"com.anthropic.claudefordesktop")
+            for app in apps where !app.isTerminated { _=app.terminate() }
+            let deadline=Date().addingTimeInterval(15)
+            func reopenWhenClosed() {
+                if apps.allSatisfy({$0.isTerminated}) {
+                    self.request("claudeDesktop.open"){self.answer(id,with:$0)}
+                } else if Date()>=deadline {
+                    self.answer(id,error:"Key 已切换。请完全退出 Claude Desktop，然后点击「打开 Claude Desktop」。")
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline:.now()+0.25){reopenWhenClosed()}
+                }
+            }
+            reopenWhenClosed()
         case "secrets.initialize":answer(id,error:"仅原生客户端可解锁本机数据。")
         case "diagnostics.native-failure":answer(id,error:"该操作仅供原生客户端内部调用。")
         case "window.smoke.dialog" where smokeOutput != nil:

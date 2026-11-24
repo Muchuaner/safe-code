@@ -98,7 +98,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         'remote-folder-dialog':[460,435],'operation-log-dialog':[540,425],
         'claude-desktop-dialog':[450,320],'gateway-repair-dialog':[450,320],'cloud-remote-dialog':[470,445],
         'advanced-dialog':[355,235],'resolution-dialog':[355,305],
-        'create-folder-dialog':[380,250],'desktop-key-dialog':[360,190],
+        'create-folder-dialog':[380,250],'desktop-key-dialog':[360,190],'key-list-dialog':[440,270],
         'app-message-dialog':[400,300]
       };
       const observer=new MutationObserver(()=>{
@@ -1073,6 +1073,101 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#api-server-mode').onclick=closeApiAccess;
     $('#api-usage-refresh').onclick=refreshApiUsage;
     $('#api-open-claude').onclick=()=>openLocalClient($('#api-open-claude'),'claudeDesktop.open',renderApi);
+    const keyListDialog=$('#key-list-dialog'), keyList=$('#key-list'), keyForm=$('#key-add-form');
+    const keyMessage=$('#key-list-status');
+    let libraryBusy=false, switchPending=false, listGeneration=0;
+    function lockLibrary(busy){
+      libraryBusy=busy;
+      for(const field of keyListDialog.querySelectorAll('button,input'))field.disabled=busy;
+    }
+    async function loadKeyList(){
+      const generation=++listGeneration;
+      const rows=await native('desktopKey.list');
+      if(!keyListDialog.open||generation!==listGeneration)return;
+      keyList.replaceChildren();
+      if(!rows.length)keyMessage.textContent='尚未保存 Key。';
+      for(const entry of rows){
+        const row=document.createElement('div'), info=document.createElement('div');
+        row.className='key-row'+(entry.running?' current':'');
+        const name=document.createElement('strong'), balance=document.createElement('small');
+        name.textContent=entry.name;balance.textContent='余额查询中…';info.append(name,balance);
+        const action=document.createElement(entry.running?'span':'button');
+        action.className=entry.running?'key-current':'key-secondary';
+        action.textContent=entry.running?'正在使用':'切换';
+        if(!entry.running){
+          action.type='button';action.setAttribute('aria-label','切换到 '+entry.name);
+          action.onclick=()=>switchSavedKey(entry);
+        }
+        const actions=document.createElement('div');actions.className='key-row-actions';
+        if(!entry.current){
+          const forget=document.createElement('button');
+          forget.type='button';forget.className='text-button';forget.textContent='移除';
+          forget.setAttribute('aria-label','移除 '+entry.name);
+          forget.onclick=async()=>{
+            if(libraryBusy||!await showAppMessage('从本机移除「'+entry.name+'」？',{confirm:'移除',cancel:'取消'}))return;
+            lockLibrary(true);
+            try{await native('desktopKey.forget',{id:entry.id});await loadKeyList();}
+            catch(error){keyMessage.textContent=error.message;}
+            finally{lockLibrary(false);}
+          };
+          actions.append(forget);
+        }
+        actions.append(action);row.append(info,actions);keyList.append(row);
+        native('desktopKey.savedBalance',{id:entry.id}).then(data=>{
+          balance.textContent=data.remainingNanos===null?'不限额':'余额 '+money(data.remainingNanos);
+        }).catch(()=>{balance.textContent='余额暂不可用';});
+      }
+    }
+    async function openKeyList(){
+      if(keyBusy||libraryBusy)return;
+      keyForm.hidden=true;keyForm.reset();keyMessage.textContent='';keyList.replaceChildren();
+      keyListDialog.showModal();
+      try{await loadKeyList();}catch(error){keyMessage.textContent=error.message;}
+    }
+    async function finishKeySwitch(){
+      switchPending=false;keyListDialog.close();showApiAccess();
+      try{await native('claudeDesktop.reopen');}
+      catch(error){await showAppMessage('已切换 Key。'+error.message);}
+    }
+    async function refreshSwitchState(){
+      keyState=await native('desktopKey.status');
+      if(!keyState.running)resetApiUsage('选择已保存的 Key 恢复接入。');
+      renderKey();
+      await loadKeyList();
+    }
+    async function switchSavedKey(entry){
+      if(libraryBusy)return;
+      lockLibrary(true);keyMessage.textContent='正在连接 '+entry.name+'…';
+      try{
+        const result=await native('desktopKey.enable',{savedId:entry.id,replace:true});
+        if(result.requiresDevice){
+          switchPending=true;keyDeviceSetup=result;openHostControl();return;
+        }
+        keyState=result;
+        if(!keyState.running)throw new Error(keyState.error||'接入未启动。');
+        await finishKeySwitch();
+      }catch(error){
+        keyMessage.textContent=error.message;
+        try{await refreshSwitchState();}catch{}
+      }finally{lockLibrary(false);}
+    }
+    $('#api-switch-key').onclick=openKeyList;
+    $('#key-library-entry').onclick=openKeyList;
+    $('#key-list-close').onclick=()=>keyListDialog.close();
+    keyListDialog.addEventListener('cancel',event=>{if(libraryBusy)event.preventDefault();});
+    keyListDialog.addEventListener('close',()=>{keyForm.reset();listGeneration++;});
+    $('#key-add').onclick=()=>{keyForm.hidden=false;$('#key-label').focus();};
+    $('#key-add-cancel').onclick=()=>{keyForm.hidden=true;keyForm.reset();};
+    keyForm.onsubmit=async event=>{
+      event.preventDefault();if(libraryBusy)return;
+      lockLibrary(true);
+      try{
+        await native('desktopKey.save',{name:$('#key-label').value.trim(),key:$('#key-code').value.trim()});
+        keyForm.reset();keyForm.hidden=true;keyMessage.textContent='';
+        await loadKeyList();
+      }catch(error){keyMessage.textContent=error.message;}
+      finally{lockLibrary(false);}
+    };
     $('#api-manage-key').onclick=()=>{
       keyDialog.showModal();void keyAction('status',{interactive:true});
     };
@@ -1236,6 +1331,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
             ? '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。SafeCode 只会为当前 macOS 账户添加一把专用 SSH 公钥。'
             : '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。部署需要 Windows 管理员授权。'))
         : instructions;
+      if(keyDeviceSetup)$('#host-progress').textContent+=' 下次在这台电脑选择同一把 Key 时，会使用本次授权重新连接。';
       renderHostControl();
       hostDialog.showModal();
     }
@@ -1257,7 +1353,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if(keyDeviceSetup){
         keyDeviceSetup=null;
         void native('desktopKey.cancelDevice').catch(()=>{});
-        keyDialog.close();
+        if(switchPending){switchPending=false;keyMessage.textContent='已取消切换。';}
+        else keyDialog.close();
         renderHostControl();
       }
     });
@@ -1276,10 +1373,11 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           keyDeviceSetup=null;keyReplacing=false;
           keyProgress.textContent=describeKey('enable');
           hostDialog.close();renderKey();
-          if(keyState.running)showApiAccess();
+          if(keyState.running){if(switchPending)await finishKeySwitch();else showApiAccess();}
         }catch(error){
           $('#host-risk').checked=false;
           $('#host-progress').textContent=error.message;
+          if(switchPending)try{await refreshSwitchState();}catch{}
         }finally{hostBusy=false;renderHostControl();}
         return;
       }

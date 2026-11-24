@@ -47,7 +47,7 @@
     </section>
     <footer class="api-actions">
       <div><button class="text-button" type="button" id="api-manage-key">接入设置</button><button class="text-button" type="button" data-open-services>更新与反馈</button></div>
-      <button class="primary" type="button" id="api-open-claude">打开 Claude Desktop</button>
+      <div><button class="key-secondary" type="button" id="api-switch-key">更换 Key</button><button class="primary" type="button" id="api-open-claude">打开 Claude Desktop</button></div>
     </footer>
   </section>
   <section class="workspace" id="workspace-screen" hidden>
@@ -80,13 +80,27 @@
   </section>
 </main>
 <dialog class="account-window" id="maintenance-result" aria-labelledby="result-title"><header class="titlebar"><span class="app-name" id="result-title">工作账户</span><button class="close" id="close-result" aria-label="关闭账户窗口"><svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg></button></header><div class="account-body"><h2>工作账户</h2><p class="account-description">用于登录远程桌面和日常开发。</p><div id="result-body"></div><button class="primary" id="account-done">关闭</button></div></dialog>
+<dialog id="key-list-dialog" class="config-dialog" aria-labelledby="key-list-title">
+  <header class="titlebar"><span class="app-name" id="key-list-title">更换 Key</span><button class="close" type="button" id="key-list-close" aria-label="关闭"><svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg></button></header>
+  <div class="config-body key-library">
+    <div class="key-list-heading"><h2>已保存的 Key</h2><button type="button" class="text-button" id="key-add">添加 Key</button></div>
+    <div id="key-list"></div>
+    <form id="key-add-form" autocomplete="off" hidden>
+      <label for="key-label">名称</label><input id="key-label" maxlength="64" placeholder="例如：测试网关" required>
+      <label for="key-code">接入 Key</label><input type="password" id="key-code" maxlength="2048" autocomplete="off" spellcheck="false" placeholder="粘贴完整接入 Key" required>
+      <div><button type="button" class="text-button" id="key-add-cancel">取消</button><button class="key-secondary" type="submit">保存 Key</button></div>
+    </form>
+    <p id="key-list-status" role="status"></p>
+    <small>切换后会重新打开 Claude Desktop。</small>
+  </div>
+</dialog>
 <dialog id="desktop-key-dialog" class="config-dialog" aria-labelledby="desktop-key-title">
   <header class="titlebar"><span class="app-name" id="desktop-key-title">Safe Code API · Key 接入</span><button type="button" class="close" id="desktop-key-close" aria-label="关闭"><svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg></button></header>
   <form id="desktop-key-form" class="config-body" autocomplete="off">
     <p class="config-description">粘贴 Safe Code API 签发的 Key，即可连接远端 Claude Code。<br>使用时请保持 SafeCode 运行。</p>
     <div id="desktop-key-field"><label for="desktop-key-input">接入 Key</label><input type="password" id="desktop-key-input" placeholder="粘贴完整接入 Key" autocomplete="off" spellcheck="false" maxlength="2048" required></div>
     <p id="desktop-key-progress" role="status" aria-live="polite"></p>
-    <div class="config-footer"><button type="button" class="text-button" id="desktop-key-replace" hidden>更换 Key</button><button type="button" class="text-button" id="desktop-key-refresh" hidden>刷新模型</button><button type="button" class="text-button" id="desktop-key-disable" hidden>停用接入</button><button type="submit" class="primary" id="desktop-key-enable">验证并启用</button><button type="button" class="primary" id="desktop-key-resume" hidden>重新启用</button><button type="button" class="primary" id="desktop-key-open" disabled hidden><span>打开<br>Claude Desktop</span></button></div>
+    <div class="config-footer"><button type="button" class="text-button" id="key-library-entry">已保存的 Key</button><button type="button" class="text-button" id="desktop-key-replace" hidden>更换 Key</button><button type="button" class="text-button" id="desktop-key-refresh" hidden>刷新模型</button><button type="button" class="text-button" id="desktop-key-disable" hidden>停用接入</button><button type="submit" class="primary" id="desktop-key-enable">验证并启用</button><button type="button" class="primary" id="desktop-key-resume" hidden>重新启用</button><button type="button" class="primary" id="desktop-key-open" disabled hidden><span>打开<br>Claude Desktop</span></button></div>
   </form>
 </dialog>
 <dialog id="ip-policy-dialog" class="config-dialog" aria-labelledby="ip-policy-title"><header class="titlebar"><span class="app-name" id="ip-policy-title">出入口 IP 设置</span><button class="close" id="close-ip-policy" aria-label="关闭出入口设置"><svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg></button></header><form id="ip-policy-form" class="config-body"><h2>入口与出口，各司其职。</h2><p class="config-description">从服务器检测到的地址中选择，不支持手动输入。</p><div class="ip-choice-field"><label id="ingress-ip-label" for="ingress-ip-trigger">入口 IP</label><div class="ip-picker" data-ip-picker="ingress-ip-input"><select id="ingress-ip-input" hidden tabindex="-1" aria-hidden="true"></select></div></div><div class="ip-choice-field"><label id="egress-ip-label" for="egress-ip-trigger">出口 IP</label><div class="ip-picker" data-ip-picker="egress-ip-input"><select id="egress-ip-input" hidden tabindex="-1" aria-hidden="true"></select></div></div><label class="policy-toggle"><input type="checkbox" id="lock-ingress"><span>锁定入口接入<small>管理连接仅通过指定的入口 IP。</small></span></label><label class="policy-toggle"><input type="checkbox" id="lock-egress"><span>固定住宅出口</span></label><div class="config-footer"><span id="ip-policy-hint">保存前验证入口与真实出口，失败自动回退。</span><button class="primary" type="submit">保存设置</button></div></form></dialog>

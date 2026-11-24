@@ -70,6 +70,36 @@ public sealed class WindowsClients : IDisposable
         foreach(string arg in args)start.ArgumentList.Add(arg);
         var process=Process.Start(start)??throw new IOException("无法打开 Windows 终端。");terminals.Add(process);
     }
+    internal static async Task<string> ReopenClaudeAsync(DesktopKeyAccess access,CancellationToken ct)
+    {
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        var apps=Process.GetProcessesByName("Claude");
+        var desktop=new List<Process>();
+        using var self=Process.GetCurrentProcess();
+        try
+        {
+            foreach(var app in apps)
+            {
+                try
+                {
+                    if(app.SessionId!=self.SessionId||app.HasExited)continue;
+                    var path=app.MainModule?.FileName;
+                    var local=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"AnthropicClaude");
+                    if(path==null||!path.Contains(@"\WindowsApps\Claude_",StringComparison.OrdinalIgnoreCase)
+                        &&!path.StartsWith(local+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))continue;
+                    desktop.Add(app);
+                    if(app.MainWindowHandle!=IntPtr.Zero)app.CloseMainWindow();
+                }
+                catch(InvalidOperationException) when(app.HasExited){}
+            }
+            await Task.WhenAll(desktop.Select(app=>app.WaitForExitAsync(timeout.Token)));
+        }
+        catch(OperationCanceledException) when(!ct.IsCancellationRequested)
+        {throw new InvalidOperationException("请完全退出 Claude Desktop，然后点击「打开 Claude Desktop」。");}
+        finally{foreach(var app in apps)app.Dispose();}
+        return await OpenClaudeAsync(access,ct);
+    }
     internal static async Task<string> OpenClaudeAsync(DesktopKeyAccess access,CancellationToken ct)
     {
         if(!IsClaudeInstalled())throw new InvalidOperationException("未检测到 Claude Desktop，请先安装官方客户端，或从开始菜单启动。");

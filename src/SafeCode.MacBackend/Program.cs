@@ -105,6 +105,14 @@ internal sealed class MacBackend : IDisposable
     private async Task<object> AuthorizeKeyDeviceAsync(CancellationToken ct)
     {
         var setup=pendingKeyDevice??throw new InvalidOperationException("请重新验证接入 Key。");
+        if(setup.Switching)
+        {
+            try{await KeyAccess().DisableAsync(ct);}
+            finally{await StopKeyDeviceAsync();}
+            if(KeyAccess().Configured)throw new InvalidOperationException("原网关尚未确认解绑，请恢复网络后重试。");
+            setup=setup with {Switching=false};
+            pendingKeyDevice=setup;
+        }
         var control=hostControl??=new MacHostControl(directory);
         if(setup.HostSession is { } target)return await AuthorizeKeyHostControlAsync(setup,target,control,ct);
         if(control.Enabled)throw new InvalidOperationException("本机已有控制通道，请先停用后再部署 Key 接入。");
@@ -223,14 +231,24 @@ internal sealed class MacBackend : IDisposable
                 return new{configured=File.Exists(Path.Combine(directory,"desktop-key.state")),running=false};
             case "desktopKey.status":
                 return await KeyAccess().RestoreAsync(ct,interactive:Flag("interactive"));
+            case "desktopKey.list": return await KeyAccess().ListKeysAsync(ct);
+            case "desktopKey.save":
+                await KeyAccess().SaveKeyAsync(Read("key"),Read("name"),ct);
+                return true;
+            case "desktopKey.forget":
+                await KeyAccess().ForgetKeyAsync(Read("id"),ct);
+                return true;
+            case "desktopKey.savedBalance": return await KeyAccess().SavedBalanceAsync(Read("id"),ct);
             case "desktopKey.enable":
                 _=LocalSecrets.RequireKey();
-                if(keyDeviceTunnel!=null&&hostControl?.Enabled==true)throw new InvalidOperationException("请先停用当前 Key 接入，再更换 Key。");
+                if(Read("savedId")==""&&keyDeviceTunnel!=null&&hostControl?.Enabled==true)throw new InvalidOperationException("请先停用当前 Key 接入，再更换 Key。");
                 pendingKeyDevice=null;
                 var keyResult=await KeyAccess().EnableAsync(Read("key"),ct,replace:Flag("replace"),useSaved:Flag("useSaved"),
-                    checkDevice:true,deviceSession:connectionPending==0&&session?.IsConnected==true&&session.Server!=null?session:null);
+                    savedId:Read("savedId"),checkDevice:true,deviceSession:connectionPending==0&&session?.IsConnected==true&&session.Server!=null?session:null);
                 if(keyResult is not DesktopKeyAccess.DeviceSetup setup)return keyResult;
                 pendingKeyDevice=setup;
+                if(Read("savedId")!=""&&await KeyAccess().HasDeviceConsentAsync(setup.Remote,ct))
+                    return await AuthorizeKeyDeviceAsync(ct);
                 var keyHost=setup.HostSession;
                 bool existingControl=keyHost!=null&&hostControl?.IsEnabledFor(keyHost)==true;
                 return new{requiresDevice=true,reuseControl=keyHost!=null,existingControl,
