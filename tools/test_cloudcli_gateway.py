@@ -2068,6 +2068,51 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertTrue(task.startswith('Continue after stopping.'))
         self.assertNotIn('An earlier rejected local attempt',task)
 
+    def test_desktop_can_resume_a_completed_turn_after_its_stream_was_interrupted(self):
+        original = conversation('Retain this context.', stream=True)
+        status, events = self.request(original)
+        self.assertEqual(status, 200)
+        reply = ''.join(event.get('delta', {}).get('text', '') for event in events)
+        self.assertTrue(reply.endswith('Fixture reply'))
+        partial = {'role':'assistant', 'content':reply[:8]}
+        canceled = {'role':'user', 'content':'[Request interrupted by user]'}
+        followup = {'role':'user', 'content':'Continue after stopping.'}
+        history = [*original['messages'], partial]
+        invalid = [
+            [*history, followup],
+            [{'role':'user', 'content':'Unrelated context.'}, partial, canceled, followup],
+            [*original['messages'], {**partial, 'content':'A different reply'}, canceled, followup],
+            [*original['messages'], {**partial, 'content':[
+                {'type':'text', 'text':reply[:8]},
+                {'type':'tool_use', 'id':'different', 'name':'Read', 'input':{}},
+            ]}, canceled, followup],
+        ]
+        for messages in invalid:
+            self.assertEqual(self.request(conversation('unused', messages=messages))[0], 409)
+        self.assertEqual(self.request(conversation('unused', messages=[*history, canceled, followup]),
+                                      session=str(uuid.uuid4()))[0], 409)
+        self.assertEqual(len(self.cloud.requests), 1)
+
+        placeholder = {'role':'assistant', 'content':'No response requested.'}
+        attempts = [*history, canceled, placeholder, {'role':'user', 'content':[
+            {'type':'text', 'text':'A rejected attempt.\n'},
+            {'type':'text', 'text':'[Request interrupted by user]'},
+        ]}, placeholder, followup]
+        self.cloud.reply = (200, cloud_turn('Continuation after stopping.'))
+        task = conversation('unused', messages=attempts)
+        status, next_reply = self.request(task)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.request(task), (200, next_reply))
+        self.assertEqual(len(self.cloud.requests), 2)
+        payload = self.cloud.requests[-1][2]
+        self.assertEqual(payload['sessionId'], CLOUD_SESSION)
+        self.assertEqual(payload['message'], followup['content'])
+
+        continuation = [*attempts, {'role':'assistant', 'content':next_reply['content']},
+                        {'role':'user', 'content':'One more follow-up.'}]
+        self.assertEqual(self.request(conversation('unused', messages=continuation))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
     def test_stopped_prompt_can_be_edited_before_cloudcli_recorded_a_user_anchor(self):
         self.enable_cloudcli_web_fixture()
         self.cloud.track_history = True

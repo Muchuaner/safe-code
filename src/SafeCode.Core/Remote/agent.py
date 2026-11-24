@@ -983,8 +983,6 @@ def gateway_node():
 CODEX_BRIDGE_SOURCE_HASH='3d6c8d98604e7301bd92046b00ead3b08eddefa157e1c5661d2c9599aefe58c3'
 def codex_bridge(options):
     action=options.get('action','');a=account();parameters={k:options[k] for k in ['publicKey','keyId','clientId']}
-    if action=='repair':
-        return repair_safe_code_api(entry, command, options, work_python)
     if action=='install':
         import zipfile
         payload=Path(options.get('payload',''))
@@ -1036,6 +1034,8 @@ def safe_code_api(options):
     command=[*work_python,'-B',str(script),'--state',str(directory)]
     if action=='install':
         return install_safe_code_api(entry, command, options, work_python)
+    if action=='repair':
+        return repair_safe_code_api(entry, command, options, work_python)
     if not script.is_file():
         if action=='public_status':
             return {'installed':False,'enabled':False,

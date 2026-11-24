@@ -422,6 +422,32 @@ if sys.stdin.buffer.read(1) == b'\r':
             self.assertEqual((app/'server.py').read_bytes(), b'fixture')
             self.assertTrue(unit.is_file())
 
+    def test_repair_uses_ssh_agent_instead_of_gateway_admin_socket(self):
+        app = self.root/'desktop-api'
+        app.mkdir()
+        script = app/'server.py'
+        script.touch()
+        entry = SimpleNamespace(pw_uid=1000, pw_name='fixture', pw_dir=str(self.root))
+        files = {name: base64.b64encode(b'x' * 8192).decode() for name in agent.API_FILES}
+        work_python = ['runuser', '-u', entry.pw_name, '--', 'env', '-i', 'HOME='+entry.pw_dir,
+                       'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', '/usr/bin/python3']
+        command = [*work_python, '-B', str(script), '--state', str(self.root/agent.API_STATE)]
+        with (patch.object(agent, 'API_DIRECTORY', app),
+              patch.object(agent, 'account', return_value={'username': entry.pw_name}),
+              patch.object(agent.pwd, 'getpwnam', return_value=entry),
+              patch.object(agent, 'repair_safe_code_api', return_value={'enabled': True}) as repair,
+              patch.object(agent, 'safe_code_api_admin') as admin):
+            options = {'action': 'repair', 'accepted': True, 'files': files, 'reinstallCloudCLI': True}
+            self.assertEqual(agent.safe_code_api(options), {'enabled': True})
+            repair.assert_called_once_with(entry, command, options, work_python)
+
+            script.unlink()
+            repair.reset_mock()
+            options = {**options, 'reinstallCloudCLI': False}
+            self.assertEqual(agent.safe_code_api(options), {'enabled': True})
+            repair.assert_called_once_with(entry, command, options, work_python)
+            admin.assert_not_called()
+
     def test_gateway_provisions_verified_node_without_cloudcli(self):
         node_root = self.root/'node'
         filename = 'node-v22.1.0-linux-x64.tar.gz'

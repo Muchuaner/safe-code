@@ -738,9 +738,19 @@ def history_signature(messages, scope):
 DESKTOP_INTERRUPTIONS = frozenset(('[Request interrupted by user]', '[Request interrupted by user for tool use]'))
 
 
+def desktop_assistant_text(message):
+    if not isinstance(message, dict) or message.get('role') != 'assistant':
+        return None
+    visible = [item for item in blocks(message.get('content', []))
+               if item.get('type') not in ('thinking', 'redacted_thinking')]
+    if any(item.get('type') != 'text' or not isinstance(item.get('text'), str) for item in visible):
+        return None
+    return ''.join(item['text'] for item in visible)
+
+
 def split_desktop_interruptions(messages):
     """Restore the turn boundaries lost when Desktop coalesces consecutive user messages."""
-    result, stopped = [], set()
+    result, stopped, interrupted_replies = [], set(), set()
     for message in messages:
         if message['role'] != 'user':
             result.append(message)
@@ -763,6 +773,8 @@ def split_desktop_interruptions(messages):
                 pending = []
             elif result and result[-1]['role'] == 'user':
                 stopped.add(len(result)-1)
+            elif result and result[-1]['role'] == 'assistant':
+                interrupted_replies.add(len(result)-1)
         if pending:
             result.append({'role':'user','content':pending})
     if len(result)-1 in stopped:
@@ -774,7 +786,16 @@ def split_desktop_interruptions(messages):
     while index in stopped:
         prefixes.append(history_signature(result[:index],'cloudcli'))
         index -= 1
-    return result, prefixes
+    # Desktop may display its own placeholder after a canceled local attempt.
+    # Ignore it here only next to an explicit stop while locating the partial reply.
+    while index > 0:
+        if index in stopped or ((index-1 in stopped or index-1 in interrupted_replies)
+                                and desktop_assistant_text(result[index]) == 'No response requested.'):
+            index -= 1
+        else:
+            break
+    partial_history = result[:index+1] if index in interrupted_replies else None
+    return result, prefixes, partial_history
 
 
 def desktop_compact_context(messages):
@@ -2741,7 +2762,26 @@ class CloudCliBackend:
                 workspace is not None and (self.device or 'projectWorkspaces' in (self.config['hostControl'] or {}))):
             db.execute('INSERT OR REPLACE INTO session_projects VALUES (?, ?, ?, ?)', (session, project, workspace, now))
 
-    def session_binding(self, db, namespace, prefix, position, compact_context, interrupted_prefixes=()):
+    @staticmethod
+    def confirmed_partial_history(db, namespace, partial_history):
+        text = desktop_assistant_text(partial_history[-1])
+        if not text or not text.strip():
+            return None
+        replies = db.execute('SELECT reply FROM requests WHERE scope=? AND reply IS NOT NULL LIMIT 2',
+                             (namespace,)).fetchall()
+        if len(replies) != 1:
+            return None
+        reply = json.loads(replies[0][0])
+        if not isinstance(reply, dict) or reply.get('stop_reason') != 'end_turn':
+            return None
+        complete = desktop_assistant_text(reply)
+        if not complete or len(complete) <= len(text) or not complete.startswith(text):
+            return None
+        # Only a checkpoint of this exact history may resume the CloudCLI session.
+        return history_signature([*partial_history[:-1], reply], 'cloudcli')
+
+    def session_binding(self, db, namespace, prefix, position, compact_context, interrupted_prefixes=(),
+                        partial_history=None):
         fields = ('SELECT DISTINCT sessions.session, project, workspace, model, tip_anchor FROM sessions '
                   'LEFT JOIN session_projects USING (session) '
                   'LEFT JOIN session_state USING (scope, session) WHERE sessions.scope=?')
@@ -2750,6 +2790,12 @@ class CloudCliBackend:
                 current = db.execute(fields+' AND history=?', (namespace, candidate)).fetchone()
                 if current is not None:
                     return current, None
+            if partial_history and namespace.rpartition(':')[2]:
+                confirmed = self.confirmed_partial_history(db, namespace, partial_history)
+                if confirmed is not None:
+                    current = db.execute(fields+' AND history=?', (namespace, confirmed)).fetchone()
+                    if current is not None:
+                        return current, None
         if namespace.rpartition(':')[2] and self.config.get('desktopQuestions'):
             bindings = db.execute(fields+' LIMIT 2', (namespace,)).fetchall()
             if bindings:
@@ -3037,8 +3083,9 @@ class CloudCliBackend:
             raise CloudCliError('CloudCLI messages must end with a user task', 400)
         scope = conversation_scope(data, session_header)
         interrupted_prefixes = []
+        partial_history = None
         if scope:
-            messages, interrupted_prefixes = split_desktop_interruptions(messages)
+            messages, interrupted_prefixes, partial_history = split_desktop_interruptions(messages)
         if not messages or messages[-1]['role'] != 'user':
             raise CloudCliError('CloudCLI requires a new user task after stopping', 400)
         latest = blocks(messages[-1].get('content'))
@@ -3148,7 +3195,7 @@ class CloudCliBackend:
                     return json.loads(prior[0])
                 compact_context = desktop_compact_context(messages[:-1]) if scope else None
                 saved, edit = self.session_binding(db, namespace, before, position, compact_context,
-                                                   interrupted_prefixes)
+                                                   interrupted_prefixes, partial_history)
                 if saved:
                     payload['sessionId'], project, workspace, previous_model, _ = saved
                     if scope and self.config.get('desktopQuestions') and previous_model != model:
