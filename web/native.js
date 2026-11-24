@@ -532,10 +532,17 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     openAccountSettings=async function(){
       const attempt=connectionAttempt;
       try{const draft=await native('account.draft.get',isMac?{interactive:true}:{});if(attempt!==connectionAttempt)return;accountOptions=draft||{};accountDraftPending=!!draft;
-        $('#custom-hostname').value=draft?.hostname||nativeServer?.hostname||'safe-workstation';$('#custom-username').value=draft?.username||nativeServer?.username||'workspace';$('#custom-password').type='password';$('#custom-password').value=draft?.password||'';setEye($('#account-settings [data-reveal]'),false);
+        $('#custom-hostname').value=draft?.hostname||nativeServer?.hostname||'safe-workstation';$('#custom-username').value=draft?.username||nativeServer?.username||'workspace';$('#custom-password').type='password';$('#custom-password').value=draft?.password||'';validateWorkPassword();setEye($('#account-settings [data-reveal]'),false);
         $('#account-custom-hint').textContent='工作密码用于工作用户和远程桌面。保存工作用户和本土化设置后即可部署。更换用户名会创建新环境，保留旧项目，需先注销旧桌面并卸载目录，旧 CloudCLI 将停止。';$('#account-settings').showModal();
       }catch(e){showAppMessage(e.message);}
     };
+    const workPassword=$('#custom-password');
+    function validateWorkPassword(){
+      const password=workPassword.value;
+      workPassword.setCustomValidity(password && (password.length<12||password.length>256||password.includes('\0'))
+        ? '工作密码须为 12–256 位，不能包含空字符。' : '');
+    }
+    workPassword.addEventListener('input',validateWorkPassword);
     let accountSaving=false;
     $('#account-settings-form').onsubmit=async e=>{
       e.preventDefault();if(!connectionReady||busy||accountSaving||!$('#account-settings-form').reportValidity())return;

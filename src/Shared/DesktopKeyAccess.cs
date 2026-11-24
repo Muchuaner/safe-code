@@ -367,16 +367,17 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(!Uri.TryCreate(url,UriKind.Absolute,out var endpoint)||endpoint.Port is <1024 or >65535
             ||url!="http://127.0.0.1:"+endpoint.Port)return false;
         var credential=ProfileText(profile,"inferenceGatewayApiKey");
-        if(credential is {Length:>14}&&credential.StartsWith("__sealed__:v1:",StringComparison.Ordinal)
-            &&ProfileText(profile,"inferenceProvider")=="gateway"&&ProfileText(profile,"inferenceGatewayAuthScheme")=="bearer"
-            &&ProfileText(profile,"inferenceCredentialKind")=="static"&&ProfileText(profile,"deploymentDisplayName")=="SafeCode")return true;
         var encrypted=ReadOptionalFile(Path.Combine(dataDirectory,"desktop-ssh.aes"));
         if(encrypted==null)return false;
         byte[] plain=unprotect(encrypted);
         try
         {
             var state=JsonSerializer.Deserialize<LegacyMacProfile>(plain);
-            return state!=null&&state.Id==id&&state.Port==endpoint.Port&&state.Token==credential;
+            if(state==null || state.Id!=id || state.Port!=endpoint.Port || string.IsNullOrEmpty(state.Token))return false;
+            if(state.Token==credential)return true;
+            return credential is {Length:>14}&&credential.StartsWith("__sealed__:v1:",StringComparison.Ordinal)
+                &&ProfileText(profile,"inferenceProvider")=="gateway"&&ProfileText(profile,"inferenceGatewayAuthScheme")=="bearer"
+                &&ProfileText(profile,"inferenceCredentialKind")=="static"&&ProfileText(profile,"deploymentDisplayName")=="SafeCode";
         }
         finally{CryptographicOperations.ZeroMemory(plain);}
     }

@@ -70,13 +70,27 @@ internal static class MacSelfTest
             WriteProfile(tokenId);
             profile["inferenceGatewayBaseUrl"] = "https://other.example";
             WriteProfile(otherId);
-            var state = new { Id = tokenId, Token = "fixture-local-token", Port = 18899 };
-            DesktopKeyAccess.WriteProfileFile(Path.Combine(profileTest,"desktop-ssh.aes"),
-                LocalSecrets.Protect(JsonSerializer.SerializeToUtf8Bytes(state)));
             using var access = new DesktopKeyAccess(profileTest,LocalSecrets.Protect,LocalSecrets.Unprotect,library);
+            string originalMeta = meta.ToJsonString();
+            void SaveBetaState(string id, int port)
+            {
+                var state = new { Server = new { Host = "gateway.example" }, Id = id, Token = "fixture-local-token", Port = port };
+                DesktopKeyAccess.WriteProfileFile(Path.Combine(profileTest,"desktop-ssh.aes"),
+                    LocalSecrets.Protect(JsonSerializer.SerializeToUtf8Bytes(state)));
+            }
+            access.RemoveLegacyMacProfiles(meta,library);
+            SaveBetaState(sealedId, 18900);
+            access.RemoveLegacyMacProfiles(meta,library);
+            if(meta.ToJsonString()!=originalMeta)throw new Exception("缺少匹配的本机状态时改动了旧配置。");
+            SaveBetaState(tokenId, 18899);
+            access.RemoveLegacyMacProfiles(meta,library);
+            if((string?)meta["appliedId"]!=sealedId || meta["entries"]!.AsArray().Count!=2 ||
+                meta["entries"]!.AsArray().Any(entry=>(string?)entry?["id"]==tokenId))
+                throw new Exception("迁移明文配置时误动了同名加密配置。");
+            SaveBetaState(sealedId, 18899);
             access.RemoveLegacyMacProfiles(meta,library);
             if ((string?)meta["appliedId"]!="" || (string?)meta["entries"]!.AsArray().Single()!["id"]!=otherId)
-                throw new Exception("切换 API Key 时未正确区分旧 SSH 与自定义配置。");
+                throw new Exception("未迁移有匹配本机记录的加密 SSH 配置。");
             Console.WriteLine("MAC_LEGACY_SSH_PROFILE_MIGRATION_OK");
 
             var savedKey = new
