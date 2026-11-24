@@ -464,17 +464,32 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
 
 .key-secondary{border:1px solid #cbd9cf;border-radius:5px;background:#fff;color:var(--green);height:36px;padding:0 15px;font:inherit;font-size:var(--type-small);cursor:pointer}
 .key-secondary:hover:not(:disabled){background:#edf5ef}
-#key-list-dialog{width:min(440px,94vw)}
-.key-library{padding:20px 22px;max-height:80vh;overflow:auto}
+/* AppKit measures this body to fit the panel. Only the outer dialog scrolls. */
+.config-dialog:where(#key-list-dialog){width:480px}
+.key-library{padding:18px 20px 16px}
 .key-list-heading,.key-row,#key-add-form>div{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.key-list-heading h2{margin:0;font-size:17px}
-#key-list{margin:12px 0;display:grid;gap:8px;max-height:45vh;overflow:auto}
-.key-row{border:1px solid #dbe4dc;border-radius:7px;padding:12px 14px}
-.key-row.current{border-color:#a9cbb6;background:#f1f7f3}
+.key-list-heading h2{margin:0;font-size:16px;font-weight:600}
+.key-library .text-button{color:#546c60}
+.key-library .text-button:hover:not(:disabled){color:var(--green);text-decoration:underline}
+.key-list-heading #key-add{padding:5px 10px;border:1px solid #d5e1d9;border-radius:5px;color:var(--green);font-weight:550}
+#key-list{margin:12px 0}
+#key-list:not(:empty){border:1px solid #dbe4dc;border-radius:7px}
+.key-row{padding:12px 14px}
+.key-row+.key-row{border-top:1px solid #e0e8e2}
+.key-row:first-child{border-radius:6px 6px 0 0}
+.key-row:last-child{border-radius:0 0 6px 6px}
+.key-row:only-child{border-radius:6px}
+.key-row.current{background:#eff6f1}
+.key-row>div:first-child{min-width:0}
 .key-row strong,.key-row small{display:block;overflow-wrap:anywhere}
 .key-row small,.key-library>small{color:#617468;font-size:var(--type-small)}
-.key-row small{margin-top:4px}
+.key-row small{margin-top:4px;font-variant-numeric:tabular-nums}
 .key-current{color:var(--green);white-space:nowrap;font-size:var(--type-small);font-weight:600}
+.key-row-actions .key-secondary{height:30px;padding:0 13px}
+.key-library>small{display:block}
+#key-list-dialog{scrollbar-width:thin!important}
+#key-list-dialog::-webkit-scrollbar{display:block!important;width:6px!important}
+#key-list-dialog::-webkit-scrollbar-thumb{border-radius:4px;background:#bccdc1}
 #key-add-form{border-top:1px solid #dbe4dc;padding-top:8px}
 #key-add-form>div{justify-content:flex-end;margin:10px 0}
 #key-list-status{color:var(--green);margin:8px 0;font-size:var(--type-small)}
@@ -482,5 +497,5 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
 .key-row-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}
 
 .key-row-name{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-.key-row-name .text-button{font-size:var(--type-small);white-space:nowrap}
+.key-row-name .text-button{padding:2px 0;font-size:var(--type-small);white-space:nowrap}
 #key-add-form [hidden]{display:none!important}

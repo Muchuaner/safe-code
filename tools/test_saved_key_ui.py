@@ -18,12 +18,21 @@ with sync_playwright() as pw:
     page.add_init_script("""
         window.__safeCodeDesktop=true;
         let keys=[{id:'first',name:'测试网关'}], current='first';
+        if(new URLSearchParams(location.search).has('mac-panel')){
+          window.__safeCodePlatform='macos';window.__safeCodeNativeDialogs=true;
+          keys.push({id:'second',name:'工作网关'});
+          if(location.hash==='#many')
+            for(let i=2;i<12;i++)keys.push({id:String(i),name:'网关 '+i});
+        }
         window.launches=0;let pending=null, authorized=new Set(['first']);
         window.chrome={webview:{postMessage({op,args,id}){
           let result=null,error=null;
           const status=()=>({configured:true,running:true,deviceAlias:'本机设备',startedAt:Date.now()-720000});
           switch(op){
             case 'services.preferences':case 'services.confirm':result={};break;
+            case 'window.fitDialog':
+              if(args.id==='key-list-dialog')window.panelHeight=args.height;
+              break;
             case 'desktopKey.mode':result=true;break;
             case 'notice.state':result={accepted:true};break;
             case 'desktopKey.status':result=status();break;
@@ -101,6 +110,44 @@ with sync_playwright() as pw:
     expect(rows.nth(1)).to_contain_text("正在使用")
     page.get_by_role("button", name="切换到 本地测试").click()
     page.wait_for_function("launches===2")
+    # AppKit moves this WebView into a smaller window, then fits that window to the body.
+    page.goto("https://safe-code.local/web/index.html?mac-panel")
+    picker.click()
+    expect(rows).to_have_count(2)
+    page.set_viewport_size({"width": 440, "height": 200})
+    page.evaluate("safeCodePresentNativeDialog('key-list-dialog')")
+    def fit_panel(width):
+        page.set_viewport_size({"width": width, "height": 200})
+        page.evaluate("safeCodePresentNativeDialog('key-list-dialog')")
+        height = page.evaluate("panelHeight")
+        page.set_viewport_size({"width": width, "height": height})
+        assert page.locator("#key-list").evaluate("(e)=>e.scrollHeight <= e.clientHeight+1"), "Key rows clipped inside the list"
+        assert page.locator("#key-list-dialog").evaluate("""e=>
+            e.scrollWidth<=e.clientWidth+1 && e.scrollHeight<=e.clientHeight+1 &&
+            Math.abs(e.getBoundingClientRect().width-innerWidth)<=1"""), "Native panel does not fit content"
+        for row in rows.all():
+            box=row.bounding_box()
+            assert box["y"]>=0 and box["y"]+box["height"]<=height+1
+    fit_panel(440)
+    if args.screenshots:
+        page.screenshot(path=str(args.screenshots / "key-list-mac-layout.png"))
+    page.get_by_role("button",name="编辑备注：工作网关").click()
+    page.locator("#key-label").fill("工作网关"*16)
+    fit_panel(320)
+    page.get_by_role("button",name="保存备注").click()
+    expect(rows.nth(1)).to_contain_text("工作网关"*16)
+    fit_panel(320)
+    page.goto("https://safe-code.local/web/index.html?mac-panel#many")
+    page.reload()  # Reload the fixture when only the fragment changed.
+    picker.click()
+    expect(rows).to_have_count(12)
+    page.set_viewport_size({"width": 440, "height": 420})
+    page.evaluate("safeCodePresentNativeDialog('key-list-dialog')")
+    panel = page.locator("#key-list-dialog")
+    assert panel.evaluate("e=>e.scrollHeight>e.clientHeight")
+    assert page.locator("#key-list").evaluate("e=>e.scrollHeight<=e.clientHeight+1")
+    rows.last.scroll_into_view_if_needed()
+    assert panel.evaluate("e=>e.scrollTop>0")
     assert not errors, errors
     context.close()
     if not args.cdp:

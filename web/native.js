@@ -98,7 +98,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         'remote-folder-dialog':[460,435],'operation-log-dialog':[540,425],
         'claude-desktop-dialog':[450,320],'gateway-repair-dialog':[450,320],'cloud-remote-dialog':[470,445],
         'advanced-dialog':[355,235],'resolution-dialog':[355,305],
-        'create-folder-dialog':[380,250],'desktop-key-dialog':[360,190],'key-list-dialog':[440,270],
+        'create-folder-dialog':[380,250],'desktop-key-dialog':[360,190],'key-list-dialog':[480,265],
         'app-message-dialog':[400,300]
       };
       const observer=new MutationObserver(()=>{
@@ -1140,7 +1140,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     async function openKeyList(){
       if(keyBusy||libraryBusy)return;
       keyForm.hidden=true;keyForm.reset();keyMessage.textContent='';keyList.replaceChildren();
-      keyListDialog.showModal();
+      keyListDialog.showModal();keyListDialog.scrollTop=0;
       try{await loadKeyList();}catch(error){keyMessage.textContent=error.message;}
     }
     async function finishKeySwitch(){
