@@ -2379,7 +2379,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             return [
                 "<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, "
                 "and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>",
-                "<command-name>/model</command-name>\\n<command-message>model</command-message>\\n"
+                "<command-name>/model</command-name>\n<command-message>model</command-message>\n"
                 f"<command-args>{model}</command-args>",
                 f"<local-command-stdout>Set model to `{model}`</local-command-stdout>",
             ]

@@ -9,6 +9,7 @@ import base64
 import binascii
 import copy
 from contextlib import contextmanager, closing, nullcontext, suppress
+from itertools import groupby
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
@@ -724,33 +725,33 @@ def webfetch_summary_request(data):
 
 def without_desktop_model_commands(messages):
     """Remove the Desktop /model transcript records while preserving the task and tools."""
-    if not any(DESKTOP_MODEL_COMMAND.search(item.get('text', ''))
-               for message in messages if message['role'] == 'user'
-               for item in blocks(message.get('content', [])) if item.get('type') == 'text'):
-        return messages
     clean = []
-    for message in messages:
-        if message['role'] != 'user':
-            clean.append(message)
+    changed = False
+    for role, items in groupby(messages, key=lambda message: message['role']):
+        group = list(items)
+        if role != 'user':
+            clean.extend(group)
             continue
-        content = blocks(message.get('content', []))
-        filtered = []
-        changed = False
-        for item in content:
-            if item.get('type') == 'text':
-                text = item.get('text', '')
-                value = DESKTOP_MODEL_NOTICE.sub('', DESKTOP_MODEL_COMMAND.sub('', text))
-                if value != text:
-                    changed = True
-                    if not value.strip():
-                        continue
-                    item['text'] = value
-            filtered.append(item)
-        if filtered:
-            clean.append({**message, 'content': filtered} if changed else message)
-        elif not changed:
-            clean.append(message)
-    return clean
+        contents = [blocks(message.get('content', [])) for message in group]
+        if not any(DESKTOP_MODEL_COMMAND.search(item.get('text', ''))
+                   for content in contents for item in content if item.get('type') == 'text'):
+            clean.extend(group)
+            continue
+        changed = True
+        for message, content in zip(group, contents):
+            filtered = []
+            for item in content:
+                if item.get('type') == 'text':
+                    text = item.get('text', '')
+                    value = DESKTOP_MODEL_NOTICE.sub('', DESKTOP_MODEL_COMMAND.sub('', text))
+                    if value != text:
+                        if not value.strip():
+                            continue
+                        item['text'] = value
+                filtered.append(item)
+            if filtered or not content:
+                clean.append({**message, 'content': filtered} if content else message)
+    return clean if changed else messages
 
 
 def history_signature(messages, scope):
