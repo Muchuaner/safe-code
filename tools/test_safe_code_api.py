@@ -630,7 +630,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 fake.record_result('turn',{'input_tokens':7,'output_tokens':2})
                 return {'model':'claude-test','usage':{'input_tokens':7,'output_tokens':2}}
             fake.run=model
-            public.account=lambda *_:fake
+            public.account=lambda *args, **kwargs: fake
             with socketserver.UnixStreamServer(str(self.root/'admin.sock'),server.AdminHandler) as admin:
                 admin.manage=public.manage
                 for endpoint in (public,admin):
