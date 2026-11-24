@@ -100,7 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var hasSavedLogin: Bool { hasLocalFile("login.aes") || hasLocalFile("login.aes.previous") }
     private var hasDesktopKey: Bool { hasLocalFile("desktop-key.state") }
     private var hasEncryptedData: Bool {
-        if hasSavedLogin || hasDesktopKey || hasLocalFile("desktop-ssh.aes") { return true }
+        if hasSavedLogin || hasDesktopKey || hasLocalFile("desktop-key-list.state") || hasLocalFile("desktop-ssh.aes") { return true }
         let drafts = directory.appendingPathComponent("account-drafts",isDirectory:true)
         return (try? FileManager.default.contentsOfDirectory(atPath:drafts.path))?.contains(where:{$0.hasSuffix(".aes")}) == true
     }
@@ -210,10 +210,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             let listing = args["op"] as? String == "keys"
             let index = args["index"] as? Int ?? -1
             let key = args["id"] as? String ?? ""
-            request(listing ? "desktopKey.list":"desktopKey.savedBalance",listing ? [:]:["id":key]) { [weak self] result in
+            let reply: (Result<Any,Error>)->Void = { [weak self] result in
                 guard let self else { return }
                 let callback = listing ? "trayKeys(\(generation),":"trayBalance(\(generation),\(index),"
-                self.trayWeb.evaluateJavaScript(callback+json((try? result.get()) ?? NSNull())+")")
+                let value: Any
+                switch result {
+                case .success(let data): value=data
+                case .failure: value=listing && self.encryptionKey == nil && !self.isolated
+                    ? ["locked":true] as Any : NSNull()
+                }
+                self.trayWeb.evaluateJavaScript(callback+json(value)+")")
+            }
+            if listing && args["interactive"] as? Bool == true && !isolated {
+                withUnlockedSecrets(diagnostic:.desktopKeyRestore,reply:reply) {
+                    self.request("desktopKey.list",completion:$0)
+                }
+            } else {
+                request(listing ? "desktopKey.list":"desktopKey.savedBalance",listing ? [:]:["id":key],completion:reply)
             }
         default: break
         }
@@ -487,18 +500,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
     }
     private func withUnlockedSecrets(replyID:String,diagnostic: NativeDiagnosticOperation,perform: @escaping (@escaping (Result<Any,Error>)->Void)->Void) {
-        guard !isolated else {answer(replyID,error:"隔离预览不会访问钥匙串。");return}
-        let reply: (Result<Any,Error>)->Void = { [weak self] in self?.answer(replyID,with:$0) }
+        withUnlockedSecrets(diagnostic:diagnostic,reply:{ [weak self] in self?.answer(replyID,with:$0) },perform:perform)
+    }
+    private func withUnlockedSecrets(diagnostic: NativeDiagnosticOperation,reply:@escaping (Result<Any,Error>)->Void,perform: @escaping (@escaping (Result<Any,Error>)->Void)->Void) {
+        guard !isolated else {reply(.failure(AppError.message("隔离预览不会访问钥匙串。")));return}
         let replyToUnlockFailure: (Error)->Void = { [weak self] error in
             guard let self=self else{return}
             let cancelled: Bool
             if case .keychainCancelled = error as? AppError {cancelled=true}else{cancelled=false}
-            self.reportNativeFailure(diagnostic,cancelled:cancelled){[weak self] issue in
-                self?.answer(replyID,error:error.localizedDescription+(issue.map{"\n问题编号："+$0} ?? ""))
+            self.reportNativeFailure(diagnostic,cancelled:cancelled){ issue in
+                reply(.failure(AppError.message(error.localizedDescription+(issue.map{"\n问题编号："+$0} ?? ""))))
             }
         }
         if encryptionKey != nil {perform(reply);return}
-        guard !unlockingSecrets else {answer(replyID,error:"正在等待钥匙串授权。");return}
+        guard !unlockingSecrets else {reply(.failure(AppError.message("正在等待钥匙串授权。")));return}
         do {
             unlockingSecrets=true
             let key=try keychainSecret(allowPrompt:true,allowCreate:!hasEncryptedData)
