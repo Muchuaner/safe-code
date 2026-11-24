@@ -111,10 +111,10 @@ internal sealed partial class RdpDesktop
             await sendImage(parts, op.Token);
             op.Token.ThrowIfCancellationRequested();
             lastImageSequence = seq == 0 ? null : seq;
-            // The SSH acknowledgement confirms X11 ownership. Writer can still be using the
-            // previous target list when Ctrl+V arrives immediately after that acknowledgement.
+            // X11 ownership is acknowledged immediately, but LibreOffice’s generic X11 backend
+            // caches the previous target list for two seconds (SelectionManager::getPasteDataTypes).
             displayStatus.Text = "图片已发送，等待云桌面更新剪贴板…";
-            await Task.Delay(TimeSpan.FromMilliseconds(1200), op.Token);
+            await Task.Delay(TimeSpan.FromSeconds(2), op.Token);
             // The native RDP channel may announce the newly installed X11 clipboard back to Windows.
             // A sequence change during the send must never cause a second upload or a wrong-window paste.
             if (!PasteTarget() || focusEpoch != imageFocusEpoch) { displayStatus.Text = "图片已就绪，请回到输入框粘贴"; return; }
