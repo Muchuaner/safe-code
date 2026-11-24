@@ -2368,7 +2368,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
     def test_switching_model_uses_the_existing_cloudcli_session(self):
         sonnet, opus = 'claude-sonnet-5-5', 'claude-opus-5-5'
-        self.config['models'].append(opus)
+        self.config['models'].extend((sonnet, opus))
         self.enable_cloudcli_web_fixture()
         first = conversation('Remember the original task.', model=opus)
         status, original = self.request(first)
