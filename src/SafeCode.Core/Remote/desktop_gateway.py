@@ -3117,8 +3117,7 @@ class CloudCliBackend:
             if active is not None and active.history in stopped:
                 active.stop_requested.set()
 
-    def run(self, manager, data, context_1m, session_header, stream=None, *, check_model=None,
-            unrestricted=False):
+    def run(self, manager, data, context_1m, session_header, stream=None, *, check_model=None):
         if not isinstance(data, dict) or not isinstance(data.get('model'), str):
             raise CloudCliError('A configured CloudCLI model is required', 400)
         effort = data.get('output_config', {})
@@ -3169,7 +3168,7 @@ class CloudCliBackend:
         # the next message. Keep its raw text only for request identity.
         dispatch_task = DESKTOP_LOCAL_COMMAND.sub('', task).strip() if '<local-command-caveat>' in task else task
         chat_mode = bool(attachments) or plan_mode
-        unrestricted = unrestricted and not plan_mode
+        unrestricted = manager.unrestricted_tools and not plan_mode and bool(self.config.get('desktopQuestions'))
         tool_approvals = self.config.get('desktopToolApprovals', False) and not unrestricted
         if chat_mode and not self.config.get('desktopQuestions'):
             raise CloudCliError('Desktop attachments and plan mode require the authenticated CloudCLI connection', 503)
@@ -3645,6 +3644,8 @@ class Conversation:
 
 
 class Manager:
+    unrestricted_tools = False
+
     def __init__(self, directory, config, *, require_cloudcli=False, review_prompt=None):
         self.directory, self.config = Path(directory), config
         self.review_prompt = review_prompt
@@ -3714,11 +3715,10 @@ class Manager:
             and any(call['name'].rsplit('__', 1)[-1] == name for call in c.pending.values())
         ), None)
 
-    def run(self, data, context_1m=False, session_header=None, stream=None, *, check_model=None,
-            unrestricted=False):
+    def run(self, data, context_1m=False, session_header=None, stream=None, *, check_model=None):
         if self.cloudcli is not None:
             return self.cloudcli.run(self, data, context_1m, session_header, stream,
-                                     check_model=check_model, unrestricted=unrestricted)
+                                     check_model=check_model)
         # TODO: Delete this legacy branch. The API requires CloudCLI and returns an error if it is unavailable.
         requested_model = data.get('model') if isinstance(data, dict) else None
         data=validate_request(data)

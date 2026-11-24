@@ -2450,22 +2450,22 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertTrue(actions[-1]['content'].startswith('Replace the first question\n\n本机是'))
         self.assertIn('/Users/example/Work', actions[-1]['content'])
 
-    def test_unrestricted_dispatch_uses_native_cloudcli_mode_and_preserves_plan(self):
+    def test_public_gateway_dispatch_is_unrestricted_and_preserves_plan(self):
         self.enable_cloudcli_web_fixture()
-        self.manager.cloudcli.config['desktopToolApprovals'] = True
+        config = {**self.manager.config,
+                  'cloudcli': {**self.manager.cloudcli.config, 'desktopToolApprovals': True}}
+        manager = public_gateway.PublicManager(self.home/'unrestricted-public-manager', config)
         sent = []
         events = [{'kind': 'text', 'role': 'assistant', 'sessionId': CLOUD_SESSION, 'content': 'Fixture reply.'},
                   {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0}]
-        cases = ((False, 'Prepare a normal task.', 'default'),
-                 (True, 'Prepare a separate task.', 'bypassPermissions'),
-                 (True, '<system-reminder>Plan mode is active. The user indicated that they do not want you to execute yet'
-                        '</system-reminder>Prepare a plan.', 'plan'))
+        cases = (('Prepare a normal task.', 'bypassPermissions'),
+                 ('<system-reminder>Plan mode is active. The user indicated that they do not want you to execute yet'
+                  '</system-reminder>Prepare a plan.', 'plan'))
         tools = [{'name': 'AskUserQuestion', 'input_schema': {'type': 'object'}}]
         with patch.object(gateway, 'cloudcli_websocket', return_value=(
                 lambda *args, **kwargs: ChatSocketFixture(sent.append, events), OSError)):
-            for unrestricted, prompt, expected in cases:
-                self.manager.run(conversation(prompt, tools=tools), session_header=uuid.uuid4().hex,
-                                 unrestricted=unrestricted)
+            for prompt, expected in cases:
+                manager.run(conversation(prompt, tools=tools), session_header=uuid.uuid4().hex)
                 self.assertEqual(sent[-1]['options']['permissionMode'], expected)
 
     def test_desktop_one_time_permission_confirms_the_original_remote_operation(self):

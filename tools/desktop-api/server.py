@@ -34,7 +34,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 14
+GATEWAY_REVISION = 15
 PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
@@ -45,6 +45,8 @@ TICKET_AUTH_KEY = bytes.fromhex('bf8145e375d11db0fdd2fb0d9734fdda504c5a480fc2eae
 
 
 class PublicManager(Manager):
+    unrestricted_tools = True
+
     def __init__(self, folder, config, *, require_cloudcli=True, review_prompt=None):
         super().__init__(folder, config, require_cloudcli=require_cloudcli, review_prompt=review_prompt)
         self.lock = threading.RLock()
@@ -434,9 +436,6 @@ class PublicHandler(Handler):
                 manager.accounting.model = model
                 manager.accounting.finished = None
                 try:
-                    if (self.device and self.server.registry.unrestricted(self.digest)
-                            and self.server.config['cloudcli'].get('desktopQuestions')):
-                        options['unrestricted'] = True
                     return manager.run(data, **options, check_model=self.check_model)
                 except GatewayError as error:
                     record.update(outcome='failed', status=error.status)
@@ -674,7 +673,6 @@ class PublicServer(ThreadingHTTPServer):
             result = {'keys':keys,'origin':self.public_origin,
                       'activation_required':any(key['enabled'] for key in keys),
                       'can_delete_revoked_keys': True, 'key_policy_supported': True, 'device_policy_supported': True,
-                      'unrestricted_supported': bool(self.config['cloudcli'] and self.config['cloudcli'].get('desktopQuestions')),
                       'device_service_problem': device_service_problem(self.config),
                       'billing': {'cost_nanos': sum(key['cost_nanos'] for key in keys),
                                   'unpriced_tokens': sum(key['unpriced_tokens'] for key in keys)},
@@ -702,19 +700,6 @@ class PublicServer(ThreadingHTTPServer):
             if device_access is True and (self.devices is None or device_service_problem(self.config)):
                 raise ValueError('私有设备服务尚未就绪，请在网关设置中安装或修复服务。')
             settings = {'budget_nanos': None if budget is None else budget * 10_000_000} if 'budget_cents' in request else {}
-            if 'unrestricted' in request:
-                unrestricted = request['unrestricted']
-                if type(unrestricted) is not bool:
-                    raise ValueError('请选择有效的工具权限模式。')
-                allows_device = device_access if device_access is not None else (
-                    operation == 'update' and isinstance(request.get('id'), str)
-                    and KEY_ID.fullmatch(request['id']) and (self.root/'device-access'/request['id']).is_file())
-                if unrestricted and not (allows_device and self.config['cloudcli']
-                                         and self.config['cloudcli'].get('desktopQuestions')):
-                    raise ValueError('无限制模式需要允许桌面配对，并配置 CloudCLI 网页授权。')
-                settings['unrestricted'] = unrestricted
-            if device_access is False:
-                settings['unrestricted'] = False
             if 'expires_at' in request:
                 expiry = request['expires_at']
                 if expiry is not None and (type(expiry) is not int or not 1 <= expiry <= 253402300799):
