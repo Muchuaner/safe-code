@@ -1969,6 +1969,10 @@ class CloudCliBackend:
                        'project TEXT NOT NULL, workspace TEXT, updated REAL NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS requests (identity TEXT PRIMARY KEY, scope TEXT NOT NULL, '
                        'reply TEXT, created REAL NOT NULL)')
+            # A receipt identifies an issued card. It never authorizes a tool decision.
+            db.execute('CREATE TABLE IF NOT EXISTS question_receipts (scope TEXT PRIMARY KEY, history TEXT NOT NULL, '
+                       'card TEXT NOT NULL, session TEXT NOT NULL, model TEXT NOT NULL, project TEXT NOT NULL, '
+                       'workspace TEXT, created REAL NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS session_state (scope TEXT NOT NULL, session TEXT NOT NULL, '
                        'model TEXT NOT NULL, tip_anchor TEXT, updated REAL NOT NULL, PRIMARY KEY (scope, session))')
             db.execute('CREATE TABLE IF NOT EXISTS edit_turns (scope TEXT NOT NULL, session TEXT NOT NULL, '
@@ -2695,6 +2699,18 @@ class CloudCliBackend:
             self.abandon_question(turn)
             self.invalidate_edit(namespace, turn.question.session, turn.progress)
 
+    def closed_question_binding(self, db, namespace, histories, card=None):
+        receipt = db.execute('SELECT history,card,session,model,project,workspace FROM question_receipts '
+                             'WHERE scope=? AND created>=?', (namespace, time.time()-30*86400)).fetchone()
+        if not receipt:
+            return None
+        history, issued_card, session, model, project, workspace = receipt
+        if history not in histories or (card is not None and card != issued_card):
+            return None
+        if any(not isinstance(entry, dict) or entry.get('sessionId') == session for entry in self.running_sessions()):
+            raise CloudCliError('The original CloudCLI question is still closing; retry shortly', 409)
+        return session, project, workspace, model, None
+
     def answer(self, manager, data, messages, latest, namespace, stream, check_model=None):
         answers = [part for part in latest if isinstance(part, dict) and part.get('type') == 'tool_result']
         if len(answers) != 1 or any(part is not answers[0] and (not isinstance(part, dict)
@@ -2709,13 +2725,30 @@ class CloudCliBackend:
             with closing(sqlite3.connect(self.path)) as db:
                 prior = db.execute('SELECT reply FROM requests WHERE identity=?', (identity,)).fetchone()
             if prior is not None and prior[0] is not None:
-                return json.loads(prior[0])
+                reply = json.loads(prior[0])
+                if check_model is not None:
+                    check_model(self.resolve_model(reply['model'])[0])
+                return reply
             with self.active_lock:
                 turn = self.paused_turns.get(namespace)
             if turn is not None and turn.request == identity:
                 return turn.reply
-            if (turn is None or expected != turn.expected or data['model'] != turn.reply['model']
-                    or answers[0].get('tool_use_id') != turn.question.block['id']):
+            card = answers[0].get('tool_use_id')
+            if turn is None and isinstance(card, str):
+                with closing(sqlite3.connect(self.path)) as db, db:
+                    closed = self.closed_question_binding(db, namespace, [expected], card)
+                    if closed:
+                        session, project, workspace, model, _ = closed
+                        if check_model is not None:
+                            check_model(model)
+                        reply = self.local_reply(data['model'], '之前的提问已结束，本次选择未提交。可以在这个对话继续提问。')
+                        confirmed = history_signature([*messages, reply], 'cloudcli')
+                        self.save_session(db, namespace, expected, session, project, workspace, [confirmed])
+                        db.execute('INSERT OR REPLACE INTO requests VALUES (?,?,?,?)',
+                                   (identity, namespace, json.dumps(reply, ensure_ascii=False), time.time()))
+                        db.execute('DELETE FROM question_receipts WHERE scope=?', (namespace,))
+                        return reply
+            if turn is None or expected != turn.expected or card != turn.question.block['id']:
                 raise CloudCliError('No matching pending question for this Desktop conversation', 409)
             if check_model is not None:
                 check_model(turn.progress.model)
@@ -2728,11 +2761,16 @@ class CloudCliBackend:
             try:
                 with closing(sqlite3.connect(self.path)) as db, db:
                     db.execute('INSERT INTO requests VALUES (?, ?, NULL, ?)', (identity, namespace, time.time()))
+                    db.execute('DELETE FROM question_receipts WHERE scope=?', (namespace,))
                 self.question_action(turn.question, action)
                 turn.progress.stream = stream
                 turn.progress.awaiting_decision = turn.question.request_id
-                return self.advance(manager, data, messages, stream, namespace, identity, turn.events, turn.progress,
-                                    turn.previous_history, turn.project, turn.workspace)
+                # The card completes the existing run, even if the picker changed meanwhile.
+                original_model = turn.reply['model']
+                if stream is not None:
+                    stream.model = original_model
+                return self.advance(manager, {**data, 'model': original_model}, messages, stream, namespace,
+                                    identity, turn.events, turn.progress, turn.previous_history, turn.project, turn.workspace)
             except CloudCliStopped:
                 raise
             except Exception:
@@ -2758,6 +2796,10 @@ class CloudCliBackend:
             expected = history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli')
             turn = CloudCliPausedTurn(events, progress, question, previous_history, project, workspace, identity,
                                       result, expected)
+            with closing(sqlite3.connect(self.path)) as db, db:
+                db.execute('INSERT OR REPLACE INTO question_receipts VALUES (?,?,?,?,?,?,?,?)',
+                           (namespace, expected, question.block['id'], question.session, progress.model,
+                            project, workspace, time.time()))
             turn.timer = threading.Timer(300, self.expire_question, args=(namespace, turn))
             turn.timer.daemon = True
             with self.active_lock:
@@ -3287,7 +3329,11 @@ class CloudCliBackend:
             if paused is not None:
                 if paused.request == identity:
                     return paused.reply
-                raise CloudCliError('This CloudCLI conversation is waiting for a Desktop answer', 409)
+                if paused.expected not in interrupted_prefixes:
+                    raise CloudCliError('This CloudCLI conversation is waiting for a Desktop answer', 409)
+                # Desktop explicitly stopped this exact card before sending a new task.
+                paused.timer.cancel()
+                self.expire_question(namespace, paused)
             native_tools = set()
             tool_choice = data.get('tool_choice')
             tool_choice = tool_choice if isinstance(tool_choice, dict) else {}
@@ -3323,8 +3369,11 @@ class CloudCliBackend:
                         raise CloudCliError('This CloudCLI request was previously dispatched without a confirmed reply', 409)
                     return json.loads(prior[0])
                 compact_context = desktop_compact_context(messages[:-1]) if scope else None
-                saved, edit = self.session_binding(db, namespace, before, position, compact_context,
-                                                   interrupted_prefixes, partial_history, legacy_prefix)
+                saved = self.closed_question_binding(db, namespace, interrupted_prefixes) if interrupted_prefixes else None
+                edit = None
+                if saved is None:
+                    saved, edit = self.session_binding(db, namespace, before, position, compact_context,
+                                                       interrupted_prefixes, partial_history, legacy_prefix)
                 if saved:
                     payload['sessionId'], project, workspace, previous_model, _ = saved
                     if scope and self.config.get('desktopQuestions') and previous_model != model:
@@ -3376,6 +3425,7 @@ class CloudCliBackend:
                 self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
                 # cause an automatic second dispatch of this scoped task.
+                db.execute('DELETE FROM question_receipts WHERE scope=? OR created<?', (namespace, now-30*86400))
                 db.execute('INSERT INTO requests VALUES (?, ?, NULL, ?)', (identity, namespace, now))
             with manager.lock:
                 manager.started += 1

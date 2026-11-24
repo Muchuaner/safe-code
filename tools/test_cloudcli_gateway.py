@@ -1730,8 +1730,43 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertNotIn('provider-fixture-id', visible)
         self.assertFalse(any(event.get('content_block', {}).get('type') == 'tool_use' for event in events))
 
+    def test_closed_question_requires_issued_card_and_idle_original_session(self):
+        self.config['desktopQuestions'] = {'username': 'fixture-user', 'password': 'fixture-password'}
+        self.save_config()
+        self.start_gateway()
+        backend = self.manager.cloudcli
+        namespace = backend.identity+':'+self.session
+        card_id = 'toolu_closed_fixture'
+        question = {'type': 'tool_use', 'name': 'AskUserQuestion', 'id': card_id, 'input': {'questions': []}}
+        history = [{'role': 'user', 'content': 'Choose a color.'}, {'role': 'assistant', 'content': [question]}]
+        expected = gateway.history_signature(history, 'cloudcli')
+        with sqlite3.connect(backend.path) as db:
+            db.execute('INSERT INTO question_receipts VALUES (?,?,?,?,?,?,?,?)',
+                       (namespace, expected, card_id, CLOUD_SESSION, MODEL, str(self.project), None, time.time()))
+
+        def answer(card):
+            return conversation('unused', messages=[*history, {'role': 'user', 'content': [
+                {'type': 'tool_result', 'tool_use_id': card, 'content': 'Blue'}]}])
+
+        with patch.object(backend, 'running_sessions', return_value=[{'sessionId': CLOUD_SESSION}]):
+            self.assertEqual(self.request(answer(card_id))[0], 409)
+        with patch.object(backend, 'running_sessions', return_value=[]):
+            self.assertEqual(self.request(answer('different-card'))[0], 409)
+            self.assertEqual(self.request(answer(card_id), session=str(uuid.uuid4()))[0], 409)
+            status, reply = self.request(answer(card_id))
+            self.assertEqual(status, 200)
+            self.assertIn('本次选择未提交', reply['content'][0]['text'])
+            self.assertEqual(self.request(answer(card_id)), (status, reply))
+        with sqlite3.connect(backend.path) as db:
+            confirmed = gateway.history_signature([*answer(card_id)['messages'], reply], 'cloudcli')
+            self.assertEqual(db.execute('SELECT session FROM sessions WHERE scope=? AND history=?',
+                                        (namespace, confirmed)).fetchone(), (CLOUD_SESSION,))
+        self.assertFalse(self.cloud.requests)
+
     def test_native_desktop_question_returns_answer_to_the_same_cloudcli_run(self):
         credentials = {'username': 'fixture-user', 'password': 'fixture-password'}
+        second_model = 'claude-sonnet-5-5'
+        self.config['models'].append(second_model)
         self.config['desktopQuestions'] = credentials
         self.save_config()
         self.start_gateway()
@@ -1812,12 +1847,13 @@ class CloudCLIGatewayTests(unittest.TestCase):
             result = {'type': 'tool_result', 'tool_use_id': card['id'], 'content': rendered}
             follow_messages = [*first['messages'], {'role': 'assistant', 'content': content},
                                {'role': 'user', 'content': [result]}]
-            second_request = conversation('unused', messages=follow_messages, tools=tools)
+            second_request = conversation('unused', model=second_model, messages=follow_messages, tools=tools)
             self.assertEqual(self.request(second_request, session=str(uuid.uuid4()))[0], 409)
             self.assertEqual(self.request(conversation('Do something different.'))[0], 409)
             self.assertEqual(actions, [dispatch])
             status, reply = self.request(second_request)
             self.assertEqual(status, 200)
+            self.assertEqual(reply['model'], MODEL)
             self.assertIn('Fixture selections accepted.', reply['content'][0]['text'])
             self.assertEqual(self.request(second_request), (200, reply))
             self.assertEqual(actions, [
