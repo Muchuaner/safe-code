@@ -1,5 +1,3 @@
-using Microsoft.Win32;
-using System.Security;
 using System.IO;
 using SafeCode.Core;
 using System.Diagnostics;
@@ -69,73 +67,6 @@ public sealed class WindowsClients : IDisposable
         var start=new ProcessStartInfo(ssh){UseShellExecute=true};
         foreach(string arg in args)start.ArgumentList.Add(arg);
         var process=Process.Start(start)??throw new IOException("无法打开 Windows 终端。");terminals.Add(process);
-    }
-    internal static async Task<string> ReopenClaudeAsync(DesktopKeyAccess access,CancellationToken ct)
-    {
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(15));
-        var apps=Process.GetProcessesByName("Claude");
-        var desktop=new List<Process>();
-        using var self=Process.GetCurrentProcess();
-        try
-        {
-            foreach(var app in apps)
-            {
-                try
-                {
-                    if(app.SessionId!=self.SessionId||app.HasExited)continue;
-                    var path=app.MainModule?.FileName;
-                    var local=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"AnthropicClaude");
-                    if(path==null||!path.Contains(@"\WindowsApps\Claude_",StringComparison.OrdinalIgnoreCase)
-                        &&!path.StartsWith(local+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))continue;
-                    desktop.Add(app);
-                    if(app.MainWindowHandle!=IntPtr.Zero)app.CloseMainWindow();
-                }
-                catch(InvalidOperationException) when(app.HasExited){}
-            }
-            await Task.WhenAll(desktop.Select(app=>app.WaitForExitAsync(timeout.Token)));
-        }
-        catch(OperationCanceledException) when(!ct.IsCancellationRequested)
-        {throw new InvalidOperationException("请完全退出 Claude Desktop，然后点击「打开 Claude Desktop」。");}
-        finally{foreach(var app in apps)app.Dispose();}
-        return await OpenClaudeAsync(access,ct);
-    }
-    internal static async Task<string> OpenClaudeAsync(DesktopKeyAccess access,CancellationToken ct)
-    {
-        if(!IsClaudeInstalled())throw new InvalidOperationException("未检测到 Claude Desktop，请先安装官方客户端，或从开始菜单启动。");
-        await access.PrepareLaunchAsync(ct);
-        try
-        {
-            // Use the registered app entry so the MSIX process reads its selected profile.
-            // A claude:// deep link can start a separate consumer-mode process.
-            var launch=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe"))
-            {UseShellExecute=false};
-            launch.ArgumentList.Add(@"shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude");
-            using var request=Process.Start(launch)??throw new IOException("无法启动 Windows 应用入口。");
-            return "已请求打开官方 Claude Desktop。";
-        }
-        catch(Exception error) when(error is System.ComponentModel.Win32Exception or IOException)
-        {
-            throw new InvalidOperationException("未能打开官方 Claude Desktop，请从开始菜单启动，或先安装官方客户端。",error);
-        }
-    }
-    private static bool IsClaudeInstalled()
-    {
-        try
-        {
-            using var key=Registry.CurrentUser.OpenSubKey(@"Software\Classes\claude\shell\open\command",false)
-                ??Registry.LocalMachine.OpenSubKey(@"Software\Classes\claude\shell\open\command",false);
-            if(key?.GetValue(null) is string command&&command.Length>0)return true;
-        }
-        catch(UnauthorizedAccessException){}
-        catch(SecurityException){}
-        try
-        {
-            string packages=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Packages");
-            return Directory.Exists(packages)&&Directory.EnumerateDirectories(packages,"Claude_*").Any();
-        }
-        catch(IOException){return false;}
-        catch(UnauthorizedAccessException){return false;}
     }
     public static string OpenCodex()
     {

@@ -526,8 +526,8 @@ public sealed class MainWindow : Window
                 gateway.Closed+=(_,_)=>gatewayWindow=null;
                 gateway.Show();
                 return true;
-            case "claudeDesktop.reopen": return await WindowsClients.ReopenClaudeAsync(KeyAccess,lifetime.Token);
-            case "claudeDesktop.open": return await WindowsClients.OpenClaudeAsync(KeyAccess,lifetime.Token);
+            case "claudeDesktop.reopen": return await WindowsClaudeDesktop.OpenAsync(KeyAccess,true,lifetime.Token);
+            case "claudeDesktop.open": return await WindowsClaudeDesktop.OpenAsync(KeyAccess,false,lifetime.Token);
             case "codex.open": return WindowsClients.OpenCodex();
             case "bridge.copy-config": if(claudeBridge==null)throw new InvalidOperationException("请先启动适配器。");Clipboard.SetText(claudeBridge.Configuration);return true;
             case "bridge.copy-key": if(claudeBridge==null)throw new InvalidOperationException("请先启动适配器。");Clipboard.SetText(claudeBridge.Token);return true;

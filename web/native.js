@@ -990,7 +990,11 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#safe-code-api-manage').onclick=openManagedGateway;
     async function openLocalClient(button,operation,onSettled,progress){
       if(button.disabled)return;openingClients.add(button);button.disabled=true;
-      try{const message=await native(operation);if(progress)progress.textContent=message;}
+      try{
+        const result=await native(operation);
+        if(result?.installationRequired)await showAppMessage(result.message);
+        else if(progress)progress.textContent=result;
+      }
       catch(error){if(progress)progress.textContent=error.message;else showAppMessage(error.message);}
       finally{openingClients.delete(button);onSettled();}
     }
@@ -1152,7 +1156,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     }
     async function finishKeySwitch(){
       switchPending=false;keyListDialog.close();showApiAccess();
-      try{await native('claudeDesktop.reopen');}
+      try{const result=await native('claudeDesktop.reopen');if(result?.installationRequired)await showAppMessage(result.message);}
       catch(error){await showAppMessage('已切换 Key。'+error.message);}
     }
     async function refreshSwitchState(){

@@ -13,7 +13,7 @@ internal sealed class MacClients(string directory)
     }
     public static async Task<string> OpenLocalClientAsync(string name,CancellationToken ct)
     {
-        if(name is not ("Codex" or "Claude"))throw new ArgumentException("未知客户端。");
+        if(name != "Codex")throw new ArgumentException("未知客户端。");
         try{await Run("/usr/bin/open",["-a",name],ct);return "已请求打开 "+name+" 客户端。";}
         catch(IOException){throw new InvalidOperationException("未能打开 "+name+"，请先安装官方客户端，或从应用程序目录启动。");}
     }

@@ -333,20 +333,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             if hasDesktopKey && (op=="desktopKey.disable" || args["interactive"] as? Bool == true) {
                 withUnlockedSecrets(replyID:id,diagnostic:op=="desktopKey.disable" ? .desktopKeyDisable : .desktopKeyRestore){self.request(op,args,completion:$0)}
             }else{send(body)}
-        case "claudeDesktop.reopen":
-            let apps=NSRunningApplication.runningApplications(withBundleIdentifier:"com.anthropic.claudefordesktop")
-            for app in apps where !app.isTerminated { _=app.terminate() }
-            let deadline=Date().addingTimeInterval(15)
-            func reopenWhenClosed() {
-                if apps.allSatisfy({$0.isTerminated}) {
-                    self.request("claudeDesktop.open"){self.answer(id,with:$0)}
-                } else if Date()>=deadline {
-                    self.answer(id,error:"Key 已切换。请完全退出 Claude Desktop，然后点击「打开 Claude Desktop」。")
-                } else {
-                    DispatchQueue.main.asyncAfter(deadline:.now()+0.25){reopenWhenClosed()}
-                }
-            }
-            reopenWhenClosed()
+        case "claudeDesktop.open","claudeDesktop.reopen":
+            openClaudeDesktop(replyID:id,restart:op=="claudeDesktop.reopen")
         case "secrets.initialize":answer(id,error:"仅原生客户端可解锁本机数据。")
         case "diagnostics.native-failure":answer(id,error:"该操作仅供原生客户端内部调用。")
         case "window.smoke.dialog" where smokeOutput != nil:
@@ -487,6 +475,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             active.makeFirstResponder(web)
         }
     }
+    private func openClaudeDesktop(replyID id:String,restart:Bool) {
+        let bundleID="com.anthropic.claudefordesktop"
+        let workspace=NSWorkspace.shared
+        let candidates=[workspace.urlForApplication(withBundleIdentifier:bundleID),
+                        URL(fileURLWithPath:"/Applications/Claude.app"),
+                        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Claude.app")]
+        guard let url=candidates.compactMap({$0}).first(where:{Bundle(url:$0)?.bundleIdentifier==bundleID}) else {
+            let download=URL(string:"https://claude.com/download")!
+            if workspace.open(download) {
+                answer(id,["installationRequired":true,"message":"未找到 Claude Desktop，已打开官方下载页。安装后请回到 SafeCode 再次打开。"])
+            } else {answer(id,error:"未找到 Claude Desktop，请在浏览器打开 https://claude.com/download")}
+            return
+        }
+
+        func launch() {
+            request("claudeDesktop.prepare",deadline:(30,"检查本机网关超时，请确认 SafeCode 接入状态。")){result in
+                guard case .success(let value)=result,let since=value as? NSNumber else {
+                    if case .failure(let error)=result {self.answer(id,error:error.localizedDescription)}
+                    else {self.answer(id,error:"未能确认 SafeCode 网关状态。")}
+                    return
+                }
+                let ready=Date(timeIntervalSince1970:since.doubleValue/1000)
+                let apps=NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).filter{!$0.isTerminated}
+                if apps.contains(where:{($0.launchDate ?? .distantPast)<ready}) {
+                    self.answer(id,error:"Claude Desktop 在本次网关启用前就已运行。请按 ⌘Q 完全退出，再点击打开以载入当前配置。")
+                    return
+                }
+                workspace.openApplication(at:url,configuration:NSWorkspace.OpenConfiguration()){app,error in
+                    DispatchQueue.main.async {
+                        guard error==nil,app?.bundleIdentifier==bundleID,app?.isTerminated==false else {
+                            self.answer(id,error:"已找到 Claude Desktop，但 macOS 未能启动它。请在 Finder 中检查应用是否可打开。")
+                            return
+                        }
+                        self.answer(id,"已打开 Claude Desktop。")
+                    }
+                }
+            }
+        }
+        let apps=NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).filter{!$0.isTerminated}
+        guard restart && !apps.isEmpty else {launch();return}
+        request("claudeDesktop.prepare",deadline:(30,"检查本机网关超时，请确认 SafeCode 接入状态。")){result in
+            guard case .success=result else {self.answer(id,with:result);return}
+            for app in apps {_=app.terminate()}
+            let deadline=Date().addingTimeInterval(15)
+            @MainActor func waitForExit() {
+                if apps.allSatisfy({$0.isTerminated}) {launch()}
+                else if Date()>=deadline {self.answer(id,error:"请按 ⌘Q 完全退出 Claude Desktop，再点击「打开 Claude Desktop」。")}
+                else {DispatchQueue.main.asyncAfter(deadline:.now()+0.25){waitForExit()}}
+            }
+            waitForExit()
+        }
+    }
+
     private func answer(_ id:String,with result:Result<Any,Error>) {
         switch result {
         case .success(let value):answer(id,value)

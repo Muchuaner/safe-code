@@ -106,19 +106,24 @@ internal static class MacSelfTest
             string otherContents = File.ReadAllText(otherPath);
             meta["appliedId"] = otherId;
             DesktopKeyAccess.WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
-            await access.PrepareLaunchAsync(CancellationToken.None);
+            try
+            {
+                DesktopKeyAccess.PrepareProfile(library,tokenId,18899,"fixture-local-token");
+                throw new Exception("启动时接受了非当前 SafeCode 配置。");
+            }
+            catch(InvalidOperationException){}
             if (File.ReadAllText(otherPath)!=otherContents || JsonNode.Parse(File.ReadAllText(activePath))?["codeDefaultPermissionMode"]!=null)
                 throw new Exception("打开 Claude Desktop 时改写了非当前 Safe Code 配置。");
             meta["appliedId"] = tokenId;
             meta["entries"]!.AsArray().Add(new JsonObject { ["id"] = tokenId, ["name"] = "SafeCode" });
             DesktopKeyAccess.WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
-            await access.PrepareLaunchAsync(CancellationToken.None);
+            DesktopKeyAccess.PrepareProfile(library,tokenId,18899,"fixture-local-token");
             string prepared = File.ReadAllText(activePath);
             var preparedProfile = JsonNode.Parse(prepared);
             if ((string?)preparedProfile?["codeDefaultPermissionMode"]!="auto" ||
                 (string?)preparedProfile?["inferenceGatewayApiKey"]!="fixture-local-token")
                 throw new Exception("打开 Claude Desktop 前未保留原接入并设为 Auto。");
-            await access.PrepareLaunchAsync(CancellationToken.None);
+            DesktopKeyAccess.PrepareProfile(library,tokenId,18899,"fixture-local-token");
             if (File.ReadAllText(activePath)!=prepared)
                 throw new Exception("重复打开 Claude Desktop 改写了相同配置。");
             Console.WriteLine("MAC_CLAUDE_LAUNCH_AUTO_DEFAULT_OK");

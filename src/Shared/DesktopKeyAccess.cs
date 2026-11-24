@@ -105,20 +105,40 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         public string Used=>"已用 "+Usd(UsedNanos);
         public string Remaining=>RemainingNanos is long amount?"余额 "+Usd(amount):"不限额";
     }
-    private string Library()
+    private string Library(Saved? saved=null)
     {
-        return profileDirectory??ProfileLibrary();
+        if(profileDirectory!=null)return profileDirectory;
+        if(OperatingSystem.IsWindows() && saved!=null)
+        {
+            foreach(var library in new[] { WindowsProfileLibrary(true), WindowsProfileLibrary(false) })
+                if(File.Exists(Path.Combine(library,saved.Profile+".json")))return library;
+        }
+        return ProfileLibrary();
     }
     internal static string ProfileLibrary()
     {
         if(OperatingSystem.IsMacOS())return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"Library/Application Support/Claude-3p/configLibrary");
+        return WindowsProfileLibrary(PrefersPackagedProfile());
+    }
+
+    private static string WindowsProfileLibrary(bool packaged)
+    {
         var local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string package=Path.Combine(local,"Packages","Claude_pzs8sxrjxfjjc");
-        string packaged=Path.Combine(package,"LocalCache","Local","Claude-3p","configLibrary");
-        string unpackaged=Path.Combine(local,"Claude-3p","configLibrary");
-        if(File.Exists(Path.Combine(packaged,"_meta.json")))return packaged;
-        if(File.Exists(Path.Combine(unpackaged,"_meta.json")))return unpackaged;
-        return Directory.Exists(packaged)||Directory.Exists(package)&&!Directory.Exists(unpackaged)?packaged:unpackaged;
+        return Path.Combine(packaged?Path.Combine(local,"Packages","Claude_pzs8sxrjxfjjc","LocalCache","Local"):local,
+            "Claude-3p","configLibrary");
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode,ExactSpelling=true)]
+    private static extern int GetPackagesByPackageFamily(string packageFamilyName,ref uint count,IntPtr names,
+        ref uint bufferLength,IntPtr buffer);
+
+    internal bool UsesPackagedProfile()=>string.Equals(Library(Load()),WindowsProfileLibrary(true),StringComparison.OrdinalIgnoreCase);
+
+    private static bool PrefersPackagedProfile()
+    {
+        uint count=0,length=0;
+        int result=GetPackagesByPackageFamily("Claude_pzs8sxrjxfjjc",ref count,IntPtr.Zero,ref length,IntPtr.Zero);
+        return result==122 && count>0;
     }
     // Certificate pinning authenticates the gateway directly; proxy CONNECT tunnels only add a failure point.
     internal static HttpClientHandler RemoteHandler(Ticket t)
@@ -728,32 +748,68 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         settings["env"]!.AsObject()["CLAUDE_CODE_AUTO_MODE_MODEL"]=classifier;
     }
 
-    internal async Task PrepareLaunchAsync(CancellationToken ct)
+    internal async Task<long> PrepareLaunchAsync(CancellationToken ct)
     {
         await gate.WaitAsync(ct);
         try
         {
-            if(!Configured)return;
+            if(!Configured||relay==null)throw new InvalidOperationException("请先启用 SafeCode 的 API Key 接入。");
             var saved=Load();
             if(saved.UnbindPending)throw new InvalidOperationException(UnbindPendingMessage);
-            var library=Library();
-            if(ProfileText(ReadProfileMeta(library),"appliedId")!=saved.Profile)return;
-
-            var path=Path.Combine(library,saved.Profile+".json");
-            var profile=JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject;
-            if(profile==null||ProfileText(profile,"inferenceGatewayBaseUrl")!="http://127.0.0.1:"+saved.Port)
-                throw new InvalidOperationException("Claude Desktop 接入配置已变更，请重新启用 Safe Code API Key。");
-
-            if(ProfileText(profile,"codeDefaultPermissionMode")!="auto")
+            if(relay.Port!=saved.Port||relay.HostReady?.Invoke()==false)
+                throw new InvalidOperationException("本机网关连接已中断，请重新启用接入后再打开 Claude Desktop。");
+            var library=Library(saved);
+            var profile=PrepareProfile(library,saved.Profile,saved.Port,saved.Local);
+            await CheckLaunchRouteAsync(saved.Port,saved.Local,ct);
+            if(OperatingSystem.IsWindows())
             {
-                profile["codeDefaultPermissionMode"]="auto";
-                WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
+                if(PlanWindowsPolicy(profile,saved).Changes.Count!=0)
+                    throw new InvalidOperationException("Windows 网关策略已变更，请重新启用 SafeCode 接入。");
+                WindowsLaunchPermissions().Enable();
             }
-            // Older Windows releases resolve the initial mode from the current user's settings.
-            if(OperatingSystem.IsWindows())WindowsLaunchPermissions().Enable();
+            return relay.StartedAt;
         }
         catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}
         finally{gate.Release();}
+    }
+
+    internal static async Task CheckLaunchRouteAsync(int port,string bearer,CancellationToken ct)
+    {
+        using var client=new HttpClient(new HttpClientHandler{AllowAutoRedirect=false,UseProxy=false,UseCookies=false})
+            {Timeout=TimeSpan.FromSeconds(10)};
+        using var request=new HttpRequestMessage(HttpMethod.Get,$"http://127.0.0.1:{port}/v1/models");
+        request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bearer);
+        try
+        {
+            using var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
+            if(!response.IsSuccessStatusCode)
+                throw new InvalidOperationException($"本机转发器查询网关模型时收到 HTTP {(int)response.StatusCode}。请检查 SafeCode 接入后重试。");
+        }
+        catch(HttpRequestException)
+        {throw new InvalidOperationException("无法通过 SafeCode 本机转发器查询网关模型，请检查接入后重试。");}
+        catch(OperationCanceledException) when(!ct.IsCancellationRequested)
+        {throw new InvalidOperationException("通过 SafeCode 查询网关模型超时，请检查连接后重试。");}
+    }
+
+    internal static JsonObject PrepareProfile(string library,string id,int port,string local)
+    {
+        if(ProfileText(ReadProfileMeta(library),"appliedId")!=id)
+            throw new InvalidOperationException("Claude Desktop 当前选中了其他配置。请重新启用 SafeCode 接入后再打开。");
+        var path=Path.Combine(library,id+".json");
+        var profile=JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject;
+        var credential=profile==null?null:ProfileText(profile,"inferenceGatewayApiKey");
+        // Desktop may seal its local bearer after reading the profile.
+        if(profile==null||ProfileText(profile,"inferenceProvider")!="gateway"||
+            ProfileText(profile,"inferenceGatewayAuthScheme")!="bearer"||
+            ProfileText(profile,"inferenceGatewayBaseUrl")!="http://127.0.0.1:"+port||
+            (credential!=local && !(credential?.StartsWith("__sealed__:v1:",StringComparison.Ordinal)==true && credential.Length>14)))
+            throw new InvalidOperationException("Claude Desktop 接入配置已变更，请重新启用 SafeCode 接入。");
+        if(ProfileText(profile,"codeDefaultPermissionMode")!="auto")
+        {
+            profile["codeDefaultPermissionMode"]="auto";
+            WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
+        }
+        return profile;
     }
 
     private static void MigrateClassifier(string path)
@@ -840,7 +896,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 }
                 if(priorDevice!=null)throw new InvalidOperationException("该 Key 的设备授权已不可用，请联系网关管理员。");
             }
-            string lib=Library(),profileId=previous?.Profile??Guid.NewGuid().ToString();
+            string lib=Library(previous),profileId=previous?.Profile??Guid.NewGuid().ToString();
             string metaPath=Path.Combine(lib,"_meta.json"),profilePath=Path.Combine(lib,profileId+".json");
             byte[]? originalMeta=ReadOptionalFile(metaPath),originalProfile=ReadOptionalFile(profilePath);
             var meta=ParseProfileMeta(originalMeta);
@@ -926,7 +982,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             timeout.CancelAfter(TimeSpan.FromSeconds(20));
             var (models,classifier)=await FetchModelCatalogAsync(client,timeout.Token);
 
-            string library=Library(), path=Path.Combine(library,saved.Profile+".json");
+            string library=Library(saved), path=Path.Combine(library,saved.Profile+".json");
             var original=File.ReadAllBytes(path);
             var profile=JsonNode.Parse(original) as JsonObject;
             if((string?)ReadProfileMeta(library)["appliedId"]!=saved.Profile||
@@ -1066,7 +1122,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                         return Status();
                     }
                 }
-                var lib=Library();
+                var lib=Library(s);
                 string metaPath=Path.Combine(lib,"_meta.json"),profilePath=Path.Combine(lib,s.Profile+".json");
                 byte[]? originalMeta=ReadOptionalFile(metaPath),originalProfile=ReadOptionalFile(profilePath);
                 var meta=ParseProfileMeta(originalMeta);var entries=meta["entries"]!.AsArray();

@@ -300,9 +300,7 @@ internal sealed class MacBackend : IDisposable
                 request.Remove("background");
                 return await gatewaySession.ManagePublicGatewayAsync(request,ct);
             case "codex.open":return await MacClients.OpenLocalClientAsync("Codex",ct);
-            case "claudeDesktop.open":
-                await KeyAccess().PrepareLaunchAsync(ct);
-                return await MacClients.OpenLocalClientAsync("Claude",ct);
+            case "claudeDesktop.prepare":return await KeyAccess().PrepareLaunchAsync(ct);
             case "host.status":return keyDeviceTunnel?.Status(hostControl?.Enabled==true)??hostControl?.Status??new(false,"disabled","","","未启用；需先开启 macOS 系统远程登录");
             case "host.enable":
                 if(!Flag("riskAccepted"))throw new InvalidOperationException("请先阅读并确认本机远程控制权限说明。");
