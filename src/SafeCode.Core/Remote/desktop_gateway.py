@@ -652,6 +652,25 @@ def conversation_scope(data, header=None):
     return body_id or header_id or ''
 
 
+def desktop_model_probe(data, messages, content):
+    maximum = data.get('max_tokens')
+    if (type(maximum) is not int or maximum != 1 or len(messages) != 1 or data.get('tools')
+            or len(content) != 1 or content[0].get('text') not in ('.', 'Hi', 'Hello')):
+        return False
+    system = data.get('system')
+    if not system:
+        return True
+    # Native model validation may include only the CLI identity and attribution.
+    if not isinstance(system, list) or not 1 <= len(system) <= 2:
+        return False
+    if not all(isinstance(block, dict) and block.get('type') == 'text'
+               and isinstance(block.get('text'), str) for block in system):
+        return False
+    identity = "You are Claude Code, Anthropic's official CLI for Claude."
+    return (system[-1]['text'] == identity
+            and (len(system) == 1 or system[0]['text'].startswith('x-anthropic-billing-header: ')))
+
+
 def desktop_suggestion(messages):
     # Desktop sends the suggested-reply request on the chat's own session ID,
     # after a real assistant reply. Only the final user turn identifies the helper.
@@ -3222,15 +3241,13 @@ class CloudCliBackend:
             raise CloudCliError('Desktop attachments and plan mode require the authenticated CloudCLI connection', 503)
         if not dispatch_task and not attachments:
             raise CloudCliError('CloudCLI requires text for the user task', 400)
-        if not chat_mode and len(original) == 1 and not data.get('tools') and not data.get('system'):
-            maximum = data.get('max_tokens')
-            # Model checks can carry the current Desktop conversation ID. Reply
-            # before opening a conversation slot or considering a history edit.
-            if (type(maximum) is int and maximum == 1 and len(latest) == 1
-                    and latest[0].get('text') in ('.', 'Hi', 'Hello')):
-                return self.local_reply(data['model'], 'OK')
-            if not scope and task == '.':
-                raise CloudCliError('CloudCLI requires text for the user task', 400)
+        # Model checks can carry the current Desktop conversation ID. Reply
+        # before opening a conversation slot or considering a history edit.
+        if not chat_mode and desktop_model_probe(data, original, latest):
+            return self.local_reply(data['model'], 'OK')
+        if (not chat_mode and len(original) == 1 and not scope
+                and not data.get('tools') and not data.get('system') and task == '.'):
+            raise CloudCliError('CloudCLI requires text for the user task', 400)
         title = cloudcli_title_response(task) if not chat_mode and len(messages) == 1 else None
         if title is not None:
             return self.local_reply(data['model'], title)

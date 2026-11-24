@@ -2400,8 +2400,17 @@ class CloudCLIGatewayTests(unittest.TestCase):
         for model, prompt, coalesced in (
                 (sonnet, 'Continue on Sonnet.', False),
                 (opus, 'Continue back on Opus.', True)):
-            request_body = conversation('Hi', model=model, max_tokens=1,
-                                        metadata={'user_id': json.dumps({'session_id': self.session})})
+            request_body = conversation(
+                'unused', model=model, max_tokens=1,
+                messages=[{'role': 'user', 'content': [
+                    {'type': 'text', 'text': 'Hi', 'cache_control': {'type': 'ephemeral'}},
+                ]}],
+                system=[
+                    {'type': 'text', 'text': 'x-anthropic-billing-header: cc_version=2.1.286; cc_entrypoint=desktop;'},
+                    {'type': 'text', 'text': "You are Claude Code, Anthropic's official CLI for Claude."},
+                ],
+                metadata={'user_id': json.dumps({'session_id': self.session})},
+            )
             with patch.object(self.manager.cloudcli, 'call_chat',
                               side_effect=AssertionError('A model probe must not reach CloudCLI')):
                 status, probe = self.request(request_body)
