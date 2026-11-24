@@ -48,11 +48,25 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
         }
     }
 
-    internal string Command { get; private set; } = "";
+    private DeviceReturnPath? returnPath;
+    internal int Generation=>returnPath?.Generation??-1;
+    internal void Invalidate()=>returnPath?.Invalidate();
+    internal string Command => returnPath?.Command ?? "";
+    internal string? ConnectionProblem(bool localSshReady) => !localSshReady
+        ? "本机 SSH 服务未就绪，请在 SafeCode 恢复本机远程控制。"
+        : returnPath==null ? "正在建立设备回连。" : returnPath.Problem;
+    internal async Task CheckReturnAsync(bool force,bool localSshReady,CancellationToken ct)
+    {
+        if(!localSshReady || returnPath==null)throw new InvalidOperationException(ConnectionProblem(localSshReady));
+        await returnPath.EnsureAsync(force,ct);
+    }
 
-    internal HostControlStatus Status(bool localSshReady) =>
-        new(true, connected && localSshReady ? "connected" : "reconnecting", device.Alias, Command,
-            connected && localSshReady ? "已验证 Key 网关到本机的 SSH 连接。" : "正在等待 Key 网关到本机的连接。");
+    internal HostControlStatus Status(bool localSshReady)
+    {
+        var reason=ConnectionProblem(localSshReady);
+        return new(true,reason==null?"connected":"reconnecting",device.Alias,Command,
+            reason??"已验证 Key 网关到本机的 SSH 连接。");
+    }
 
     internal static async Task<DeviceBinding> PrepareAsync(Ticket ticket, CancellationToken ct)
     {
@@ -121,36 +135,27 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
         catch (TimeoutException) { throw new IOException("FRP 通道未能连到 Key 网关。请检查网关的 HTTPS 转发及 FRP 服务。"); }
         File.Delete(configPath);
         configPath = "";
-        renewal = KeepAliveAsync(lifetime.Token);
+
     }
 
     internal async Task VerifyAsync(MacHostControl.LocalSsh ssh, CancellationToken ct)
     {
         var hostKey = string.Join(' ', ssh.HostKey.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2));
-        var result = await DeviceControlAsync(ticket,
-            new { action = "verify", device.DeviceId, device.DeviceProof, ssh.Username, hostKey }, ct);
-        Command = result.GetProperty("command").GetString() ?? throw new IOException("网关未确认 SSH 连接。");
+        async Task<string> Verify(CancellationToken token)
+        {
+            var result=await DeviceControlAsync(ticket,new {action="verify",device.DeviceId,device.DeviceProof,ssh.Username,hostKey},token);
+            if(result.ValueKind!=JsonValueKind.Object || !result.TryGetProperty("command",out var value) ||
+                value.ValueKind!=JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
+                throw new IOException("网关未确认 SSH 连接。");
+            return value.GetString()!;
+        }
+        returnPath=new DeviceReturnPath(RenewAsync,Verify,()=>connected,()=>lifetime.IsCancellationRequested || process?.HasExited!=false,lifetime.Token);
+        await returnPath.EnsureAsync(true,ct);
+        renewal=returnPath.MonitorAsync();
     }
 
     private Task<JsonElement> RenewAsync(CancellationToken ct) =>
-        DeviceControlAsync(ticket, new { action = "renew", device.DeviceId, device.DeviceProof }, ct);
-
-    private async Task KeepAliveAsync(CancellationToken ct)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(20));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                try { await RenewAsync(ct); }
-                catch (Exception error) when (error is HttpRequestException or InvalidOperationException or OperationCanceledException)
-                {
-                    if (ct.IsCancellationRequested) break;
-                }
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-    }
+        DeviceControlAsync(ticket,new { action="renew",device.DeviceId,device.DeviceProof },ct);
 
     private async Task RelayAsync(CancellationToken ct)
     {
@@ -195,7 +200,7 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
             {
                 if (ct.IsCancellationRequested) return;
             }
-            finally { connected = false; }
+            finally { connected = false; returnPath?.Invalidate(); }
         }
     }
 
@@ -228,11 +233,11 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
                 }
             }
             catch (InvalidOperationException) { }
-            frpc.Dispose();
         }
         if (relay != null) await relay.ConfigureAwait(false);
         if (renewal != null) await renewal.ConfigureAwait(false);
         if (configPath.Length > 0) File.Delete(configPath);
+        process?.Dispose();
         lifetime.Dispose();
     }
 }

@@ -119,6 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             if let i=args.firstIndex(of:"--preview-sandbox"),args.count>i+1 {isolated=true;directory=URL(fileURLWithPath:args[i+1],isDirectory:true)}
             if !isolated, let existing=NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).first(where:{$0.processIdentifier != ProcessInfo.processInfo.processIdentifier}) { existing.activate(options:[.activateAllWindows]); NSApp.terminate(nil);return }
             try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+            for event in [NSWorkspace.willSleepNotification,NSWorkspace.didWakeNotification] {
+                NSWorkspace.shared.notificationCenter.addObserver(forName:event,object:nil,queue:.main) { [weak self] _ in
+                    Task { @MainActor in self?.request("desktopKey.invalidate") { _ in } }
+                }
+            }
             makeMenu(); makeWindow(); makeStatus()
             if !isolated { notifications.configure { [weak self] in self?.showMain() } }
             if !isolated {
@@ -788,7 +793,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let host=message["host"] as? [String:Any] ?? [:]
         let apiMode=message["apiMode"] as? Bool ?? false
         trayState=["mount":mount,"host":["enabled":host["enabled"] as? Bool ?? false],
-                  "running":message["desktopKeyRunning"] as? Bool ?? false,"apiMode":apiMode,
+                  "running":message["desktopKeyRunning"] as? Bool ?? false,"apiMode":apiMode,"connection":message["connection"] ?? NSNull(),
                   "startedAt":message["startedAt"] ?? NSNull(),"exiting":shutdownPending]
         statusItem.button?.toolTip=apiMode ? "Safe Code · API Key 接入":"Safe Code · "+(mount["message"] as? String ?? "未挂载目录")
         renderTray()

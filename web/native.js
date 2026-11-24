@@ -710,13 +710,20 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#bridge-copy-key').onclick=async()=>{try{await native('bridge.copy-key');$('#bridge-progress').textContent='本机适配器密钥已复制。只填写到本机 CC Switch/Codex，勿发给他人。';}catch(error){$('#bridge-progress').textContent=error.message;}};
     setInterval(()=>{if(!$('#workspace-screen').hidden)pollClaudeBridge();},4000);
 
+    function connectionLabel(){
+      if(!keyState.running)return keyState.configured?'待恢复':'未接入';
+      if(keyState.deviceProblem)return '设备回连待确认';
+      if(keyState.requestError)return '接入异常';
+      return keyState.clientConnected?'Claude 已连接':'网关已就绪';
+    }
     function renderDesktopAccess(){
       const ready=connectionReady&&!!nativeServer?.statuses?.account;
       const checking=publicGatewayLoading&&!publicGatewayReachable&&!publicGatewayStatusError&&!publicGatewayError;
       const unavailable=!ready||busy||!!publicGatewayOperation;
-      $('#claude-gateway-status').textContent=keyState.running?'Claude 已接入':'Claude 未接入';
-      $('#claude-gateway-status').classList.toggle('inactive',!keyState.running);
-      $('#claude-desktop-state').textContent=keyState.running?'已接入':keyState.configured?'待接入':'未接入';
+      $('#claude-gateway-status').textContent=keyState.running?connectionLabel():'Claude 未接入';
+      $('#claude-gateway-status').classList.toggle('inactive',!keyState.running||!!keyState.deviceProblem||!!keyState.requestError);
+      $('#claude-desktop-state').textContent=connectionLabel();
+      $('#claude-connection-reason').textContent=keyState.deviceProblem||keyState.requestError||'';
       setLaunchAvailability('claude-desktop-launch',keyState.running&&!keyBusy);
       $('#claude-desktop-manage').disabled=!ready;
       $('#public-gateway-runtime').disabled=!ready;
@@ -1020,9 +1027,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#api-duration').textContent=hours?`${hours} 小时 ${minutes} 分`:minutes?`${minutes} 分 ${seconds} 秒`:`${seconds} 秒`;
     }
     function renderApi(){
-      $('#api-state-label').textContent=keyState.running?'已接入':keyState.configured?'待恢复':'未接入';
-      $('#api-state').classList.toggle('connected',!!keyState.running);
-      $('#api-device').textContent=keyState.deviceAlias?keyState.deviceAlias:'';
+      $('#api-state-label').textContent=connectionLabel();
+      $('#api-state').classList.toggle('connected',!!keyState.running&&!keyState.deviceProblem&&!keyState.requestError);
+      $('#api-device').textContent=[keyState.deviceAlias,keyState.deviceProblem||keyState.requestError].filter(Boolean).join(' · ');
       $('#api-manage-key').textContent=keyState.running?'接入设置':'恢复接入';
       setLaunchAvailability('api-open-claude',!!keyState.running&&!keyBusy);
       $('#api-usage-refresh').disabled=!keyState.running||apiFetching;
@@ -1205,11 +1212,26 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     };
     setInterval(()=>{if(!apiScreen.hidden)renderApiDuration();},1000);
     setInterval(refreshApiUsage,30000);
+    let readingConnection=false;
+    async function refreshDesktopConnection(){
+      if(document.hidden||!keyState.running||keyBusy||readingConnection)return;
+      const start=keyState.startedAt;
+      readingConnection=true;
+      try{
+        const state=await native('desktopKey.connection');
+        if(state && keyState.running && !keyBusy && start===keyState.startedAt && state.startedAt===start){
+          Object.assign(keyState,state);
+          renderApi();renderDesktopAccess();
+        }
+      }catch{}finally{readingConnection=false;}
+    }
+    setInterval(refreshDesktopConnection,3000);
+    document.addEventListener('visibilitychange',refreshDesktopConnection);
     function describeKey(op,args){
       const target=keyState.deviceAlias?'\n工具目标：已授权的本机设备 '+keyState.deviceAlias:'';
       if(keyState.unbindPending)return keyState.error;
       if(keyState.error)return (keyState.configured?'已保存 Key，暂未恢复接入。\n':'')+keyState.error;
-      if(keyState.running)return '已启用。'+target+'\n'+(args?.replace||args?.useSaved?'请完全退出并重新打开 Claude Desktop 以应用更改。':'首次接入请完全退出并重新打开 Claude Desktop。');
+      if(keyState.running)return connectionLabel()+'。'+(keyState.deviceProblem||keyState.requestError||'')+target+'\n'+(args?.replace||args?.useSaved?'请完全退出并重新打开 Claude Desktop 以应用更改。':'首次接入请完全退出并重新打开 Claude Desktop。');
       if(keyState.configured)return '已保存 Key，当前 Claude 配置未启用此接入。';
       return op==='disable'?'已停用。\n请重新打开 Claude Desktop 以应用更改。':'尚未启用。';
     }

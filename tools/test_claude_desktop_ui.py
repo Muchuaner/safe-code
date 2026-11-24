@@ -1,9 +1,10 @@
 """Claude Desktop 接入卡片/弹窗夹具；不读写真实注册表，不发模型请求。"""
 from pathlib import Path
+import os
 from playwright.sync_api import expect, sync_playwright
 root=Path(__file__).resolve().parents[1]
 with sync_playwright() as p:
-    browser=p.chromium.launch(executable_path='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless=True)
+    browser=p.chromium.launch(executable_path=os.environ.get('SAFECODE_TEST_BROWSER','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),headless=False,args=['--headless=new'])
     page=browser.new_page(viewport={'width':1000,'height':900});errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
     page.add_init_script('''
       window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;window.calls=[];window.clientOpenCalls=[];window.clientOpenError=null;
@@ -33,7 +34,7 @@ with sync_playwright() as p:
         if(m.op==='safeCodeApi.publicStatus'||m.op==='safeCodeApi.enablePublic'){
           if(m.op==='safeCodeApi.enablePublic')window.gatewayEnabled=true;
           const result=window.gatewayMissing?{installed:false,enabled:false}:
-            {enabled:!!window.gatewayEnabled,backend:'cloudcli',gatewayRevision:10};
+            {enabled:!!window.gatewayEnabled,backend:'cloudcli',gatewayRevision:12};
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result}));return;
         }
         if(m.op.startsWith('desktopKey.')){
@@ -49,17 +50,17 @@ with sync_playwright() as p:
             if(m.args.useSaved? !window.keyConfigured : !['sc1.fixture','sc1.replacement'].includes(m.args.key)){
               queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,error:'Key 无效或已撤销。'}));return;
             }
-            window.keyConfigured=true;window.keyRunning=true;
+            window.keyConfigured=true;window.keyRunning=true;window.keyStatusFailure=null;
           }
           if(m.op==='desktopKey.authorizeDevice'){
             window.keyAuthorizations.push(m.args);
-            window.keyConfigured=true;window.keyRunning=true;
+            window.keyConfigured=true;window.keyRunning=true;window.keyStatusFailure=null;
           }
           if(m.op==='desktopKey.cancelDevice')window.keyCanceled++;
           if(m.op==='desktopKey.disable'){window.keyDisableCalls++;window.keyConfigured=false;window.keyRunning=false;}
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{configured:!!window.keyConfigured,running:!!window.keyRunning,deviceAlias:window.keyRunning?'mac-fixture':undefined}}));return;
         }
-        if(m.op==='claudeDesktop.open'||m.op==='codex.open'){window.clientOpenCalls.push(m.op);queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:'已请求打开客户端。',error:window.clientOpenError}));return;}
+        if(m.op==='claudeDesktop.open'||m.op==='codex.open'){window.clientOpenCalls.push(m.op);queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.clientOpenResult||'已请求打开客户端。',error:window.clientOpenError}));return;}
         const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:m.op==='notice.state'?{accepted:false}:null;
         queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result}));
       }}};
@@ -80,9 +81,11 @@ with sync_playwright() as p:
     page.locator('#desktop-key-login').click()
     page.locator('#desktop-key-input').fill('sc1.fixture')
     page.locator('#desktop-key-enable').click()
-    assert page.locator('#desktop-key-open').is_visible() and page.locator('#desktop-key-input').input_value()==''
+    page.locator('#api-manage-key').click()
+    expect(page.locator('#desktop-key-open')).to_be_visible()
+    assert page.locator('#desktop-key-input').input_value()==''
     assert page.locator('#desktop-key-form .config-description br').count()==1
-    assert page.locator('#desktop-key-progress').inner_text().startswith('已启用。\n工具目标：已授权的本机设备 mac-fixture\n首次接入')
+    assert page.locator('#desktop-key-progress').inner_text().startswith('网关已就绪。\n工具目标：已授权的本机设备 mac-fixture\n首次接入')
     assert page.locator('#desktop-key-open').inner_text()=='打开\nClaude Desktop'
     page.locator('#desktop-key-refresh').click()
     expect(page.locator('#desktop-key-progress')).to_contain_text('模型列表已更新')
@@ -99,17 +102,19 @@ with sync_playwright() as p:
         assert button['y']>=maintenance['y']+maintenance['height']
     page.set_viewport_size({'width':1000,'height':900})
     workspace_key.click()
+    page.locator('#api-manage-key').click()
     page.get_by_text('已保存 Key，暂未恢复接入。',exact=False).wait_for()
     assert not page.locator('#desktop-key-input').is_visible()
     assert page.locator('#desktop-key-disable').is_enabled()
     assert page.locator('#desktop-key-replace').is_enabled() and page.locator('#desktop-key-resume').is_enabled()
     assert not page.locator('#desktop-key-open').is_visible()
     page.locator('#desktop-key-resume').click()
+    page.locator('#api-manage-key').click()
     page.locator('#desktop-key-open').wait_for()
     assert page.evaluate('window.keyEnableCalls.at(-1)')=={'useSaved':True}
     page.locator('#desktop-key-close').click()
     page.evaluate("window.keyStatusFailure=null")
-    page.locator('#desktop-key-settings').click()
+    page.locator('#api-manage-key').click()
     page.locator('#desktop-key-replace').click()
     assert page.locator('#desktop-key-input').evaluate('e=>document.activeElement===e')
     assert page.locator('#desktop-key-enable').inner_text()=='验证并更换'
@@ -123,17 +128,18 @@ with sync_playwright() as p:
     page.locator('#desktop-key-replace').click()
     page.locator('#desktop-key-input').fill('sc1.unsent')
     page.locator('#desktop-key-close').click()
-    page.locator('#desktop-key-settings').click()
+    page.locator('#api-manage-key').click()
     assert not page.locator('#desktop-key-input').is_visible() and page.locator('#desktop-key-input').input_value()==''
     page.locator('#desktop-key-replace').click()
     page.locator('#desktop-key-input').fill('sc1.replacement')
     page.locator('#desktop-key-enable').click()
+    page.locator('#api-manage-key').click()
     page.locator('#desktop-key-open').wait_for()
     assert page.evaluate('window.keyEnableCalls.at(-1)')=={'key':'sc1.replacement','replace':True}
     assert page.evaluate('window.keyDisableCalls===0')
     page.locator('#desktop-key-disable').click()
-    assert page.locator('#desktop-key-enable').is_visible()
-    page.locator('#desktop-key-close').click()
+    expect(page.locator('#desktop-key-dialog')).to_be_hidden()
+    page.evaluate("showScreen('workspace');switchMode('maintenance')")
     page.evaluate("window.hostState={enabled:true,state:'connected',alias:'win-fixture',command:'ssh fixture'}")
     workspace_key.click()
     page.locator('#desktop-key-input').fill('sc1.own-vps')
@@ -151,11 +157,13 @@ with sync_playwright() as p:
     page.locator('#host-risk').check()
     assert page.locator('#host-enable').inner_text()=='同意并使用'
     page.locator('#host-enable').click()
+    page.locator('#api-manage-key').click()
     page.locator('#desktop-key-open').wait_for()
     assert page.evaluate('window.keyAuthorizations')==[{'riskAccepted':True}]
     assert page.evaluate('window.hostEnableCalls.length===0')
     page.locator('#desktop-key-disable').click()
-    page.locator('#desktop-key-close').click()
+    expect(page.locator('#desktop-key-dialog')).to_be_hidden()
+    page.evaluate("showScreen('workspace');switchMode('maintenance')")
     page.evaluate('window.hostState={enabled:false,state:"disabled",alias:"mac",command:"",message:"未启用"}')
     page.evaluate("window.safeCodeClaudeBridgeStatus({running:true,connected:true,configuration:'fixture'})")
     assert page.locator('#codex-gateway-status').inner_text()=='Codex网关已启用'
@@ -178,13 +186,18 @@ with sync_playwright() as p:
     workspace_key.click()
     page.locator('#desktop-key-input').fill('sc1.fixture')
     page.locator('#desktop-key-enable').click()
-    expect(page.locator('#desktop-key-open')).to_be_visible()
-    page.locator('#desktop-key-close').click()
-    expect(page.locator('#claude-gateway-status')).to_have_text('Claude 已接入')
+    expect(page.locator('#api-open-claude')).to_be_visible()
+    page.evaluate("showScreen('workspace');switchMode('maintenance')")
+    expect(page.locator('#claude-gateway-status')).to_have_text('网关已就绪')
     page.evaluate("window.safeCodeClaudeBridgeStatus({running:true,connected:true,configuration:'fixture'})")
     for launch in ['#claude-desktop-launch','#codex-launch']:page.locator(launch).click()
     page.wait_for_function('window.clientOpenCalls.length===2')
     assert page.evaluate('window.clientOpenCalls')==['claudeDesktop.open','codex.open']
+    page.evaluate("window.clientOpenResult={installationRequired:true,message:'未找到 Claude Desktop，已打开官方下载页。'}")
+    page.locator('#claude-desktop-launch').click()
+    expect(page.locator('#app-message-dialog')).to_contain_text('已打开官方下载页')
+    page.locator('#app-message-confirm').click()
+    page.evaluate('window.clientOpenResult=null')
     page.evaluate("window.clientOpenError='未检测到 Codex，请先安装官方客户端。'")
     page.locator('#codex-launch').click()
     page.wait_for_selector('#app-message-dialog[open]')
@@ -201,7 +214,7 @@ with sync_playwright() as p:
     page.locator('#claude-desktop-manage').click()
     settings=page.locator('#claude-desktop-dialog')
     footer=settings.locator('.config-footer')
-    expect(footer.locator('button')).to_have_text(['启用','管理网关'])
+    expect(footer.locator('button')).to_have_text(['故障修复','启用','管理网关'])
     progress=page.locator('#safe-code-api-progress')
     close_settings=page.locator('#claude-desktop-close')
     enable_gateway=page.locator('#safe-code-api-enable')
@@ -218,7 +231,7 @@ with sync_playwright() as p:
     expect(progress).to_contain_text('点击「启用」重试')
     expect(enable_gateway).to_be_enabled()
     page.evaluate("""safeCodeNativeResponse({
-        id:heldGatewayStatus,result:{enabled:true,backend:'cloudcli',gatewayRevision:10}
+        id:heldGatewayStatus,result:{enabled:true,backend:'cloudcli',gatewayRevision:12}
     });window.holdGatewayStatus=false;window.gatewayMissing=true;window.holdGatewayInstall=true""")
     expect(enable_gateway).to_be_enabled()
     expect(manage_gateway).to_be_disabled()
@@ -232,7 +245,7 @@ with sync_playwright() as p:
     expect(progress).to_contain_text('正在准备 CloudCLI 并部署公网网关')
     expect(enable_gateway).to_be_disabled()
     assert page.evaluate("calls.filter(m=>m.op==='safeCodeApi.install').length===1")
-    page.evaluate("""window.gatewayMissing=false;
+    page.evaluate("""window.gatewayMissing=false;window.holdGatewayInstall=false;
         safeCodeNativeResponse({id:heldGatewayInstall,error:'测试部署失败。'})""")
     expect(progress).to_contain_text('测试部署失败。')
     expect(enable_gateway).to_be_enabled()
@@ -265,8 +278,10 @@ with sync_playwright() as p:
     expect(settings).to_be_hidden()
     expect(workspace_key).to_be_visible()
     workspace_key.click()
+    page.locator('#api-manage-key').click()
     page.locator('#desktop-key-disable').click()
-    page.locator('#desktop-key-close').click()
+    expect(page.locator('#desktop-key-dialog')).to_be_hidden()
+    page.evaluate("showScreen('workspace');switchMode('maintenance')")
     page.evaluate("showScreen('login')")
     page.locator('#advanced-connect').click()
     page.locator('#enter-preview').click()

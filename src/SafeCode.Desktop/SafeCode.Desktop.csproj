@@ -17,6 +17,6 @@
   <ItemGroup><Content Include="service-endpoints.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><Content Include="../../assets/icons/safe-code-shortcut.ico" Link="Icons/safe-code-shortcut.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="PowerShell/*.ps1" /></ItemGroup>
-  <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /><Compile Include="../Shared/DesktopKeyAccess.cs" Link="DesktopKeyAccess.cs" /><Compile Include="../Shared/GatewayDiagnostic.cs" Link="GatewayDiagnostic.cs" /><Compile Include="../Shared/SavedLoginStore.cs" Link="SavedLoginStore.cs" /></ItemGroup>
+  <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /><Compile Include="../Shared/DeviceReturnPath.cs" Link="DeviceReturnPath.cs" /><Compile Include="../Shared/DesktopKeyAccess.cs" Link="DesktopKeyAccess.cs" /><Compile Include="../Shared/GatewayDiagnostic.cs" Link="GatewayDiagnostic.cs" /><Compile Include="../Shared/SavedLoginStore.cs" Link="SavedLoginStore.cs" /></ItemGroup>
   <ItemGroup><Compile Include="../Shared/RdpResizePreferences.cs" Link="RdpResizePreferences.cs" /></ItemGroup>
 </Project>

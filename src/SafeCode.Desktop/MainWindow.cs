@@ -97,6 +97,16 @@ public sealed class MainWindow : Window
         });
         Content = browser;
         logTimer.Tick+=async(_,_)=>await FlushLogsAsync();logTimer.Start();
+        void PowerChanged(object sender,PowerModeChangedEventArgs args)
+        {
+            if(args.Mode is PowerModes.Suspend or PowerModes.Resume)
+            {
+                keyDeviceTunnel?.Invalidate();
+                session?.InvalidateHostVerification();
+            }
+        }
+        SystemEvents.PowerModeChanged+=PowerChanged;
+        Closed+=(_,_)=>SystemEvents.PowerModeChanged-=PowerChanged;
         Loaded += async (_, _) => await InitializeAsync();
         if(!IsAcceptance)
         {
@@ -206,7 +216,7 @@ public sealed class MainWindow : Window
     {
         var host=keyDeviceTunnel?.Status(hostControl?.Enabled==true)??hostControl?.Status;
         var c=claudeBridge?.Status;
-        return new {apiMode=preferences.PrefersApiAccess,running=keyAccess?.Running==true,startedAt=keyAccess?.StartedAt,
+        return new {apiMode=preferences.PrefersApiAccess,running=keyAccess?.Running==true,startedAt=keyAccess?.StartedAt,connection=keyAccess?.ConnectionStatus,
             mount=session?.GetMountStatus(),host=new{enabled=host?.Enabled==true},exiting=exitInProgress,
             codex=IntegrationTrayPresenter.Codex(c?.Running==true,c?.Connected==true,c?.StartedAt,c?.StoppedAt,c?.Usage,c?.UsageSource??"",DateTimeOffset.UtcNow)};
     }
@@ -337,7 +347,10 @@ public sealed class MainWindow : Window
             startedLocal=true;
             tunnel=await WindowsDeviceTunnel.ConnectAsync(setup.Remote,device,ssh.Port,dataDirectory,ct);
             await tunnel.VerifyAsync(ssh,ct);
-            var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device);
+            var activeTunnel=tunnel;
+            var path=new DesktopKeyAccess.DevicePath(()=>activeTunnel.ConnectionProblem(control.Enabled),
+                (force,token)=>activeTunnel.CheckReturnAsync(force,control.Enabled,token),()=>activeTunnel.Generation);
+            var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device,devicePath:path);
             keyDeviceTunnel=tunnel;
             tunnel=null;
             pendingKeyDevice=null;
@@ -385,7 +398,9 @@ public sealed class MainWindow : Window
             var binding=await target.BindPublicGatewayHostAsync(setup.Remote,hostname,ct);
             var device=new DesktopKeyAccess.DeviceBinding(binding.GetProperty("deviceId").GetString()!,
                 binding.GetProperty("deviceProof").GetString()!,binding.GetProperty("alias").GetString()!,0,"");
-            var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device,hostReady:HostReady);
+            var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device,hostReady:HostReady,
+                devicePath:new(()=>HostReady()?null:target.HostControlStatus.State=="connected"?"本次授权的 SSH 会话已断开，请重新启用接入。":target.HostControlStatus.Message,
+                    (force,token)=>target.MaintainHostControlForChatAsync(token,force),()=>target.HostNetworkGeneration));
             if(startedHere)keyStartedHost=target;
             pendingKeyDevice=null;
             return result;
@@ -427,6 +442,7 @@ public sealed class MainWindow : Window
             case "bridge.stop":
                 if(deploying)throw new InvalidOperationException("请等待当前操作完成。");deploying=true;activeStep="codex_bridge";
                 try{return claudeBridge==null?new ClaudeCodexStatus(false,false,false,18797,"sonnet",false,"未启动"):await claudeBridge.StopAsync(lifetime.Token);}finally{deploying=false;activeStep="";}
+            case "desktopKey.connection":return keyAccess?.ConnectionStatus;
             case "desktopKey.mode":
                 if (args.ValueKind==JsonValueKind.Object && args.TryGetProperty("enabled",out var apiMode))
                     preferences.SetApiAccessMode(apiMode.GetBoolean());

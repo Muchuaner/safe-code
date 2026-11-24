@@ -13,7 +13,16 @@ public sealed partial class SshSession
     private CancellationTokenSource? hostLifetime;
     private Task? hostGuard;
     private readonly SemaphoreSlim hostGate=new(1,1);
-    private DateTimeOffset hostVerifiedAt;
+    private long hostVerifiedAt;
+    private int hostNetworkGeneration,hostVerifiedGeneration;
+    public int HostNetworkGeneration=>Volatile.Read(ref hostNetworkGeneration);
+    public void InvalidateHostVerification()=>Interlocked.Increment(ref hostNetworkGeneration);
+    private bool HostVerificationFresh(long milliseconds)
+    {
+        var age=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-Interlocked.Read(ref hostVerifiedAt);
+        return age>=0 && age<milliseconds && Volatile.Read(ref hostVerifiedGeneration)==Volatile.Read(ref hostNetworkGeneration);
+    }
+    private void HostAddressChanged(object? sender,EventArgs args)=>InvalidateHostVerification();
     private string hostClientId="",hostAlias="",hostUser="",hostUserSid="",hostPublicKey="",hostCommand="",hostState="disabled",hostMessage="未启用";
     private uint hostLocalPort;
     public bool HasHostControl=>hostLifetime!=null;
@@ -23,8 +32,8 @@ public sealed partial class SshSession
     {
         get
         {
-            if(hostState=="connected"&&!HasVerifiedHostControl)
-                return new(HasHostControl,"reconnecting",hostAlias,"","本机控制连接中断，正在等待重连");
+            if(hostState=="connected"&&(!HasVerifiedHostControl||!HostVerificationFresh(45000)))
+                return new(HasHostControl,"reconnecting",hostAlias,"","正在重新验证网关到本机的 SSH 回连");
             return new(HasHostControl,hostState,hostAlias,hostState=="connected"?hostCommand:"",hostMessage);
         }
     }
@@ -37,7 +46,7 @@ public sealed partial class SshSession
     {
         var lease = hostLifetime;
         RequireVerifiedHostControl();
-        return () => ReferenceEquals(hostLifetime, lease) && HasVerifiedHostControl;
+        return () => ReferenceEquals(hostLifetime, lease) && HasVerifiedHostControl && HostVerificationFresh(45000);
     }
     public async Task<HostControlIdentity> PrepareHostControlAsync(string clientId,CancellationToken ct=default)
     {
@@ -72,14 +81,17 @@ public sealed partial class SshSession
     }
     private async Task<JsonElement> VerifyHostConnectionAsync(string action,uint port,CancellationToken ct)
     {
+        int generation=Volatile.Read(ref hostNetworkGeneration);
         await EnsureMountControlAsync(ct);
         var result=await RequestAsync<JsonElement>("host_bridge",new{clientId=hostClientId,action,port,username=hostUser,userSid=hostUserSid,hostKey=hostPublicKey,alias=hostAlias},ct);
         if(!result.GetProperty("verified").GetBoolean())throw new IOException("本机 SSH 未通过实际登录验证。");
-        hostVerifiedAt=DateTimeOffset.UtcNow;
+        Interlocked.Exchange(ref hostVerifiedAt,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Volatile.Write(ref hostVerifiedGeneration,generation);
         return result;
     }
     private async Task GuardHostTunnelAsync(CancellationToken ct)
     {
+        System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged+=HostAddressChanged;
         using var timer=new PeriodicTimer(TimeSpan.FromSeconds(5));
         try
         {
@@ -91,8 +103,9 @@ public sealed partial class SshSession
             }
         }
         catch(OperationCanceledException){}
+        finally{System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged-=HostAddressChanged;}
     }
-    public async Task MaintainHostControlForChatAsync(CancellationToken ct)
+    public async Task MaintainHostControlForChatAsync(CancellationToken ct,bool force=false)
     {
         if(!HasHostControl)return;
         using var budget=CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -104,14 +117,14 @@ public sealed partial class SshSession
             {
                 if(hostLifetime is not {IsCancellationRequested:false} current)return;
                 using var active=CancellationTokenSource.CreateLinkedTokenSource(current.Token,budget.Token);
-                await MaintainHostTunnelAsync(active.Token);
+                await MaintainHostTunnelAsync(active.Token,force);
             }
             finally{hostGate.Release();}
         }
-        catch(OperationCanceledException)when(!ct.IsCancellationRequested){}
+        catch(OperationCanceledException)when(!ct.IsCancellationRequested){InvalidateHostVerification();}
         catch(ObjectDisposedException){}
     }
-    private async Task MaintainHostTunnelAsync(CancellationToken ct)
+    private async Task MaintainHostTunnelAsync(CancellationToken ct,bool force=false)
     {
         if(mountTrustFailed||mountAuthenticationFailed)
         {
@@ -123,21 +136,11 @@ public sealed partial class SshSession
         {
             if(HasVerifiedHostControl)
             {
-                // Transport keepalives do not prove that the VPS can still log in to the Mac.
-                if(hostUserSid.StartsWith("macos:",StringComparison.Ordinal))
-                {
-                    if(DateTimeOffset.UtcNow-hostVerifiedAt<TimeSpan.FromSeconds(30)||operations.CurrentCount==0)return;
-                    using var probe=CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    probe.CancelAfter(TimeSpan.FromSeconds(18));
-                    await VerifyHostConnectionAsync("verify",hostForward!.BoundPort,probe.Token);
-                }
-                else
-                {
-                    using var probe=hostTransport!.CreateCommand("true");
-                    probe.CommandTimeout=TimeSpan.FromSeconds(8);
-                    await probe.ExecuteAsync(ct);
-                    if(probe.ExitStatus!=0)throw new IOException("本机控制通道检查失败。");
-                }
+                if(!force && HostVerificationFresh(30000))return;
+                if(!force && operations.CurrentCount==0)return;
+                using var probe=CancellationTokenSource.CreateLinkedTokenSource(ct);
+                probe.CancelAfter(TimeSpan.FromSeconds(18));
+                await VerifyHostConnectionAsync("verify",hostForward!.BoundPort,probe.Token);
                 return;
             }
             hostState="reconnecting";
@@ -149,6 +152,7 @@ public sealed partial class SshSession
         catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
         catch(Exception error)
         {
+            InvalidateHostVerification();
             CloseHostTunnel();
             if(error is SshAuthenticationException)mountAuthenticationFailed=true;
             hostState=mountTrustFailed||mountAuthenticationFailed?"attention":"reconnecting";

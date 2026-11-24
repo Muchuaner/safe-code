@@ -64,7 +64,6 @@ internal sealed class MacHostControl : IDisposable
         {return null;}
     }
     public bool CanResume(ConnectionSettings settings)=>ReadPreference()?.Server.Matches(settings)==true;
-    public Task MaintainForChatAsync(CancellationToken ct)=>session?.MaintainHostControlForChatAsync(ct)??Task.CompletedTask;
     public async Task<string?> ResumeAsync(SshSession target,CancellationToken ct)
     {
         var preference=ReadPreference();

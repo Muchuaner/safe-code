@@ -71,7 +71,7 @@ window.trayStatus=(data,opened=false)=>{
  apiMode=api;start=data.startedAt;
  $('api').hidden=!api;$('server').hidden=api;set('mode',api?'API Key 接入':'服务器模式');set('secondary',api?'刷新用量':'重连');
  if(api){
-  set('label1','当前 Key 余额');set('label2','累计已用');set('state',data.running?'已接入':'待接入');
+  set('label1','当前 Key 余额');set('label2','累计已用');set('state',!data.running?'待接入':data.connection?.deviceProblem?'设备回连待确认':data.connection?.requestError?'接入异常':data.connection?.clientConnected?'Claude 已连接':'网关已就绪');
   set('elapsed',start?'本次接入  '+duration(Math.max(0,Math.floor((Date.now()-start)/1000))):'本次接入  —');
   if(changed||opened)refresh();
  }else{
