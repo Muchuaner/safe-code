@@ -434,9 +434,10 @@ class PublicHandler(Handler):
                 manager.accounting.model = model
                 manager.accounting.finished = None
                 try:
-                    unrestricted = bool(self.device and self.server.registry.unrestricted(self.digest)
-                                        and self.server.config['cloudcli'].get('desktopQuestions'))
-                    return manager.run(data, **options, check_model=self.check_model, unrestricted=unrestricted)
+                    if (self.device and self.server.registry.unrestricted(self.digest)
+                            and self.server.config['cloudcli'].get('desktopQuestions')):
+                        options['unrestricted'] = True
+                    return manager.run(data, **options, check_model=self.check_model)
                 except GatewayError as error:
                     record.update(outcome='failed', status=error.status)
                     raise
