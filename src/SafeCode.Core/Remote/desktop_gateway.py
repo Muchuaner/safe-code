@@ -3222,11 +3222,14 @@ class CloudCliBackend:
             raise CloudCliError('Desktop attachments and plan mode require the authenticated CloudCLI connection', 503)
         if not dispatch_task and not attachments:
             raise CloudCliError('CloudCLI requires text for the user task', 400)
-        if not chat_mode and len(original) == 1 and not scope and not data.get('tools') and not data.get('system'):
+        if not chat_mode and len(original) == 1 and not data.get('tools') and not data.get('system'):
             maximum = data.get('max_tokens')
-            if type(maximum) is int and maximum == 1 and task in ('.', 'Hi', 'Hello'):
+            # Model checks can carry the current Desktop conversation ID. Reply
+            # before opening a conversation slot or considering a history edit.
+            if (type(maximum) is int and maximum == 1 and len(latest) == 1
+                    and latest[0].get('text') in ('.', 'Hi', 'Hello')):
                 return self.local_reply(data['model'], 'OK')
-            if task == '.':
+            if not scope and task == '.':
                 raise CloudCliError('CloudCLI requires text for the user task', 400)
         title = cloudcli_title_response(task) if not chat_mode and len(messages) == 1 else None
         if title is not None:

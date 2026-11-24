@@ -2370,10 +2370,22 @@ class CloudCLIGatewayTests(unittest.TestCase):
         sonnet, opus = 'claude-sonnet-5-5', 'claude-opus-5-5'
         self.config['models'].extend((sonnet, opus))
         self.enable_cloudcli_web_fixture()
-        first = conversation('Remember the original task.', model=opus)
-        status, original = self.request(first)
+        self.cloud.track_history = True
+        self.cloud.reply = (200, [
+            {'type': 'session-id', 'sessionId': CLOUD_SESSION},
+            {'kind': 'thinking', 'content': 'Fixture reasoning'},
+            {'kind': 'tool_use', 'toolName': 'Bash', 'toolId': 'fixture-tool'},
+            {'kind': 'tool_result', 'toolId': 'fixture-tool', 'content': 'Fixture output'},
+            {'kind': 'text', 'role': 'assistant', 'content': 'The original task is in this conversation.'},
+            {'kind': 'complete', 'exitCode': 0}, {'type': 'done'},
+        ])
+        first = conversation('Remember the original task.', model=opus, stream=True)
+        status, events = self.request(first)
         self.assertEqual(status, 200)
-        previous = [*first['messages'], {'role': 'assistant', 'content': original['content']}]
+        self.assertEqual(events[-1]['type'], 'message_stop', events[-1])
+        visible = ''.join(event.get('delta', {}).get('text', '') for event in events)
+        self.assertIn('工具调用 1 次', visible)
+        previous = [*first['messages'], {'role': 'assistant', 'content': visible}]
 
         def switch_context(model):
             return [
@@ -2388,6 +2400,14 @@ class CloudCLIGatewayTests(unittest.TestCase):
         for model, prompt, coalesced in (
                 (sonnet, 'Continue on Sonnet.', False),
                 (opus, 'Continue back on Opus.', True)):
+            request_body = conversation('Hi', model=model, max_tokens=1,
+                                        metadata={'user_id': json.dumps({'session_id': self.session})})
+            with patch.object(self.manager.cloudcli, 'call_chat',
+                              side_effect=AssertionError('A model probe must not reach CloudCLI')):
+                status, probe = self.request(request_body)
+            self.assertEqual(status, 200, probe)
+            self.assertEqual(probe['content'], [{'type': 'text', 'text': 'OK'}])
+            self.assertEqual(sum(probe['usage'].values()), 0)
             switch = switch_context(model)
             if coalesced:
                 history = [*previous, {'role': 'user', 'content':
