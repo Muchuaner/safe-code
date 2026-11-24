@@ -511,7 +511,7 @@ internal sealed class MacBackend : IDisposable
     }
     private async Task PublishStatusAsync()
     {
-        using var timer=new PeriodicTimer(TimeSpan.FromSeconds(1));try{while(await timer.WaitForNextTickAsync(lifetime.Token))await EmitAsync(new{type="status",busy=activeMutations>0||connectionPending!=0,mount=session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),host=hostControl?.Status,desktopKeyRunning=keyAccess?.Running==true});}catch(OperationCanceledException){}
+        using var timer=new PeriodicTimer(TimeSpan.FromSeconds(1));try{while(await timer.WaitForNextTickAsync(lifetime.Token))await EmitAsync(new{type="status",busy=activeMutations>0||connectionPending!=0,mount=session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),host=hostControl?.Status,desktopKeyRunning=keyAccess?.Running==true,apiMode=preferences.PrefersApiAccess,startedAt=keyAccess?.StartedAt});}catch(OperationCanceledException){}
     }
     private async Task EmitAsync(object value){await writer.WaitAsync();try{await Console.Out.WriteLineAsync(JsonSerializer.Serialize(value,Json));await Console.Out.FlushAsync();}finally{writer.Release();}}
     public void Dispose()

@@ -56,6 +56,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private Relay? relay;
     private static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
     internal bool Running=>relay!=null;
+    internal long? StartedAt=>relay?.StartedAt;
     internal bool ReusesHostControl=>relay?.HostReady!=null;
     internal bool Configured=>File.Exists(StatePath);
     internal async Task<KeyBalance> ReadBalanceAsync(CancellationToken ct)

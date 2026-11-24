@@ -111,8 +111,8 @@ public sealed class MainWindow : Window
                 finally{integrationSampling=false;}
             };
             integrationTimer.Start();
-            mountTray=new MountTray(this,()=>session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),ShowMainWindow,ReconnectMountsFromTrayAsync,()=>{exitRequested=true;Close();},PublishMountStatus,()=>keyDeviceTunnel?.Status(hostControl?.Enabled==true)??hostControl?.Status,()=>claudeBridge?.Status,
-                ()=>keyAccess?.Running==true,()=>KeyAccess.ReadBalanceAsync(lifetime.Token));
+            mountTray=new MountTray(this,()=>session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),ShowMainWindow,ReconnectMountsFromTrayAsync,()=>{exitRequested=true;Close();},PublishMountStatus,TrayStatus,()=>KeyAccess.ListKeysAsync(lifetime.Token),
+                async id=>await KeyAccess.SavedBalanceAsync(id,lifetime.Token),dataDirectory);
             StateChanged+=(_,_)=>{if(WindowState==WindowState.Minimized){ShowInTaskbar=false;Hide();}};
         }
         Closing += async (_, e) =>
@@ -201,6 +201,14 @@ public sealed class MainWindow : Window
                 if(changed)_=services.SendDiagnosticAsync(trace,failure,lifetime.Token);
             }
         }
+    }
+    private object TrayStatus()
+    {
+        var host=keyDeviceTunnel?.Status(hostControl?.Enabled==true)??hostControl?.Status;
+        var c=claudeBridge?.Status;
+        return new {apiMode=preferences.PrefersApiAccess,running=keyAccess?.Running==true,startedAt=keyAccess?.StartedAt,
+            mount=session?.GetMountStatus(),host=new{enabled=host?.Enabled==true},exiting=exitInProgress,
+            codex=IntegrationTrayPresenter.Codex(c?.Running==true,c?.Connected==true,c?.StartedAt,c?.StoppedAt,c?.Usage,c?.UsageSource??"",DateTimeOffset.UtcNow)};
     }
     private void PublishMountStatus(MountStatus status)
     {

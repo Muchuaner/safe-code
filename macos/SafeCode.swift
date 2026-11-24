@@ -62,14 +62,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var readBuffer = Data()
     private var completions: [String:(Result<Any,Error>)->Void] = [:]
     private var statusItem: NSStatusItem!
-    private let balanceText=NSTextField(wrappingLabelWithString:"")
-    private var balanceButton: NSButton!
-    private var keyRunning=false
-    private var popover = NSPopover()
-    private let statusContent = NSStackView()
-    private var stateText: NSTextField!
-    private var durationText: NSTextField!
-    private var values: [NSTextField] = []
+    private let popover = NSPopover()
+    private var trayWeb: WKWebView!
+    private var capturingTray = false
+    private var trayReady = false
+    private var trayState: [String:Any] = ["apiMode":false]
+    private var trayPage: URL { resources.appendingPathComponent("Web/web/tray.html") }
     private var quitting = false, shutdownPending = false, ready = false
     private let notifications = DesktopNotifications()
     private var directory = URL(fileURLWithPath:NSHomeDirectory()).appendingPathComponent("Library/Application Support/Safe Code", isDirectory:true)
@@ -180,29 +178,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             button.action = #selector(toggleStatus)
             button.sendAction(on:[.leftMouseUp, .rightMouseUp])
         }
-        let controller=NSViewController();controller.view=NSView(frame:NSRect(x:0,y:0,width:276,height:196))
-        let main=statusContent;main.orientation = .vertical;main.spacing=10;main.alignment = .leading;main.translatesAutoresizingMaskIntoConstraints=false
-        controller.view.addSubview(main);NSLayoutConstraint.activate([main.leadingAnchor.constraint(equalTo:controller.view.leadingAnchor,constant:16),main.trailingAnchor.constraint(equalTo:controller.view.trailingAnchor,constant:-16),main.topAnchor.constraint(equalTo:controller.view.topAnchor,constant:14)])
-        let heading=NSTextField(labelWithString:"Safe Code");heading.font = .systemFont(ofSize:SafeCodeType.medium,weight:.semibold);main.addArrangedSubview(heading)
-        stateText=NSTextField(labelWithString:"未挂载目录");stateText.font = .systemFont(ofSize:SafeCodeType.small);stateText.textColor = .secondaryLabelColor;main.addArrangedSubview(stateText)
-        durationText=NSTextField(labelWithString:"0 个目录  ·  0:00:00");durationText.font = .monospacedDigitSystemFont(ofSize:SafeCodeType.small,weight:.regular);main.addArrangedSubview(durationText)
-        let metrics=NSStackView();metrics.orientation = .horizontal;metrics.distribution = .fillEqually;metrics.spacing=12
-        for title in ["发送","接收","读写"] {let column=NSStackView();column.orientation = .vertical;column.alignment = .leading;column.spacing=3;let label=NSTextField(labelWithString:title);label.font = .systemFont(ofSize:SafeCodeType.small);label.textColor = .secondaryLabelColor;let value=NSTextField(labelWithString:title=="读写" ? "0 次":"0 B");value.font = .monospacedDigitSystemFont(ofSize:SafeCodeType.small,weight:.medium);values.append(value);column.addArrangedSubview(label);column.addArrangedSubview(value);metrics.addArrangedSubview(column)}
-        main.addArrangedSubview(metrics);metrics.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
-        balanceButton=NSButton(title:"查询 Key 余额",target:self,action:#selector(refreshKeyBalance))
-        balanceButton.bezelStyle = .rounded
-        balanceButton.controlSize = .small
-        balanceButton.font = .systemFont(ofSize:SafeCodeType.small)
-        balanceButton.isHidden=true
-        balanceText.font = .systemFont(ofSize:SafeCodeType.small)
-        balanceText.isHidden=true
-        main.addArrangedSubview(balanceButton)
-        main.addArrangedSubview(balanceText)
-        balanceText.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
-        let buttons=NSStackView();buttons.orientation = .horizontal;buttons.spacing=7;buttons.distribution = .fillEqually
-        for (title,selector) in [("主界面",#selector(showMain)),("重连",#selector(reconnect)),("安全退出",#selector(quit))] {let b=NSButton(title:title,target:self,action:selector);b.bezelStyle = .rounded;b.controlSize = .small;b.font = .systemFont(ofSize:SafeCodeType.small);buttons.addArrangedSubview(b)}
-        main.addArrangedSubview(buttons);buttons.widthAnchor.constraint(equalTo:main.widthAnchor).isActive=true
-        popover.contentViewController=controller;popover.behavior = .transient;updateStatusSize()
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.userContentController.add(self,name:"tray")
+        trayWeb = WKWebView(frame:NSRect(x:0,y:0,width:388,height:220),configuration:config)
+        trayWeb.navigationDelegate = self
+        let controller = NSViewController()
+        controller.view = trayWeb
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        popover.contentSize = trayWeb.frame.size
+        trayWeb.loadFileURL(trayPage,allowingReadAccessTo:trayPage)
+    }
+    private func renderTray(opened:Bool = false) {
+        guard !capturingTray, trayReady, popover.isShown else { return }
+        trayWeb.evaluateJavaScript("window.trayStatus("+json(trayState)+","+(opened ? "true":"false")+")")
+    }
+    private func trayAction(_ args:[String:Any]) {
+        switch args["op"] as? String {
+        case "ready": trayReady = true; renderTray(opened:true)
+        case "size":
+            if let h = args["height"] as? CGFloat, h.isFinite {
+                popover.contentSize = NSSize(width:388,height:min(max(120,h),NSScreen.main?.visibleFrame.height ?? 655))
+            }
+        case "home": showMain()
+        case "close": popover.performClose(nil)
+        case "quit": quit()
+        case "reconnect": reconnect()
+        case "keys","balance":
+            guard !capturingTray, popover.isShown, trayState["apiMode"] as? Bool == true, let generation = args["generation"] as? Int else { return }
+            let listing = args["op"] as? String == "keys"
+            let index = args["index"] as? Int ?? -1
+            let key = args["id"] as? String ?? ""
+            request(listing ? "desktopKey.list":"desktopKey.savedBalance",listing ? [:]:["id":key]) { [weak self] result in
+                guard let self else { return }
+                let callback = listing ? "trayKeys(\(generation),":"trayBalance(\(generation),\(index),"
+                self.trayWeb.evaluateJavaScript(callback+json((try? result.get()) ?? NSNull())+")")
+            }
+        default: break
+        }
     }
     private func startBackend() throws {
         let process=Process();process.executableURL=Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Core/SafeCode.MacBackend")
@@ -270,6 +284,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         (view ?? web).evaluateJavaScript("window.safeCodeNativeResponse?.("+json(response)+")",completionHandler:nil)
     }
     func userContentController(_ userContentController: WKUserContentController,didReceive message:WKScriptMessage) {
+        if message.webView === trayWeb {
+            if message.name == "tray", message.frameInfo.isMainFrame, message.frameInfo.request.url?.standardizedFileURL == trayPage.standardizedFileURL,
+               let args = message.body as? [String:Any] { trayAction(args) }
+            return
+        }
         guard message.frameInfo.isMainFrame,let source=message.frameInfo.request.url,isAppPage(source),let body=message.body as? [String:Any] else{return}
         guard let id=body["id"] as? String,let op=body["op"] as? String,let args=body["args"] as? [String:Any] else{return}
         if let view=message.webView,view===servicesWeb {
@@ -692,37 +711,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     @objc private func closeKeyWindow(){NSApp.keyWindow?.performClose(nil)}
     @objc private func showMain(){popover.performClose(nil);window.orderFront(nil);dialogHost.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)}
-    private func updateStatusSize(){
-        guard let content=popover.contentViewController?.view else{return}
-        content.layoutSubtreeIfNeeded()
-        let minimum: CGFloat = balanceButton.isHidden ? 168 : 232
-        let size=NSSize(width:276,height:max(minimum,ceil(statusContent.fittingSize.height)+28))
-        popover.contentSize=size
-        if !popover.isShown {content.setFrameSize(size)}
-    }
     @objc private func toggleStatus(){
         guard let button=statusItem.button else{return}
-        if popover.isShown{popover.performClose(nil)}else{
+        if popover.isShown { popover.performClose(nil) }
+        else {
             popover.show(relativeTo:button.bounds,of:button,preferredEdge:.minY)
-            if keyRunning{refreshKeyBalance()}
-        }
-    }
-    @objc private func refreshKeyBalance(){
-        guard keyRunning,balanceButton.isEnabled else{return}
-        balanceButton.isEnabled=false
-        balanceText.stringValue="正在查询余额…"
-        updateStatusSize()
-        request("desktopKey.balance"){[weak self] result in
-            guard let self=self else{return}
-            self.balanceButton.isEnabled=true
-            guard self.keyRunning else{return}
-            switch result {
-            case .success(let result):
-                let balance=result as? [String:Any]
-                self.balanceText.stringValue=[balance?["remaining"] as? String,balance?["used"] as? String].compactMap{$0}.joined(separator:" · ")
-            case .failure(let error):self.balanceText.stringValue=error.localizedDescription
-            }
-            self.updateStatusSize()
+            renderTray(opened:true)
         }
     }
     @objc private func reconnect(){request("mount.reconnect"){[weak self] result in if case .failure(let error)=result{self?.fail(error.localizedDescription)}}}
@@ -734,27 +728,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         request("app.shutdown"){[weak self] result in guard let self=self else{return};self.shutdownPending=false;switch result{case .success:self.quitting=true;self.stdin?.closeFile();self.backend?.terminate();NSApp.terminate(nil);case .failure(let error):self.showMain();self.fail("尚未安全退出："+error.localizedDescription)}}
     }
     private func updateStatus(_ message:[String:Any]) {
-        let mount=message["mount"] as? [String:Any] ?? [:];let host=message["host"] as? [String:Any] ?? [:]
-        let count=mount["count"] as? Int ?? 0
-        let running=message["desktopKeyRunning"] as? Bool == true
-        if running != keyRunning {
-            keyRunning=running
-            balanceButton.isHidden = !running
-            balanceText.isHidden = !running
-            balanceText.stringValue=""
-            updateStatusSize()
-            if running && popover.isShown {refreshKeyBalance()}
-        }
-        stateText.stringValue=(host["enabled"] as? Bool ?? false) ? "本机控制已启用":running ? "API Key 接入运行中":mount["message"] as? String ?? "未挂载目录"
-        let seconds=Int((mount["durationSeconds"] as? Double ?? 0));durationText.stringValue="\(count) 个目录  ·  \(seconds/3600):\(String(format:"%02d",seconds/60%60)):\(String(format:"%02d",seconds%60))"
-        values[0].stringValue=bytes(mount["bytesToServer"] as? Double ?? 0);values[1].stringValue=bytes(mount["bytesToLocal"] as? Double ?? 0);values[2].stringValue="\(mount["completedFiles"] as? Int ?? 0) 次"
-        statusItem.button?.toolTip=running ? "Safe Code · API Key 接入":"Safe Code · "+stateText.stringValue
+        let mount=message["mount"] as? [String:Any] ?? [:]
+        let host=message["host"] as? [String:Any] ?? [:]
+        let apiMode=message["apiMode"] as? Bool ?? false
+        trayState=["mount":mount,"host":["enabled":host["enabled"] as? Bool ?? false],
+                  "running":message["desktopKeyRunning"] as? Bool ?? false,"apiMode":apiMode,
+                  "startedAt":message["startedAt"] ?? NSNull(),"exiting":shutdownPending]
+        statusItem.button?.toolTip=apiMode ? "Safe Code · API Key 接入":"Safe Code · "+(mount["message"] as? String ?? "未挂载目录")
+        renderTray()
         web.evaluateJavaScript("window.safeCodeMountStatus?.("+json(mount)+")",completionHandler:nil)
     }
-    private func bytes(_ n:Double)->String {if n<1024{return "\(Int(n)) B"};if n<1048576{return String(format:"%.1f KB",n/1024)};if n<1073741824{return String(format:"%.1f MB",n/1048576)};return String(format:"%.1f GB",n/1073741824)}
     private func fail(_ message:String){if let smoke=smokeOutput {try? Data(json(["success":false,"error":message]).utf8).write(to:smoke);return};let alert=NSAlert();alert.messageText="Safe Code";alert.informativeText=message;alert.alertStyle = .warning;alert.runModal()}
     func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         guard let url=action.request.url else{decisionHandler(.cancel);return}
+        if webView === trayWeb {
+            decisionHandler(url.standardizedFileURL == trayPage.standardizedFileURL ? .allow:.cancel)
+            return
+        }
         if isAppPage(url) {
             decisionHandler(.allow)
         } else {
@@ -787,24 +777,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             do {try data.write(to:target);self.answer(replyID,true)}
             catch {self.answer(replyID,error:error.localizedDescription)}
         }
-        if name.hasPrefix("status"),let content=popover.contentViewController?.view {
-            if name=="status-key" {
-                balanceButton.isHidden=false
-                balanceText.isHidden=false
-                balanceText.stringValue="余额 $4.98 · 已用 $0.02"
-                updateStatusSize()
-            }
-            defer {
-                if name=="status-key" {
-                    balanceButton.isHidden=true
-                    balanceText.isHidden=true
-                    updateStatusSize()
+        if name.hasPrefix("status") {
+            if !popover.isShown { toggleStatus() }
+            capturingTray = true
+            let fixture=output.deletingLastPathComponent().appendingPathComponent(name+".json")
+            let sample=(try? Data(contentsOf:fixture)).flatMap { try? JSONSerialization.jsonObject(with:$0) } as? [String:Any]
+            let script = """
+                window.trayStatus(\(json(sample?["state"] ?? trayState)),true);
+                if(apiMode){
+                    window.trayKeys(generation,\(json(sample?["keys"] ?? [])));
+                    \(json(sample?["balances"] ?? [])).forEach((b,i)=>window.trayBalance(generation,i,b));
+                }
+                """
+            trayWeb.evaluateJavaScript(script){[weak self] _,err in
+                guard let self else {return}
+                if let err {self.capturingTray=false;self.answer(replyID,error:err.localizedDescription);return}
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.15) {
+                    self.trayWeb.takeSnapshot(with:nil){image,_ in
+                        self.popover.performClose(nil)
+                        self.capturingTray=false
+                        save(image?.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+                    }
                 }
             }
-            content.layoutSubtreeIfNeeded()
-            let bitmap=content.bitmapImageRepForCachingDisplay(in:content.bounds)
-            if let bitmap {content.cacheDisplay(in:content.bounds,to:bitmap)}
-            save(bitmap)
         } else if name.hasPrefix("gateway"),let window=gatewayWindow,let content=window.contentView {
             let original = window.frame
             defer {window.setFrame(original,display:true)}

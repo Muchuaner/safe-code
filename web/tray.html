@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Safe Code 状态</title>
+<style>
+*{box-sizing:border-box} :root{color-scheme:light;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;color:#20382d;background:#fafbf9;font-variant-numeric:tabular-nums}
+body{margin:0} [hidden]{display:none!important} main{padding:15px 17px 11px} header,.section-title,.key,.line,footer{display:flex;align-items:center;justify-content:space-between;gap:8px}
+header{margin-bottom:12px} h1{margin:0;font-size:18px;letter-spacing:-.5px} .mode{font-size:11px;font-weight:600;color:#416553;background:#e8efe9;padding:3px 8px;border-radius:10px}
+.hero{background:#234b3b;color:white;border-radius:9px;padding:13px 15px 10px} .numbers{display:grid;grid-template-columns:1.15fr 1fr;gap:13px}.numbers span{display:block;color:#d0e0d5;font-size:11px}.numbers strong{display:block;font-size:23px;font-weight:600;letter-spacing:-.5px;margin-top:3px;overflow-wrap:anywhere}.line{border-top:1px solid #ffffff30;margin-top:10px;padding-top:8px;font-size:11px;color:#dce9df}.line b{font-weight:500;color:#fff}
+section{margin-top:13px}.section-title{margin-bottom:4px}.section-title h2{margin:0;font-size:13px}.meta,th{font-size:11px;color:#63776a;font-weight:500}.scroll{max-height:114px;overflow:auto;scrollbar-width:thin}.key{padding:6px 0;border-bottom:1px solid #e3e9e3}.key:last-child{border:0}.key-name{display:flex;align-items:center;gap:7px;min-width:0}.name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.active{font-size:10px;color:#2f694c;white-space:nowrap;background:#e7f0e8;border-radius:4px;padding:1px 5px}.amount{font-weight:600;white-space:nowrap}
+table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}th,td{text-align:right;padding:5px 0 5px 6px}th{position:sticky;top:0;background:#fafbf9}th:first-child,td:first-child{text-align:left;width:47%;padding-left:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}td{border-top:1px solid #e3e9e3}th:last-child{width:25%}.hint{color:#63776a;font-size:12px;padding:6px 0;margin:0}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:9px 0 0}.metrics b{display:block;font-size:17px;margin-top:4px}.metrics div+div{border-left:1px solid #dce5df;padding-left:14px}
+footer{margin-top:13px;padding-top:10px;border-top:1px solid #dce5df;justify-content:flex-start}button{font:inherit;font-size:12px;font-weight:550;color:#365240;background:#edf2ed;border:0;border-radius:6px;padding:6px 12px;cursor:pointer}button:hover{background:#dfe9e0}button:focus-visible{outline:2px solid #44855e;outline-offset:1px}.primary{background:#286248;color:#fff}.primary:hover{background:#20553e}button:disabled{opacity:.56;cursor:default}.quiet{margin-left:auto;background:transparent;color:#67746c}.details{max-height:265px;overflow:auto;scrollbar-width:thin}
+</style></head><body><main>
+<header><h1>Safe Code</h1><span class="mode" id="mode">服务器模式</span></header>
+<div class="hero"><div class="numbers"><div><span id="label1"></span><strong id="value1">—</strong></div><div><span id="label2"></span><strong id="value2">—</strong></div></div><div class="line"><span id="state"></span><b id="elapsed"></b></div></div>
+<div class="details"><div id="api" hidden>
+<section><div class="section-title"><h2>已保存的 Key</h2><span class="meta" id="count"></span></div><div id="keys" class="scroll"></div></section>
+<section><div class="section-title"><h2>模型用量</h2><span class="meta">当前 Key 累计</span></div><div class="scroll"><table id="table" hidden><thead><tr><th>模型</th><th>Token</th><th>费用 · USD</th></tr></thead><tbody id="models"></tbody></table><p class="hint" id="note"></p></div></section>
+</div><div id="server"><section><div class="section-title"><h2>传输统计</h2></div><div class="metrics"><div><span class="meta">发送</span><b id="sent">0 B</b></div><div><span class="meta">接收</span><b id="received">0 B</b></div><div><span class="meta">文件读写</span><b id="files">0 次</b></div></div></section><section id="codex" hidden><div class="section-title"><h2>Codex 接入</h2><span id="codexState"></span></div><p class="hint" id="codexDetail"></p></section></div></div>
+<footer><button class="primary" id="home">主界面</button><button id="secondary">重连</button><button class="quiet" id="quit">安全退出</button></footer>
+</main><script>
+'use strict';
+const $=id=>document.getElementById(id);
+const set=(id,value)=>{if($(id).textContent!==value)$(id).textContent=value};
+const send=(op,args={})=>{const msg={op,...args};if(window.webkit?.messageHandlers.tray)webkit.messageHandlers.tray.postMessage(msg);else window.chrome?.webview?.postMessage(msg)};
+const fmt=new Intl.NumberFormat('zh-CN');
+const usd=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:4});
+const money=n=>n>0&&n<100000?'< $0.0001':usd.format(n/1e9);
+const remaining=b=>b.remainingNanos===null?'不限额':money(b.remainingNanos);
+const duration=s=>[Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(n=>String(n).padStart(2,'0')).join(':');
+const bytes=n=>{for(const [unit,size] of [['GB',1073741824],['MB',1048576],['KB',1024]])if(n>=size)return (n/size).toFixed(1)+' '+unit;return n+' B'};
+let generation=0, apiMode=null, start=null, loading=false;
+let entries=[], outstanding=0;
+function node(tag,text,cls){const el=document.createElement(tag);el.textContent=text;if(cls)el.className=cls;return el}
+function hint(id,msg){$(id).replaceChildren(node('p',msg,'hint'))}
+function modelUsage(balance){
+ const rows=balance?.models??[];$('table').hidden=!rows.length;$('note').hidden=!!rows.length;
+ set('note',balance?(balance.models?'暂无模型用量':'网关未提供模型明细'):'暂时无法查询用量');
+ $('models').replaceChildren(...rows.map(m=>{
+  const tr=document.createElement('tr'), name=node('td',m.model);name.title=m.model;
+  const fee=m.unpricedTokens?(m.costNanos?money(m.costNanos)+' + 未计价':'未计价'):money(m.costNanos);
+  tr.append(name,node('td',fmt.format(m.input+m.output+m.cacheRead+m.cacheWrite)),node('td',fee));return tr;
+ }));
+}
+function refresh(){
+ ++generation; entries=[];outstanding=0;loading=true;$('secondary').disabled=true;
+ set('value1','—');set('value2','—');set('count','');hint('keys','正在读取…');$('table').hidden=true;$('note').hidden=false;set('note','正在读取…');
+ send('keys',{generation});
+}
+function finished(){loading=false;$('secondary').disabled=false}
+window.trayKeys=(g,list)=>{
+ if(g!==generation||!apiMode)return;
+ if(!Array.isArray(list)){hint('keys','暂时无法读取 Key');modelUsage(null);finished();return}
+ entries=list;outstanding=list.length;set('count',list.length+' 把');$('keys').replaceChildren();
+ if(!list.length){hint('keys','尚未保存 Key');finished()}
+ if(!list.some(e=>e.current)){$('note').hidden=false;set('note','尚未选择当前 Key')}
+ list.forEach((e,i)=>{
+  const row=node('div','','key'), name=node('div','','key-name'),label=node('span',e.name,'name');label.title=e.name;name.append(label);
+  if(e.current)name.append(node('span','当前','active'));
+  row.append(name,node('span','查询中…','amount'));$('keys').append(row);send('balance',{generation:g,index:i,id:e.id});
+ });
+};
+window.trayBalance=(g,i,b)=>{
+ if(g!==generation||!apiMode||!entries[i])return;
+ $('keys').children[i].lastElementChild.textContent=b?remaining(b):'暂不可用';
+ if(entries[i].current){set('value1',b?remaining(b):'—');set('value2',b?money(b.usedNanos):'—');modelUsage(b)}
+ if(--outstanding===0)finished();
+};
+window.trayStatus=(data,opened=false)=>{
+ const api=!!data.apiMode, changed=apiMode!==api||start!==data.startedAt;
+ apiMode=api;start=data.startedAt;
+ $('api').hidden=!api;$('server').hidden=api;set('mode',api?'API Key 接入':'服务器模式');set('secondary',api?'刷新用量':'重连');
+ if(api){
+  set('label1','当前 Key 余额');set('label2','累计已用');set('state',data.running?'已接入':'待接入');
+  set('elapsed',start?'本次接入  '+duration(Math.max(0,Math.floor((Date.now()-start)/1000))):'本次接入  —');
+  if(changed||opened)refresh();
+ }else{
+  if(changed){generation++;finished()}
+  const m=data.mount??{};set('label1','挂载目录');set('value1',(m.count??0)+' 个');set('label2','挂载时长');set('value2',duration(Math.floor(m.durationSeconds??0)));
+  set('state',m.message||'未挂载目录');set('elapsed',data.host?.enabled?'本机控制已启用':m.activeTransfers?'传输中 '+m.activeTransfers+' 项':'');
+  set('sent',bytes(m.bytesToServer??0));set('received',bytes(m.bytesToLocal??0));set('files',fmt.format(m.completedFiles??0)+' 次');
+  const c=data.codex;$('codex').hidden=!c?.visible;if(c?.visible){set('codexState',c.state);set('codexDetail',c.duration+' · '+c.detail)}
+ }
+ $('quit').disabled=!!data.exiting;
+};
+$('home').onclick=()=>send('home');$('quit').onclick=()=>send('quit');$('secondary').onclick=()=>apiMode?refresh():send('reconnect');
+document.addEventListener('keydown',e=>{if(e.key==='Escape')send('close')});
+new ResizeObserver(()=>send('size',{height:Math.ceil(document.querySelector('main').getBoundingClientRect().height)})).observe(document.querySelector('main'));
+send('ready');
+</script></body></html>

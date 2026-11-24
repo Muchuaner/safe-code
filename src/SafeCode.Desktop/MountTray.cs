@@ -1,8 +1,10 @@
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 using SafeCode.Core;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Forms=System.Windows.Forms;
 
@@ -10,194 +12,95 @@ namespace SafeCode.Desktop;
 
 internal sealed class MountTray : IDisposable
 {
-    private const double SmallText=12, MediumText=14, LargeText=22;
     private readonly Forms.NotifyIcon icon=new();
     private readonly Window panel;
-    private readonly Button exitButton;
-    private readonly TextBlock status=new(),summary=new(),duration=new(),sent=new(),received=new(),files=new();
-    private readonly TextBlock codexState=new(),codexDuration=new(),codexDetail=new();
-    private readonly Border codexPanel;
-    private readonly Button keyBalance=new(){Content="查询 Key 余额",MinHeight=30,FontSize=MediumText,Margin=new Thickness(0,8,0,0),Visibility=Visibility.Collapsed};
-    private readonly TextBlock keyBalanceText=new(){TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,4,0,0),
-        FontSize=SmallText,Visibility=Visibility.Collapsed};
+    private readonly WebView2 view=new();
+    private readonly Uri page=new(Path.Combine(AppContext.BaseDirectory,"Web","web","tray.html"));
+    private readonly System.Drawing.Icon appIcon;
     private readonly DispatcherTimer timer=new(){Interval=TimeSpan.FromSeconds(1)};
     private readonly DispatcherTimer dismissTimer=new(){Interval=TimeSpan.FromMilliseconds(100)};
-    private bool dismissAfterMouseRelease;
-    private bool disposed;
-    private readonly Func<MountStatus> read;
     private readonly Action<MountStatus> publish;
-    private readonly Func<HostControlStatus?>? readHost;
-    private readonly Func<ClaudeCodexStatus?>? readCodex;
-    private readonly Func<bool> keyActive;
-    private readonly Func<Task<DesktopKeyAccess.KeyBalance>> readKeyBalance;
-    private readonly System.Drawing.Icon appIcon;
-    public MountTray(Window owner,Func<MountStatus> read,Action show,Func<Task> retry,Action exit,Action<MountStatus> publish,
-        Func<HostControlStatus?> readHost,Func<ClaudeCodexStatus?> readCodex,
-        Func<bool> keyActive,Func<Task<DesktopKeyAccess.KeyBalance>> readKeyBalance)
+    private readonly Func<MountStatus> read;
+    private readonly Func<object> state;
+    private readonly Func<Task<object>> keys;
+    private readonly Func<string,Task<object>> balance;
+    private readonly Action show,exit;
+    private readonly Func<Task> retry;
+    private bool exiting,ready,disposed,released;
+
+    public MountTray(Window owner,Func<MountStatus> read,Action show,Func<Task> retry,Action exit,
+        Action<MountStatus> publish,Func<object> state,Func<Task<object>> keys,Func<string,Task<object>> balance,string dataDirectory)
     {
-        this.read=read;this.publish=publish;this.readHost=readHost;this.readCodex=readCodex;
-        this.keyActive=keyActive;this.readKeyBalance=readKeyBalance;
+        this.read=read;this.publish=publish;this.state=state;this.show=show;this.retry=retry;this.exit=exit;
+        this.keys=keys;this.balance=balance;
         string path=Path.Combine(AppContext.BaseDirectory,"Icons","safe-code-shortcut.ico");
         appIcon=File.Exists(path)?new System.Drawing.Icon(path):new System.Drawing.Icon(System.Drawing.SystemIcons.Shield,32,32);
-        icon.Icon=appIcon;icon.Text="Safe Code · 挂载守护";icon.Visible=true;
-        var content=new StackPanel{Margin=new Thickness(14,12,14,13)};
-        var header=new Grid{Margin=new Thickness(0,0,0,12)};
-        header.ColumnDefinitions.Add(new ColumnDefinition());header.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        header.Children.Add(new TextBlock{Text="Safe Code",FontSize=LargeText,FontWeight=FontWeights.SemiBold,Foreground=Brush("#2f7158"),VerticalAlignment=VerticalAlignment.Center});
-        status.FontSize=SmallText;status.VerticalAlignment=VerticalAlignment.Center;status.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(status,1);header.Children.Add(status);content.Children.Add(header);
-        var overview=new Grid{Margin=new Thickness(0,0,0,11)};
-        overview.ColumnDefinitions.Add(new ColumnDefinition());overview.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        summary.FontSize=SmallText;summary.Foreground=Brush("#536359");overview.Children.Add(summary);
-        duration.FontSize=SmallText;duration.Foreground=Brush("#536359");duration.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(duration,1);overview.Children.Add(duration);content.Children.Add(overview);
-        var metrics=new Grid{Margin=new Thickness(0)};
-        for(int i=0;i<3;i++)metrics.ColumnDefinitions.Add(new ColumnDefinition());
-        var labels=new[]{"发送","接收","读写"};var values=new[]{sent,received,files};
-        for(int i=0;i<3;i++)
+        icon.Icon=appIcon;icon.Text="Safe Code";icon.Visible=true;
+        view.CreationProperties=new CoreWebView2CreationProperties{UserDataFolder=Path.Combine(dataDirectory,"WebView")};
+        view.DefaultBackgroundColor=System.Drawing.Color.FromArgb(250,251,249);
+        view.CoreWebView2InitializationCompleted+=(_,e)=>
         {
-            var cell=new StackPanel{Margin=new Thickness(0,9,0,9)};
-            cell.Children.Add(new TextBlock{Text=labels[i],FontSize=SmallText,Foreground=Brush("#607367"),HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,0,0,4)});
-            values[i].FontSize=MediumText;values[i].FontWeight=FontWeights.SemiBold;values[i].Foreground=Brush("#354c3e");values[i].HorizontalAlignment=HorizontalAlignment.Center;
-            values[i].TextTrimming=TextTrimming.CharacterEllipsis;values[i].MaxWidth=68;cell.Children.Add(values[i]);
-            var border=new Border{Child=cell,BorderBrush=Brush("#e3eae3"),BorderThickness=new Thickness(i==0?0:1,0,0,0)};Grid.SetColumn(border,i);metrics.Children.Add(border);
-        }
-        content.Children.Add(new Border{Child=metrics,Background=Brush("#f5f8f4"),CornerRadius=new CornerRadius(5)});
-        codexPanel=BuildIntegrationPanel("Codex 接入",codexState,codexDuration,codexDetail);
-        content.Children.Add(codexPanel);
-        StyleAction(keyBalance,false);
-        keyBalance.Click+=async (_,_)=>await RefreshKeyBalanceAsync();
-        content.Children.Add(keyBalance);
-        content.Children.Add(keyBalanceText);
-        var actions=new Grid{Margin=new Thickness(0,11,0,0)};
-        for(int i=0;i<3;i++)actions.ColumnDefinitions.Add(new ColumnDefinition());
-        AddButton(actions,0,"主界面","显示主界面",()=>{panel!.Hide();show();},true);
-        AddButton(actions,1,"重连","立即尝试恢复挂载连接",async()=>{await retry();Update();},false);
-        exitButton=AddButton(actions,2,"安全退出","同步文件并卸载目录后退出",exit,false);
-        content.Children.Add(actions);
-        panel=new Window{Width=292,UseLayoutRounding=true,SnapsToDevicePixels=true,SizeToContent=SizeToContent.Height,WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,ShowInTaskbar=false,Topmost=true,AllowsTransparency=true,Background=Brushes.Transparent,Content=new Border{Background=Brushes.White,BorderBrush=Brush("#dfe7df"),BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(8),Child=content},FontFamily=new FontFamily("Segoe UI"),FontSize=MediumText};
-        TextOptions.SetTextFormattingMode(panel,TextFormattingMode.Display);
-        // The taskbar deactivates the panel before NotifyIcon receives MouseUp.
-        // Let that click finish so clicking the icon can cancel dismissal.
-        panel.Deactivated+=(_,_)=>{if(disposed)return;dismissAfterMouseRelease=false;dismissTimer.Start();};
+            if(!e.IsSuccess)return;
+            var core=view.CoreWebView2;
+            core.Settings.IsStatusBarEnabled=false;core.Settings.AreDefaultContextMenusEnabled=false;
+            core.Settings.AreDevToolsEnabled=false;core.Settings.IsZoomControlEnabled=false;
+            core.NavigationStarting+=(_,n)=>n.Cancel=!Uri.TryCreate(n.Uri,UriKind.Absolute,out var uri)||uri!=page;
+            core.NewWindowRequested+=(_,n)=>n.Handled=true;
+            core.WebMessageReceived+=OnMessage;
+        };
+        view.Source=page;
+        panel=new Window{Width=388,Height=220,WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,
+            ShowInTaskbar=false,Topmost=true,Content=view,UseLayoutRounding=true};
+        panel.Deactivated+=(_,_)=>{if(!disposed){released=false;dismissTimer.Start();}};
         dismissTimer.Tick+=(_,_)=>
         {
             if(panel.IsActive||!panel.IsVisible){dismissTimer.Stop();return;}
-            if(Forms.Control.MouseButtons!=Forms.MouseButtons.None){dismissAfterMouseRelease=false;return;}
-            if(!dismissAfterMouseRelease){dismissAfterMouseRelease=true;return;}
+            if(Forms.Control.MouseButtons!=Forms.MouseButtons.None){released=false;return;}
+            if(!released){released=true;return;}
             dismissTimer.Stop();panel.Hide();
         };
-        panel.PreviewKeyDown+=(_,e)=>{if(e.Key==System.Windows.Input.Key.Escape){panel.Hide();e.Handled=true;}};
+        panel.PreviewKeyDown+=(_,e)=>{if(e.Key==Key.Escape)panel.Hide();};
         icon.MouseUp+=(_,e)=>owner.Dispatcher.InvokeAsync(()=>{if(e.Button is Forms.MouseButtons.Left or Forms.MouseButtons.Right)Open();});
         icon.DoubleClick+=(_,_)=>owner.Dispatcher.InvokeAsync(show);
-        timer.Tick+=(_,_)=>Update();timer.Start();Update();
-    }
-    private static SolidColorBrush Brush(string color)=>new((Color)ColorConverter.ConvertFromString(color));
-    private static Border BuildIntegrationPanel(string title,TextBlock state,TextBlock elapsed,TextBlock detail)
-    {
-        var stack=new StackPanel();
-        var header=new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition());header.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        header.Children.Add(new TextBlock{Text=title,FontSize=SmallText,FontWeight=FontWeights.SemiBold,Foreground=Brush("#2f7158")});
-        state.FontSize=SmallText;state.Foreground=Brush("#627368");state.HorizontalAlignment=HorizontalAlignment.Right;Grid.SetColumn(state,1);header.Children.Add(state);
-        elapsed.FontSize=SmallText;elapsed.Foreground=Brush("#536359");elapsed.Margin=new Thickness(0,4,0,0);elapsed.TextTrimming=TextTrimming.CharacterEllipsis;
-        detail.FontSize=SmallText;detail.Foreground=Brush("#607367");detail.Margin=new Thickness(0,2,0,0);detail.TextTrimming=TextTrimming.CharacterEllipsis;
-        stack.Children.Add(header);stack.Children.Add(elapsed);stack.Children.Add(detail);
-        return new Border{Child=stack,Background=Brush("#f7faf6"),BorderBrush=Brush("#e3eae3"),BorderThickness=new Thickness(0,0,0,0),CornerRadius=new CornerRadius(5),Padding=new Thickness(8,6,8,6),Margin=new Thickness(0,7,0,0),Visibility=Visibility.Collapsed};
-    }
-    private static Button AddButton(Grid panel,int column,string text,string hint,Action clicked,bool primary)
-    {
-        var button=new Button{Content=text,ToolTip=hint,Height=28,Margin=new Thickness(column==0?0:5,0,0,0),FontSize=SmallText};
-        StyleAction(button,primary);
-        button.Click+=(_,_)=>clicked();Grid.SetColumn(button,column);panel.Children.Add(button);
-        return button;
+        timer.Tick+=(_,_)=>{var m=read();publish(m);if(panel.IsVisible)Render();};
+        timer.Start();
     }
 
-    private static void StyleAction(Button button,bool primary)
+    private Task Script(string text)=>!disposed&&ready?view.ExecuteScriptAsync(text):Task.CompletedTask;
+    private void Render(bool opened=false)=>_=Script("window.trayStatus("+JsonSerializer.Serialize(state(),JsonDefaults.Options)+","+(opened?"true":"false")+")");
+    private async void OnMessage(object? sender,CoreWebView2WebMessageReceivedEventArgs e)
     {
-        button.Padding=new Thickness(2,0,2,0);
-        button.Background=Brush(primary?"#347457":"#f0f4ef");
-        button.Foreground=primary?Brushes.White:Brush("#46634f");
-        button.BorderThickness=new Thickness(0);
-        button.Cursor=System.Windows.Input.Cursors.Hand;
-        var border=new FrameworkElementFactory(typeof(Border));border.SetValue(Border.BackgroundProperty,new TemplateBindingExtension(Control.BackgroundProperty));border.SetValue(Border.CornerRadiusProperty,new CornerRadius(4));border.SetValue(Border.BorderBrushProperty,Brush("#347457"));border.SetValue(Border.BorderThicknessProperty,new Thickness(0));border.Name="surface";
-        var presenter=new FrameworkElementFactory(typeof(ContentPresenter));presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Center);presenter.SetValue(FrameworkElement.VerticalAlignmentProperty,VerticalAlignment.Center);border.AppendChild(presenter);
-        var template=new ControlTemplate(typeof(Button)){VisualTree=border};
-        var hover=new Trigger{Property=UIElement.IsMouseOverProperty,Value=true};hover.Setters.Add(new Setter(Control.BackgroundProperty,Brush(primary?"#285d46":"#e3ebe1")));template.Triggers.Add(hover);
-        var focus=new Trigger{Property=UIElement.IsKeyboardFocusedProperty,Value=true};focus.Setters.Add(new Setter(Border.BorderThicknessProperty,new Thickness(1),"surface"));template.Triggers.Add(focus);
-        var pressed=new Trigger{Property=Button.IsPressedProperty,Value=true};pressed.Setters.Add(new Setter(UIElement.OpacityProperty,0.8));template.Triggers.Add(pressed);
-        var disabled=new Trigger{Property=UIElement.IsEnabledProperty,Value=false};disabled.Setters.Add(new Setter(UIElement.OpacityProperty,0.55));template.Triggers.Add(disabled);
-        button.Template=template;
-    }
-    public void SetExiting(bool exiting)
-    {
-        if(disposed)return;
-        exitButton.Content=exiting?"正在退出…":"安全退出";
-        exitButton.IsEnabled=!exiting;
-    }
-    public void Open()
-    {
-        if(disposed)return;
-        dismissTimer.Stop();
-        if(panel.IsVisible){panel.Activate();return;}
-        if(keyActive())
+        if(disposed||!Uri.TryCreate(e.Source,UriKind.Absolute,out var origin)||origin!=page)return;
+        using var message=JsonDocument.Parse(e.WebMessageAsJson);
+        var data=message.RootElement;
+        switch(data.GetProperty("op").GetString())
         {
-            keyBalanceText.Text="正在查询余额…";
-            keyBalanceText.Visibility=Visibility.Visible;
-        }
-        Update();panel.UpdateLayout();panel.Show();var area=SystemParameters.WorkArea;panel.Left=Math.Max(area.Left,area.Right-panel.ActualWidth-12);panel.Top=Math.Max(area.Top,area.Bottom-panel.ActualHeight-12);panel.Activate();
-        if(keyActive())_=RefreshKeyBalanceAsync();
-    }
-    private async Task RefreshKeyBalanceAsync()
-    {
-        if(disposed||!keyActive()||!keyBalance.IsEnabled)return;
-        keyBalance.IsEnabled=false;
-        keyBalanceText.Text="正在查询余额…";
-        keyBalanceText.Visibility=Visibility.Visible;
-        try
-        {
-            var balance=await readKeyBalance();
-            if(!disposed&&keyActive())keyBalanceText.Text=balance.Remaining+" · "+balance.Used;
-        }
-        catch(Exception error)
-        {
-            if(!disposed&&keyActive())keyBalanceText.Text=ConnectionErrors.DescribeOperation(error);
-        }
-        finally
-        {
-            if(!disposed)keyBalance.IsEnabled=true;
+            case "ready":ready=true;Render(true);break;
+            case "home":panel.Hide();show();break;
+            case "close":panel.Hide();break;
+            case "quit":if(!exiting)exit();break;
+            case "reconnect":await retry();break;
+            case "size":panel.Height=Math.Clamp(data.GetProperty("height").GetInt32(),120,SystemParameters.WorkArea.Height);Position();break;
+            case "keys":
+            case "balance":
+                bool listing=data.GetProperty("op").GetString()=="keys";
+                int generation=data.GetProperty("generation").GetInt32();
+                object? result;
+                try{result=listing?await keys():await balance(data.GetProperty("id").GetString()!);}
+                catch(Exception){result=null;}
+                string call=listing?$"trayKeys({generation},":$"trayBalance({generation},{data.GetProperty("index").GetInt32()},";
+                if(!disposed)await Script(call+JsonSerializer.Serialize(result,JsonDefaults.Options)+")");
+                break;
         }
     }
+    private void Position()
+    {
+        var area=SystemParameters.WorkArea;
+        panel.Left=Math.Max(area.Left,area.Right-panel.Width-12);
+        panel.Top=Math.Max(area.Top,area.Bottom-panel.Height-12);
+    }
+    public void SetExiting(bool value){exiting=value;if(panel.IsVisible)_=Script("document.getElementById('quit').disabled="+(exiting?"true":"false"));}
+    public void Open(){if(disposed)return;dismissTimer.Stop();Position();panel.Show();panel.Activate();Render(true);}
     public void NotifyHidden()=>icon.ShowBalloonTip(2000,"Safe Code","已转入托盘，后台任务继续运行。",Forms.ToolTipIcon.Info);
-    private void Update()
-    {
-        var value=read();publish(value);
-        status.Text=value.State=="connected"?"守护中":value.State=="reconnecting"?"重连中":value.State=="attention"?"需处理":"未挂载";
-        status.ToolTip=value.Message;status.Foreground=Brush(value.State=="connected"?"#2f7158":value.State=="idle"?"#718075":"#a57430");
-        summary.Text="目录  "+value.Count;var elapsed=TimeSpan.FromSeconds(value.DurationSeconds);duration.Text="时长  "+(int)elapsed.TotalHours+elapsed.ToString(@"\:mm\:ss");
-        sent.Text=FormatBytes(value.BytesToServer);received.Text=FormatBytes(value.BytesToLocal);files.Text=value.CompletedFiles.ToString("N0")+" 次";
-        sent.ToolTip="发送到服务器："+value.BytesToServer.ToString("N0")+" 字节";received.ToolTip="接收到本机："+value.BytesToLocal.ToString("N0")+" 字节";files.ToolTip="完成文件读写："+value.CompletedFiles.ToString("N0")+" 次"+(value.ActiveTransfers>0?"；正在传输 "+value.ActiveTransfers+" 个":"");
-        var host=readHost?.Invoke();
-        var codex=readCodex?.Invoke();
-        bool codexActive=codex?.Running==true,desktopActive=keyActive();
-        UpdateCodex(codex);
-        var usingKey=keyActive();
-        keyBalance.Visibility=usingKey?Visibility.Visible:Visibility.Collapsed;
-        if(!usingKey)keyBalanceText.Visibility=Visibility.Collapsed;
-        string tooltip=value.Message;
-        if(host?.Enabled==true){status.Text=host.State=="connected"?"本机控制开":host.State=="attention"?"本机需处理":"本机重连中";tooltip+="\n"+host.Message;status.Foreground=Brush(host.State=="connected"?"#2f7158":"#a57430");}
-        else if(codexActive||desktopActive){status.Text="接入运行中";status.Foreground=Brush("#2f7158");}
-        if(codexActive)tooltip+="\nCodex 接入：通道"+(codex!.Connected?"已连接":"重连中")+"；模型调用需由 Codex 发起";
-        status.ToolTip=tooltip;
-        string iconText=usingKey?"Safe Code · API Key 接入": "Safe Code · "+value.Count+" 个目录 · "+(value.State=="connected"?"守护中":value.State=="reconnecting"?"重连中":value.State=="attention"?"需要处理":"未挂载")+(host?.Enabled==true?" · 本机控制已启用":"")+(codexActive||desktopActive?" · 接入运行中":"");
-        icon.Text=iconText.Length>63?iconText[..63]:iconText;
-    }
-    private void UpdateCodex(ClaudeCodexStatus? codex)
-    {
-        var section=IntegrationTrayPresenter.Codex(codex?.Running==true,codex?.Connected==true,codex?.StartedAt,codex?.StoppedAt,codex?.Usage,codex?.UsageSource??"",DateTimeOffset.UtcNow);
-        codexPanel.Visibility=section.Visible?Visibility.Visible:Visibility.Collapsed;
-        if(!section.Visible)return;
-        codexState.Text=section.State;codexState.Foreground=Brush(codexState.Text=="通道已连接"?"#2f7158":"#a57430");
-        codexDuration.Text=section.Duration;codexDetail.Text=section.Detail;codexDetail.ToolTip=section.Tooltip;
-    }
-    private static string FormatBytes(long bytes)=>bytes>=1024L*1024*1024?(bytes/(1024d*1024*1024)).ToString("0.00")+" GB":bytes>=1024*1024?(bytes/(1024d*1024)).ToString("0.0")+" MB":bytes>=1024?(bytes/1024d).ToString("0.0")+" KB":bytes+" B";
-    public void Dispose(){if(disposed)return;disposed=true;timer.Stop();dismissTimer.Stop();icon.Visible=false;icon.Dispose();appIcon.Dispose();panel.Close();}
+    public void Dispose(){disposed=true;timer.Stop();dismissTimer.Stop();icon.Visible=false;icon.Dispose();appIcon.Dispose();panel.Close();view.Dispose();}
 }

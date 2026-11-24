@@ -35,7 +35,7 @@ if not (frp_payload/'frpc').is_file() or not frp_license.is_file():raise Runtime
 (frp_payload/'frpc').chmod(0o755)
 for path in core.glob('*.pdb'):path.unlink()
 run(['swiftc','-swift-version','5','-parse-as-library','-O','-target','arm64-apple-macos15.0',*sorted((root/'macos').glob('*.swift')),'-o',macos/'SafeCode','-framework','AppKit','-framework','WebKit','-framework','Security'])
-for name in ['index.html','styles.css','app.js','native.js','qrcode.min.js','gateway.html','gateway.css','gateway.js','gateway-charts.js','gateway-status.js']:shutil.copy2(root/'web'/name,web_pages/name)
+for name in ['tray.html','index.html','styles.css','app.js','native.js','qrcode.min.js','gateway.html','gateway.css','gateway.js','gateway-charts.js','gateway-status.js']:shutil.copy2(root/'web'/name,web_pages/name)
 (web/'assets').mkdir()
 for name in ['safe-code-logo.png','server-login-tutorial.png','workspace-mascot.png','claude-client.png','codex-client.webp']:shutil.copy2(root/'assets'/name,web/'assets'/name)
 with tempfile.TemporaryDirectory(prefix='safecode-icon-') as temp:
