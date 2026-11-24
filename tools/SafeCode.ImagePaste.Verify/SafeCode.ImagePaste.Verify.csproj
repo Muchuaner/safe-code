@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework><OutputType>Exe</OutputType>
+    <UseWPF>true</UseWPF><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/SafeCode.Desktop/ClipboardImage.cs" Link="ClipboardImage.cs" />
+    <ProjectReference Include="../../src/SafeCode.Core/SafeCode.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -6,7 +6,7 @@ using F = System.Windows.Forms;
 namespace SafeCode.Desktop;
 
 // Keep authentication in memory and use the existing, host-key-verified SSH tunnel.
-internal sealed class RdpDesktop : F.Form
+internal sealed partial class RdpDesktop : F.Form
 {
     private const int FullscreenHotkey = 0x5343;
     private readonly RdpControl control = new();
@@ -33,7 +33,8 @@ internal sealed class RdpDesktop : F.Form
     private int resizeAttempts;
     private DateTime toolbarVisibleUntil;
 
-    internal RdpDesktop(DesktopResolution? resolution = null, RdpResizePreferences? resizePreferences = null, Action<Exception?>? displayOperationCompleted = null)
+    internal RdpDesktop(DesktopResolution? resolution = null, RdpResizePreferences? resizePreferences = null, Action<Exception?>? displayOperationCompleted = null,
+        Func<IReadOnlyList<SafeCode.Core.DesktopImagePart>, CancellationToken, Task>? imageSink = null)
     {
         this.resizePreferences = resizePreferences;
         this.displayOperationCompleted = displayOperationCompleted;
@@ -61,6 +62,7 @@ internal sealed class RdpDesktop : F.Form
             resizeMenu.DropDownItems.Add(item);
         }
         toolbar.Items.AddRange([fullscreenButton, minimize, disconnect, resizeMenu, new F.ToolStripSeparator(), displayStatus]);
+        ConfigureImagePaste(imageSink);
         ((ISupportInitialize)control).BeginInit();
         viewport.Controls.Add(control);
         Controls.Add(viewport);
@@ -171,7 +173,7 @@ internal sealed class RdpDesktop : F.Form
         {
             var point = PointToClient(F.Cursor.Position);
             bool atTop = ClientRectangle.Contains(point) && point.Y <= 5;
-            if (atTop || resizeMenu.DropDown.Visible || (toolbar.Visible && toolbar.Bounds.Contains(point)))
+            if (atTop || resizeMenu.DropDown.Visible || imageButton.DropDown.Visible || (toolbar.Visible && toolbar.Bounds.Contains(point)))
                 toolbarVisibleUntil = DateTime.UtcNow.AddSeconds(2);
             toolbar.Visible = DateTime.UtcNow < toolbarVisibleUntil;
             if (toolbar.Visible) toolbar.BringToFront();
@@ -180,8 +182,10 @@ internal sealed class RdpDesktop : F.Form
         try
         {
             bool nowConnected = client.Connected == 1;
+            if (nowConnected != connected) ClipboardConnectionChanged(nowConnected);
             if (nowConnected && !connected) QueueDisplayUpdate();
             connected = nowConnected;
+            if (connected && imageShortcut.Checked && !imageHotkeyRegistered) UpdateImageHotkey();
             if (!connected || !resizePending || resizeAttempts >= 20) return;
             resizeAttempts++;
             SynchronizeDisplay();
@@ -286,12 +290,15 @@ internal sealed class RdpDesktop : F.Form
     protected override void OnActivated(EventArgs e)
     {
         base.OnActivated(e);
+        UpdateImageHotkey();
         if (!hotkeyRegistered) hotkeyRegistered = RegisterHotKey(Handle, FullscreenHotkey, 0x4003, 0x0D);
         if (fullscreen) TopMost = true;
     }
 
     protected override void OnDeactivate(EventArgs e)
     {
+        imageFocusEpoch++;
+        ReleaseImageHotkey();
         if (hotkeyRegistered) { UnregisterHotKey(Handle, FullscreenHotkey); hotkeyRegistered = false; }
         if (fullscreen) TopMost = false;
         base.OnDeactivate(e);
@@ -299,6 +306,8 @@ internal sealed class RdpDesktop : F.Form
 
     protected override void WndProc(ref F.Message message)
     {
+        if (message.Msg == 0x0312 && message.WParam.ToInt32() == ImageHotkey)
+        { if (imageHotkeyRegistered && control.ContainsFocus) _ = PasteImageAsync(false); return; }
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == FullscreenHotkey)
         { ApplyDisplayChange(ToggleFullscreen); return; }
         base.WndProc(ref message);
@@ -306,6 +315,7 @@ internal sealed class RdpDesktop : F.Form
 
     protected override void OnFormClosing(F.FormClosingEventArgs e)
     {
+        StopImagePaste();
         displayTimer.Stop();
         if (hotkeyRegistered) { UnregisterHotKey(Handle, FullscreenHotkey); hotkeyRegistered = false; }
         try { if (client is not null) client.Disconnect(); } catch (COMException) { }
@@ -316,6 +326,7 @@ internal sealed class RdpDesktop : F.Form
     {
         if (disposing)
         {
+            StopImagePaste();
             if (hotkeyRegistered && IsHandleCreated) UnregisterHotKey(Handle, FullscreenHotkey);
             hotkeyRegistered = false;
             displayTimer.Dispose();

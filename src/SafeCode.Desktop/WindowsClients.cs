@@ -18,7 +18,7 @@ public sealed class WindowsClients : IDisposable
         if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         var connection=await session.PrepareRemoteDesktopAsync(account.Username,false,ct);
-        var window=new RdpDesktop(resolution,ResizePreferences,DisplayOperationCompleted);desktops.Add(window);
+        var window=new RdpDesktop(resolution,ResizePreferences,DisplayOperationCompleted,session.BindDesktopImagePaste(account.Username,connection.Port));desktops.Add(window);
         window.FormClosed+=(_,_)=>desktops.Remove(window);
         try{window.Show();window.Connect("127.0.0.1",connection.Port,account.Username,account.Password,resolution);return window;}catch{window.Close();window.Dispose();throw;}
     }
