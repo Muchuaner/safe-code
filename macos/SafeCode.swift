@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import Security
+import UserNotifications
 
 private let bundleID = "org.safecode.desktop"
 private let safeCodeVersion = "0.4.6"
@@ -69,7 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var stateText: NSTextField!
     private var durationText: NSTextField!
     private var values: [NSTextField] = []
-    private var busy = false, guarding = false, quitting = false, ready = false
+    private var quitting = false, shutdownPending = false, ready = false
+    private let notifications = DesktopNotifications()
     private var directory = URL(fileURLWithPath:NSHomeDirectory()).appendingPathComponent("Library/Application Support/Safe Code", isDirectory:true)
     private var resources: URL { Bundle.main.resourceURL! }
     private var index: URL { resources.appendingPathComponent("Web/web/index.html") }
@@ -120,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             if !isolated, let existing=NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).first(where:{$0.processIdentifier != ProcessInfo.processInfo.processIdentifier}) { existing.activate(options:[.activateAllWindows]); NSApp.terminate(nil);return }
             try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
             makeMenu(); makeWindow(); makeStatus()
+            if !isolated { notifications.configure { [weak self] in self?.showMain() } }
             if !isolated {
                 encryptionKey=try? keychainSecret(allowPrompt:false,allowCreate:!hasEncryptedData)
             }
@@ -135,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         app.addItem(.separator());app.addItem(withTitle:"显示主界面",action:#selector(showMain),keyEquivalent:"0")
         app.addItem(withTitle:"关闭窗口",action:#selector(closeKeyWindow),keyEquivalent:"w").target=self
         app.addItem(withTitle:"隐藏 Safe Code",action:#selector(NSApplication.hide(_:)),keyEquivalent:"h")
-        app.addItem(.separator());app.addItem(withTitle:"安全退出",action:#selector(quit),keyEquivalent:"q")
+        app.addItem(.separator());app.addItem(withTitle:"安全退出",action:#selector(quit),keyEquivalent:"q").target=self
         let edit=NSMenu(title:"编辑");let editItem=NSMenuItem(title:"编辑",action:nil,keyEquivalent:"");editItem.submenu=edit;main.addItem(editItem)
         for (name,selector,key) in [("撤销",Selector(("undo:")),"z"),("剪切",#selector(NSText.cut(_:)),"x"),("复制",#selector(NSText.copy(_:)),"c"),("粘贴",#selector(NSText.paste(_:)),"v"),("全选",#selector(NSText.selectAll(_:)),"a")] {edit.addItem(withTitle:name,action:selector,keyEquivalent:key)}
         NSApp.mainMenu=main
@@ -164,8 +167,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     private func makeStatus() {
         statusItem=NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
-        statusItem.button?.image=NSImage(systemSymbolName:"externaldrive.connected.to.line.below",accessibilityDescription:"Safe Code 挂载状态")
-        statusItem.button?.target=self;statusItem.button?.action=#selector(toggleStatus)
+        if let button = statusItem.button {
+            if let icon = NSImage(systemSymbolName:"terminal",accessibilityDescription:"Safe Code") {
+                icon.isTemplate = true
+                button.image = icon
+            } else {
+                button.title = "SC"
+            }
+            button.toolTip = "Safe Code"
+            button.setAccessibilityLabel("Safe Code")
+            button.target = self
+            button.action = #selector(toggleStatus)
+            button.sendAction(on:[.leftMouseUp, .rightMouseUp])
+        }
         let controller=NSViewController();controller.view=NSView(frame:NSRect(x:0,y:0,width:276,height:196))
         let main=statusContent;main.orientation = .vertical;main.spacing=10;main.alignment = .leading;main.translatesAutoresizingMaskIntoConstraints=false
         controller.view.addSubview(main);NSLayoutConstraint.activate([main.leadingAnchor.constraint(equalTo:controller.view.leadingAnchor,constant:16),main.trailingAnchor.constraint(equalTo:controller.view.trailingAnchor,constant:-16),main.topAnchor.constraint(equalTo:controller.view.topAnchor,constant:14)])
@@ -357,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case "window.minimize":window.miniaturize(nil);answer(id,true)
         case "window.maximize":window.zoom(nil);answer(id,true)
         case "window.close":answer(id,true);window.performClose(nil)
+        case "window.quit":answer(id,true);quit()
         case "copy":NSPasteboard.general.clearContents();NSPasteboard.general.setString(args["text"] as? String ?? "",forType:.string);answer(id,true)
         case "pickFolder":let picker=NSOpenPanel();picker.title="选择要挂载到 VPS 的本机目录";picker.canChooseFiles=false;picker.canChooseDirectories=true;picker.allowsMultipleSelection=false;picker.beginSheetModal(for:dialogHost){[weak self] result in self?.answer(id,result == .OK ? picker.url?.path ?? "":NSNull())}
         case "services.open":openServices();answer(id,true)
@@ -656,8 +671,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             }else{active.window.makeKeyAndOrderFront(nil)}
             return false
         }
-        if guarding || busy {window.orderOut(nil);return false}
-        quit();return false
+        guard sender === window else { return true }
+        window.orderOut(nil)
+        if !isolated {
+            notifications.post(id:"main-window-hidden", title:"Safe Code 已转入后台",
+                               body:"点击菜单栏中的 Safe Code 图标，可查看状态或打开主界面。")
+        }
+        return false
     }
     func windowWillClose(_ notification:Notification) {
         guard let panel=notification.object as? NSWindow,panel===gatewayWindow else{return}
@@ -708,12 +728,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     @objc private func reconnect(){request("mount.reconnect"){[weak self] result in if case .failure(let error)=result{self?.fail(error.localizedDescription)}}}
     @objc private func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Safe Code",.applicationVersion:safeCodeVersion,.credits:NSAttributedString(string:"macOS 客户端 · SSH、部署与目录挂载\n第三方适配器保持关闭")])}
     @objc private func quit(){
-        guard !quitting else{return}
+        guard !quitting && !shutdownPending else{return}
         if gatewayMutationPending {gatewayWindow?.makeKeyAndOrderFront(nil);return}
-        request("app.shutdown"){[weak self] result in guard let self=self else{return};switch result{case .success:self.quitting=true;self.stdin?.closeFile();self.backend?.terminate();NSApp.terminate(nil);case .failure(let error):self.showMain();self.fail("尚未安全退出："+error.localizedDescription)}}
+        shutdownPending = true
+        request("app.shutdown"){[weak self] result in guard let self=self else{return};self.shutdownPending=false;switch result{case .success:self.quitting=true;self.stdin?.closeFile();self.backend?.terminate();NSApp.terminate(nil);case .failure(let error):self.showMain();self.fail("尚未安全退出："+error.localizedDescription)}}
     }
     private func updateStatus(_ message:[String:Any]) {
-        busy=message["busy"] as? Bool ?? false;let mount=message["mount"] as? [String:Any] ?? [:];let host=message["host"] as? [String:Any] ?? [:]
+        let mount=message["mount"] as? [String:Any] ?? [:];let host=message["host"] as? [String:Any] ?? [:]
         let count=mount["count"] as? Int ?? 0
         let running=message["desktopKeyRunning"] as? Bool == true
         if running != keyRunning {
@@ -724,8 +745,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             updateStatusSize()
             if running && popover.isShown {refreshKeyBalance()}
         }
-        guarding=count>0 || (host["enabled"] as? Bool ?? false) || running
-        stateText.stringValue=(host["enabled"] as? Bool ?? false) ? "本机控制已启用":mount["message"] as? String ?? "未挂载目录"
+        stateText.stringValue=(host["enabled"] as? Bool ?? false) ? "本机控制已启用":running ? "API Key 接入运行中":mount["message"] as? String ?? "未挂载目录"
         let seconds=Int((mount["durationSeconds"] as? Double ?? 0));durationText.stringValue="\(count) 个目录  ·  \(seconds/3600):\(String(format:"%02d",seconds/60%60)):\(String(format:"%02d",seconds%60))"
         values[0].stringValue=bytes(mount["bytesToServer"] as? Double ?? 0);values[1].stringValue=bytes(mount["bytesToLocal"] as? Double ?? 0);values[2].stringValue="\(mount["completedFiles"] as? Int ?? 0) 次"
         statusItem.button?.toolTip=running ? "Safe Code · API Key 接入":"Safe Code · "+stateText.stringValue
@@ -800,6 +820,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
     }
     private func runSmoke() {
+        window.performClose(nil)
+        guard !window.isVisible, !shutdownPending, backend?.isRunning == true, let button = statusItem.button else {
+            fail("关闭主窗口后未保留菜单栏或后台核心。"); quit(); return
+        }
+        button.performClick(nil)
+        guard popover.isShown else { fail("菜单栏面板未打开。"); quit(); return }
+        showMain()
+        guard window.isVisible else { fail("未能从菜单栏恢复主窗口。"); quit(); return }
         let script="""
         if(!window.safeCodeNativeReady)throw Error('Native bridge did not load');
         const rpc=(op,args={})=>new Promise((resolve,reject)=>{const id=crypto.randomUUID();const original=window.safeCodeNativeResponse;window.safeCodeNativeResponse=m=>{if(m.id===id){window.safeCodeNativeResponse=original;m.error?reject(Error(m.error)):resolve(m.result)}else original(m)};chrome.webview.postMessage({id,op,args})});
