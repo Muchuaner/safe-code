@@ -2454,7 +2454,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.enable_cloudcli_web_fixture()
         config = {**self.manager.config,
                   'cloudcli': {**self.manager.cloudcli.config, 'desktopToolApprovals': True}}
-        manager = public_gateway.PublicManager(self.home/'unrestricted-public-manager', config)
+        folder = self.home/'unrestricted-public-manager'
+        folder.mkdir()
+        manager = public_gateway.PublicManager(folder, config)
         sent = []
         events = [{'kind': 'text', 'role': 'assistant', 'sessionId': CLOUD_SESSION, 'content': 'Fixture reply.'},
                   {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0}]

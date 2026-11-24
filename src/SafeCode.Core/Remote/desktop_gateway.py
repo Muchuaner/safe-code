@@ -3169,7 +3169,8 @@ class CloudCliBackend:
         dispatch_task = DESKTOP_LOCAL_COMMAND.sub('', task).strip() if '<local-command-caveat>' in task else task
         chat_mode = bool(attachments) or plan_mode
         unrestricted = manager.unrestricted_tools and not plan_mode and bool(self.config.get('desktopQuestions'))
-        tool_approvals = self.config.get('desktopToolApprovals', False) and not unrestricted
+        approval_transport = self.config.get('desktopToolApprovals', False)
+        tool_approvals = approval_transport and not unrestricted
         if chat_mode and not self.config.get('desktopQuestions'):
             raise CloudCliError('Desktop attachments and plan mode require the authenticated CloudCLI connection', 503)
         if not dispatch_task and not attachments:
@@ -3283,7 +3284,7 @@ class CloudCliBackend:
                     project, workspace = self.project_for_directory(self.desktop_directory(data, scope))
                 # The Agent API runs unattended in bypassPermissions and can skip
                 # the permission event that carries a pending AskUserQuestion.
-                chat_mode = chat_mode or bool(native_tools) or edit is not None or tool_approvals or unrestricted
+                chat_mode = chat_mode or bool(native_tools) or edit is not None or approval_transport
                 if chat_mode:
                     cloudcli_websocket()
                     self.question_token()
