@@ -34,7 +34,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 15
+GATEWAY_REVISION = 16
 PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
@@ -378,7 +378,11 @@ class PublicHandler(Handler):
                     raise DeviceError('Local control consent is required')
                 return self.reply(200, devices.prepare(self.digest, self.platform, request.get('hostname')))
             row = devices.enrolled(self.digest, self.platform, request.get('deviceId'), request.get('deviceProof'),
-                                   require_current=action != 'revoke')
+                                   require_current=action != 'revoke', missing_ok=action == 'revoke')
+            if action == 'revoke':
+                if row is not None:
+                    devices.revoke(row)
+                return self.reply(200, {'revoked': True})
             if action == 'verify':
                 try:
                     command = devices.configure(row, request.get('username'), request.get('hostKey'))
@@ -389,9 +393,6 @@ class PublicHandler(Handler):
             if action == 'renew':
                 devices.renew(row)
                 return self.reply(200, {'ready': bool(row['ready'])})
-            if action == 'revoke':
-                devices.revoke(row)
-                return self.reply(200, {'revoked': True})
             raise DeviceError('Unknown device action')
         except DeviceAlreadyBound as error:
             return self.device_error(409, str(error), 'device_already_bound')

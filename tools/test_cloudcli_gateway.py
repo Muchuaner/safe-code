@@ -1444,10 +1444,14 @@ class CloudCLIGatewayTests(unittest.TestCase):
             status, bare = request('/v1/messages', conversation('copied Key without proof'))
             self.assertEqual((status, bare['error']['code']), (403, 'device_pairing_required'))
             revoke = {'action':'revoke', 'deviceId':first['deviceId'], 'deviceProof':first['deviceProof']}
-            self.assertEqual(request(control, revoke)[0], 200)
+            self.assertEqual(request(control, {**revoke, 'deviceProof':'b'*43})[0], 400)
+            self.assertEqual(request(control, revoke), (200, {'revoked':True}))
             status, replacement = request(control, {'action':'prepare', 'accepted':True, 'hostname':'Second Mac'}, 'macos')
             self.assertEqual(status, 200)
             self.assertNotEqual(first['deviceId'], replacement['deviceId'])
+            self.assertEqual(request(control, revoke), (200, {'revoked':True}))
+            again, blocked = request(control, {'action':'prepare', 'accepted':True, 'hostname':'Old PC'})
+            self.assertEqual((again, blocked['error']['code']), (409, 'device_already_bound'))
         self.assertFalse(self.cloud.requests)
 
     def test_key_queue_sends_ping_before_headers_would_time_out(self):

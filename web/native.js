@@ -1080,6 +1080,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     setInterval(refreshApiUsage,30000);
     function describeKey(op,args){
       const target=keyState.deviceAlias?'\n工具目标：已授权的本机设备 '+keyState.deviceAlias:'';
+      if(keyState.unbindPending)return keyState.error;
       if(keyState.error)return (keyState.configured?'已保存 Key，暂未恢复接入。\n':'')+keyState.error;
       if(keyState.running)return '已启用。'+target+'\n'+(args?.replace||args?.useSaved?'请完全退出并重新打开 Claude Desktop 以应用更改。':'首次接入请完全退出并重新打开 Claude Desktop。');
       if(keyState.configured)return '已保存 Key，当前 Claude 配置未启用此接入。';
@@ -1093,15 +1094,16 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       keyEnable.hidden=!editing;
       keyEnable.disabled=keyBusy;
       keyEnable.textContent=keyReplacing?'验证并更换':'验证并启用';
-      keyReplace.hidden=!configured;
+      keyReplace.hidden=!configured||keyState.unbindPending;
       keyReplace.disabled=keyBusy;
       keyReplace.textContent=keyReplacing?'取消更换':'更换 Key';
-      keyResume.hidden=!configured||keyState.running||keyReplacing;
+      keyResume.hidden=!configured||keyState.running||keyReplacing||keyState.unbindPending;
       keyResume.disabled=keyBusy;
       $('#desktop-key-refresh').hidden=!keyState.running||keyReplacing;
       $('#desktop-key-refresh').disabled=keyBusy;
       $('#desktop-key-disable').hidden=!configured||keyReplacing;
       $('#desktop-key-disable').disabled=keyBusy;
+      $('#desktop-key-disable').textContent=keyState.unbindPending?'重试解绑':'停用接入';
       $('#desktop-key-open').hidden=!keyState.running||keyReplacing;
       setLaunchAvailability('desktop-key-open',keyState.running&&!keyBusy&&!keyReplacing);
       $('#desktop-key-close').disabled=keyBusy;
@@ -1127,7 +1129,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         if(op==='enable'&&keyState.running)keyReplacing=false;
         keyProgress.textContent=op==='refreshModels'?'模型列表已更新。请完全退出并重新打开 Claude Desktop。':describeKey(op,args);
         if(op==='enable'&&keyState.running)showApiAccess();
-        if(op==='disable'&&!apiScreen.hidden){keyDialog.close();closeApiAccess();}
+        if(op==='disable'&&!keyState.unbindPending&&!apiScreen.hidden){keyDialog.close();closeApiAccess();}
       }catch(error){
         keyProgress.textContent=error.message;
       }finally{keyBusy=false;renderKey();}

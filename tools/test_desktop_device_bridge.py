@@ -42,6 +42,7 @@ class DevicePairingTests(unittest.TestCase):
             with self.assertRaises(bridge.DeviceError):
                 hosts.revoke(owner, 'windows', device_id, proof)
             hosts.revoke(owner, 'windows', device_id, replacement['deviceProof'])
+            hosts.revoke(owner, 'windows', device_id, replacement['deviceProof'])
             with self.assertRaises(bridge.DeviceError):
                 hosts.chat_binding(owner, 'windows', device_id, replacement['deviceProof'])
 

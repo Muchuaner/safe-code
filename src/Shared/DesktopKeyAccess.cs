@@ -31,11 +31,13 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     string? windowsPolicyPath=null,Func<CancellationToken,Task>? beforeMessages=null) : IDisposable
 {
     private const int MaxMessagesRequest = 16 * 1024 * 1024;
+    private const string DeviceAlreadyBoundMessage="该 Key 已绑定设备。请在原设备停用接入，或联系网关管理员检查绑定状态。";
+    private const string UnbindPendingMessage="本机接入已停用，网关尚未确认解绑。请在网络恢复后点击「重试解绑」。";
 
     internal sealed record DeviceBinding(string DeviceId,string DeviceProof,string Alias,int Port,string PublicKey);
     internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing,SshSession? HostSession=null);
     private sealed record Saved(Ticket Remote,string Local,int Port,string Profile,string Previous,JsonNode? Hybrid,bool CreatedMeta=false,
-        Dictionary<string,PolicyValue>? WindowsPolicy=null,DeviceBinding? Device=null);
+        Dictionary<string,PolicyValue>? WindowsPolicy=null,DeviceBinding? Device=null,bool UnbindPending=false);
     private sealed record Relay(WebApplication App,HttpClient Client,int Port,Func<bool>? HostReady,long StartedAt) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
@@ -166,7 +168,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                         {
                             "device_not_configured" => "此 VPS 尚未安装私有设备服务。请在「网关设置」升级或修复网关。",
                             "device_not_allowed" => "此 Key 没有设备配对权限。请让签发人在「管理网关」将接入用途改为「Safe Code 桌面接入」。",
-                            "device_already_bound" => "这把 Key 已绑定一台 Safe Code 设备。请先在原设备停用接入，或联系签发人处理。",
+                            "device_already_bound" => DeviceAlreadyBoundMessage,
                             "device_auth_unavailable" => "VPS 的设备鉴权服务未就绪。请在「网关设置」运行故障修复。",
                             "device_frp_unavailable" => "VPS 的私有 FRP 服务未就绪。请在「网关设置」运行故障修复。",
                             "device_ssh_verification_failed" => "VPS 未能验证 SSH 回连。请检查本机远程登录权限，再重新授权。",
@@ -177,6 +179,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 }
             }
             catch(JsonException){}
+            if(response.StatusCode==HttpStatusCode.Conflict)
+                throw new InvalidOperationException(DeviceAlreadyBoundMessage);
             throw new InvalidOperationException("网关未能完成本机远程控制操作（HTTP "+(int)response.StatusCode+"）。请检查该 Key 的设备授权与 FRP 状态。");
         }
         using var document=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
@@ -596,9 +600,12 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private object Status(string? error=null)
     {
         bool disconnected=relay?.HostReady?.Invoke()==false;
-        var device=Configured?Load().Device:null;
-        return new{configured=Configured,running=relay!=null&&!disconnected,deviceAlias=device?.Alias,startedAt=relay?.StartedAt,
-            error=error??(disconnected?"已授权的本机远程控制暂不可用。请恢复本机控制或选择「重新启用」。":null)};
+        var saved=Configured?Load():null;
+        bool unbindPending=saved?.UnbindPending==true;
+        return new{configured=saved!=null,running=relay!=null&&!disconnected&&!unbindPending,
+            deviceAlias=saved?.Device?.Alias,startedAt=relay?.StartedAt,unbindPending,
+            error=error??(unbindPending?UnbindPendingMessage:
+                disconnected?"已授权的本机远程控制暂不可用。请恢复本机控制或选择「重新启用」。":null)};
     }
     // The classifier accepts permission checks only. Publishing it as a chat model
     // also makes it compete with the real Sonnet family default in Desktop.
@@ -617,6 +624,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             if(!Configured)return;
             var saved=Load();
+            if(saved.UnbindPending)throw new InvalidOperationException(UnbindPendingMessage);
             var library=Library();
             if(ProfileText(ReadProfileMeta(library),"appliedId")!=saved.Profile)return;
 
@@ -663,6 +671,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 try
                 {
                     var saved=Load();
+                    if(saved.UnbindPending)return Status();
                     return Status(saved.Device==null
                         ?"旧接入未绑定本机设备。为防止把 VPS 目录误认为你的电脑，请重新启用并完成本机授权。"
                         :"请重新启用本机远程控制，验证设备连接后恢复接入。");
@@ -689,6 +698,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         try
         {
             var previous=Configured?Load():null;
+            if(previous?.UnbindPending==true)throw new InvalidOperationException(UnbindPendingMessage);
             if(useSaved&&previous==null)throw new InvalidOperationException("没有保存的接入 Key，请输入新的 Key。");
             if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」切换已保存的接入。");
             var t=verified?.Remote??(useSaved?previous!.Remote:Ticket.Parse(code.Trim()));
@@ -907,10 +917,37 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         await gate.WaitAsync(ct);
         try
         {
-            Saved? revoke=null;
+            if(relay!=null)
+            {
+                var current=relay;
+                relay=null;
+                await current.DisposeAsync();
+            }
             if(Configured)
             {
-                var s=Load();revoke=s;var lib=Library();
+                var s=Load();
+                if(s.Device is {} binding)
+                {
+                    if(!s.UnbindPending)
+                    {
+                        s=s with { UnbindPending=true };
+                        Save(s);
+                    }
+                    try
+                    {
+                        var response=await DeviceControlAsync(s.Remote,
+                            new{action="revoke",binding.DeviceId,binding.DeviceProof},ct);
+                        if(response.ValueKind!=JsonValueKind.Object||
+                           !response.TryGetProperty("revoked",out var revoked)||revoked.ValueKind!=JsonValueKind.True)
+                            return Status();
+                    }
+                    catch(Exception error) when(error is IOException or HttpRequestException or InvalidOperationException
+                                                or OperationCanceledException or JsonException)
+                    {
+                        return Status();
+                    }
+                }
+                var lib=Library();
                 string metaPath=Path.Combine(lib,"_meta.json"),profilePath=Path.Combine(lib,s.Profile+".json");
                 byte[]? originalMeta=ReadOptionalFile(metaPath),originalProfile=ReadOptionalFile(profilePath);
                 var meta=ParseProfileMeta(originalMeta);var entries=meta["entries"]!.AsArray();
@@ -945,15 +982,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     throw;
                 }
             }
-            if(revoke is {Device:{} binding})
-            {
-                try{await DeviceControlAsync(revoke.Remote,new{action="revoke",binding.DeviceId,binding.DeviceProof},ct);}
-                catch(Exception error) when(error is IOException or HttpRequestException or InvalidOperationException or OperationCanceledException)
-                {
-                    // Closing the local SSH lease also prevents remote access when offline.
-                }
-            }
-            if(relay!=null){await relay.DisposeAsync();relay=null;}
             if(OperatingSystem.IsWindows())WindowsLaunchPermissions().Restore();
             return Status();
         }

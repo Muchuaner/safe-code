@@ -172,7 +172,7 @@ class OwnerHosts:
             write_file(target, json.dumps({'proof':digest(proof),'identity':identity,'hostname':hostname.strip()}))
         return {'deviceId':device,'deviceProof':proof,'alias':alias}
 
-    def authenticate(self, owner, platform, device, proof):
+    def authenticate(self, owner, platform, device, proof, *, missing_ok=False):
         target = self.path(owner, device)
         if platform not in ('windows', 'macos') or not isinstance(proof, str) or not PROOF.fullmatch(proof):
             raise DeviceError('Invalid SSH device proof')
@@ -181,6 +181,10 @@ class OwnerHosts:
                 record = json.loads(stream.read(4096))
             if not hmac.compare_digest(record['proof'], digest(proof)):
                 raise ValueError()
+        except FileNotFoundError:
+            if not missing_ok:
+                raise DeviceError('Invalid SSH device proof') from None
+            return target, None
         except (OSError, KeyError, TypeError, ValueError):
             raise DeviceError('Invalid SSH device proof') from None
         return target, record
@@ -195,8 +199,9 @@ class OwnerHosts:
 
     def revoke(self, owner, platform, device, proof):
         with pairing_lock(self.state, owner):
-            target, _ = self.authenticate(owner, platform, device, proof)
-            target.unlink(missing_ok=True)
+            target, record = self.authenticate(owner, platform, device, proof, missing_ok=True)
+            if record is not None:
+                target.unlink(missing_ok=True)
 
 
 class Devices:
@@ -247,12 +252,14 @@ class Devices:
         return (isinstance(proof, str) and PROOF.fullmatch(proof)
                 and hmac.compare_digest(row['proof'], digest(proof)))
 
-    def enrolled(self, owner, platform, device, proof, *, require_current=True):
+    def enrolled(self, owner, platform, device, proof, *, require_current=True, missing_ok=False):
         if not isinstance(device, str) or not DEVICE.fullmatch(device) or not self.permitted(owner):
             raise DeviceError('Device pairing is unavailable')
         with closing(self.connect()) as db:
             row = db.execute('SELECT * FROM devices WHERE id=? AND owner=? AND platform=?',
                              (device, owner, platform)).fetchone()
+            if row is None and missing_ok and isinstance(proof, str) and PROOF.fullmatch(proof):
+                return None
             if row is None or not self.proof_matches(row, proof):
                 raise DeviceError('Unknown device pairing')
             if require_current and paired_device(self.state, owner, db) != device:
