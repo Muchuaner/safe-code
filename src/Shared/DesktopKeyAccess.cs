@@ -239,7 +239,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             {
                 res.Headers.TryGetValues("X-SafeCode-Gateway-Diagnostic",out var headers);
                 gateway.Response((int)res.StatusCode,headers);
-                if(!res.IsSuccessStatusCode)failure=new HttpRequestException(null,null,res.StatusCode);
+                if(!res.IsSuccessStatusCode && !await gateway.IsUnsupportedTokenCountAsync(res,ctx.RequestAborted))
+                    failure=new HttpRequestException(null,null,res.StatusCode);
             }
             ctx.Response.StatusCode=(int)res.StatusCode;
             ctx.Response.ContentType=res.Content.Headers.ContentType?.ToString()??"application/json";

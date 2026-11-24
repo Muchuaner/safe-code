@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -56,6 +57,27 @@ internal sealed class GatewayDiagnostic
             try { using var doc = JsonDocument.Parse(value); Accept(doc.RootElement); }
             catch (JsonException) { }
         }
+    }
+
+    internal async Task<bool> IsUnsupportedTokenCountAsync(HttpResponseMessage response, CancellationToken cancellation)
+    {
+        if (!Equals(fields["endpoint"], "count_tokens") || response.StatusCode != System.Net.HttpStatusCode.NotFound ||
+            response.Content.Headers.ContentType?.MediaType != "application/json" ||
+            response.Content.Headers.ContentLength is not (> 0 and <= 512))
+            return false;
+
+        // HttpContent buffers this short response so the relay can forward the original bytes.
+        var body = await response.Content.ReadAsByteArrayAsync(cancellation);
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object && root.TryGetProperty("error", out var error) &&
+                error.ValueKind == JsonValueKind.Object && error.TryGetProperty("type", out var type) &&
+                type.ValueKind == JsonValueKind.String && type.ValueEquals("not_found_error") && error.TryGetProperty("message", out var message) &&
+                message.ValueKind == JsonValueKind.String && message.ValueEquals("Token counting is unavailable on this CLI bridge");
+        }
+        catch (JsonException) { return false; }
     }
 
     internal void ObserveSse(ReadOnlySpan<byte> buffer)

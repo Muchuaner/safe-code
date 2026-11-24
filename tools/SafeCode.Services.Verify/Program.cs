@@ -65,6 +65,16 @@ try{
  Assert(login.Load()==newer,"recovered login could not be replaced");
  Assert(!Encoding.UTF8.GetString(File.ReadAllBytes(savedPath)).Contains(newer.Password),"saved password was written in clear text");
 
+ var unsupportedCount = """{"type":"error","error":{"type":"not_found_error","message":"Token counting is unavailable on this CLI bridge"}}""";
+ using(var response=new HttpResponseMessage(HttpStatusCode.NotFound)){
+  response.Content=new StringContent(unsupportedCount,Encoding.UTF8,"application/json");
+  var count=new GatewayDiagnostic("count_tokens");
+  Assert(await count.IsUnsupportedTokenCountAsync(response,default),"expected probe was reported as a failure");
+  Assert(await response.Content.ReadAsStringAsync()==unsupportedCount,"probe body was consumed");
+  Assert(!await new GatewayDiagnostic("messages").IsUnsupportedTokenCountAsync(response,default),"suppressed chat 404");
+  response.Content=new StringContent("""{"error":{"type":"not_found_error","message":"Unknown route"}}""",Encoding.UTF8,"application/json");
+  Assert(!await count.IsUnsupportedTokenCountAsync(response,default),"suppressed unrelated count 404");
+ }
  var relay=new GatewayDiagnostic("messages");
  relay.Response(200,null);
  var requestId=Guid.NewGuid().ToString();
