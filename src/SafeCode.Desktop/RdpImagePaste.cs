@@ -111,11 +111,15 @@ internal sealed partial class RdpDesktop
             await sendImage(parts, op.Token);
             op.Token.ThrowIfCancellationRequested();
             lastImageSequence = seq == 0 ? null : seq;
+            // The SSH acknowledgement confirms X11 ownership. Writer can still be using the
+            // previous target list when Ctrl+V arrives immediately after that acknowledgement.
+            displayStatus.Text = "图片已发送，等待云桌面更新剪贴板…";
+            await Task.Delay(TimeSpan.FromMilliseconds(1200), op.Token);
             // The native RDP channel may announce the newly installed X11 clipboard back to Windows.
             // A sequence change during the send must never cause a second upload or a wrong-window paste.
             if (!PasteTarget() || focusEpoch != imageFocusEpoch) { displayStatus.Text = "图片已就绪，请回到输入框粘贴"; return; }
             if (!await SendPasteWhenReleased(op.Token, seq, acceptRdpEcho: true)) return;
-            displayStatus.Text = "已粘贴 · " + string.Join(" / ", parts.Select(p => p.Mime[6..].ToUpperInvariant()));
+            displayStatus.Text = "已发送粘贴按键 · " + string.Join(" / ", parts.Select(p => p.Mime[6..].ToUpperInvariant()));
         }
         catch (OperationCanceledException) { if (!imageClosing && !IsDisposed) displayStatus.Text = "图片粘贴已取消或超时"; }
         catch (Exception ex)
