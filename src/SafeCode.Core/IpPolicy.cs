@@ -12,7 +12,7 @@ public sealed partial class SshSession
     private async Task<SshClient> ProbeIngressAsync(string ingress,CancellationToken ct)
     {
         if(connection==null)throw new InvalidOperationException("尚未连接。");
-        var info=new PasswordConnectionInfo(ingress,connection.Port,connection.Username,connection.Password){Timeout=TimeSpan.FromSeconds(8)};
+        var info=new PasswordConnectionInfo(ingress,connection.Port,connection.Username,connection.Password){Timeout=SshConnectTimeout};
         PinHostKeyAlgorithms(info);
         var candidate=new SshClient(info){KeepAliveInterval=TimeSpan.FromSeconds(20)};
         candidate.HostKeyReceived+=(_,e)=>e.CanTrust=trustedKey!=null&&CryptographicOperations.FixedTimeEquals(trustedKey,e.HostKey);

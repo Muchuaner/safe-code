@@ -12,6 +12,7 @@ namespace SafeCode.Core;
 
 public sealed partial class SshSession : IDisposable
 {
+    private static readonly TimeSpan SshConnectTimeout=TimeSpan.FromSeconds(18);
     private SshClient? client;
     private string remoteDirectory = "";
     private string prefix = "";
@@ -44,7 +45,7 @@ public sealed partial class SshSession : IDisposable
             throw new ArgumentException("服务器地址或端口无效。");
         if (!Regex.IsMatch(settings.Username, @"^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}$")) throw new ArgumentException("用户名格式无效。");
         connection = settings;
-        var info = new PasswordConnectionInfo(settings.Host, settings.Port, settings.Username, settings.Password) { Timeout = TimeSpan.FromSeconds(18), RetryAttempts = 2 };
+        var info = new PasswordConnectionInfo(settings.Host, settings.Port, settings.Username, settings.Password) { Timeout = SshConnectTimeout, RetryAttempts = 2 };
         client = new MountSshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(20) };
         HostTrustRequiredException? trustRequired=null;
         client.HostKeyReceived += (_, e) =>
