@@ -75,7 +75,7 @@ internal sealed class MacClients(string directory)
     private static string? FindFreeRdp()
     {
         string bundled=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","RDP","sdl-freerdp"));
-        return new[]{bundled,"/opt/homebrew/bin/sdl-freerdp","/usr/local/bin/sdl-freerdp"}.FirstOrDefault(File.Exists);
+        return File.Exists(bundled) ? bundled : null;
     }
 
     internal static string[] FreeRdpArguments(RemoteDesktopConnection endpoint, AccountInfo account,
@@ -89,7 +89,7 @@ internal sealed class MacClients(string directory)
             $"/v:127.0.0.1:{endpoint.Port}", "/u:"+account.Username, "/p:"+account.Password,
             $"/size:{resolution.Width}x{resolution.Height}", "/sec:tls",
             "/cert:deny,fingerprint:sha256:"+endpoint.CertificateFingerprint,
-            "+clipboard", "/log-level:OFF"
+            "/title:Safe Code · 远程桌面", "+clipboard", "/log-level:OFF"
         };
         if (fullscreen) arguments.Add("/f");
         if (mode==RdpResizeMode.Scale) arguments.Add("/smart-sizing");
@@ -105,6 +105,10 @@ internal sealed class MacClients(string directory)
             UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true
         };
         start.ArgumentList.Add("/args-from:stdin");
+        start.Environment["OPENSSL_CONF"] = "/dev/null";
+        string resourceDirectory = Path.GetDirectoryName(path)!;
+        start.Environment["OPENSSL_MODULES"] = resourceDirectory;
+        start.Environment["OPENSSL_ENGINES"] = resourceDirectory;
         using var process=Process.Start(start)??throw new IOException("无法启动 FreeRDP。");
         process.OutputDataReceived+=(_,_)=>{};
         process.ErrorDataReceived+=(_,_)=>{};
@@ -115,7 +119,7 @@ internal sealed class MacClients(string directory)
                 await process.StandardInput.WriteLineAsync(argument.AsMemory(),ct);
             process.StandardInput.Close();
             await Task.Delay(350,ct);
-            if(process.HasExited)throw new IOException("FreeRDP 未能打开桌面。请确认已安装支持 SDL 的 FreeRDP 3，并检查 xrdp 的 TLS 和登录设置。");
+            if(process.HasExited)throw new IOException("未能打开远程桌面。请检查服务器上的 xrdp、TLS 和工作账户设置。");
         }
         catch
         {

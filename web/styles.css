@@ -499,3 +499,6 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
 .key-row-name{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .key-row-name .text-button{padding:2px 0;font-size:var(--type-small);white-space:nowrap}
 #key-add-form [hidden]{display:none!important}
+
+.step.done .input-remove-button{border-color:var(--border);color:var(--green)}
+.deploy-footer #reboot-required{color:#805e21}

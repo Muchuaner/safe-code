@@ -206,6 +206,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#login-help-dialog').addEventListener('close',()=>{if(!window.__safeCodeNativeDialogs&&!$('#login-screen').hidden)native('window.resize',{wide:false});});
     function applyServer(server){
       const hadAccount=!!nativeServer?.statuses?.account;
+      inputManaged=!!server.inputManaged;rebootRequired=!!server.rebootRequired;
       nativeServer=server;$('#update-login-password').hidden=false;$('#host-manage').disabled=!server.statuses?.account;states=ids.map(id=>server.statuses?.[id]?'done':'pending');
       if(currentTask>=0&&states[currentTask]!=='done')states[currentTask]='running';
       const desired=currentLocale();if(desired&&(server.timezone!==desired.timezone||server.systemLocale!==desired.locale))states[1]='pending';
@@ -356,7 +357,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         void queryIpInfo(serverConnection.egressIp);
         await pollClaudeBridge();
         if(response.gatewayWarnings?.length)void showAppMessage(response.gatewayWarnings.join('\n'),{title:'网关未恢复'});
-        if(result.activeJobs?.length)resumeJob(result.activeJobs[0]);return result;
+        if(result.activeJobs?.length)void resumeJob(result.activeJobs[0]);return result;
       }catch(error){
         if(attempt!==connectionAttempt)return null;
         connectionReady=false;connectionInFlight=false;lockWorkspace(true);connectionProgress(error.message,true);
@@ -381,26 +382,72 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       }
       await connect({host,username,password,port:sshPort});
     };
-    async function resumeJob(job){
-      busy=true;const advanced=job.operation==='cloud'||job.operation==='mount_install';if(advanced)beginOperation(job.operation,job.operation==='cloud'?'恢复 CloudCLI 安装进度':'恢复目录挂载安装进度');currentTask=ids.indexOf(job.operation);
-      if(currentTask>=0){states[currentTask]='running';taskLogs[currentTask]='恢复远端部署监控…';}renderTasks();
-      try{applyServer(await native('job.resume',job));if(advanced){appendOperationLog('后台安装任务已完成。');advancedOperation.status='安装完成。';}}
-      catch(e){if(advanced){appendOperationLog('安装未完成：'+e.message);advancedOperation.status='安装未完成，请查看日志后重试。';}else showAppMessage(e.message);}
-      finally{if(advanced){advancedOperation.done=true;if(displayedOperation===advancedOperation)$('#operation-log-status').textContent=advancedOperation.status;}currentTask=-1;busy=false;renderTasks();}
+    function inputRemovalMessage(server){
+      return server.inputPinyinInstalled
+        ? '已卸载当前工作用户的中文输入法配置，系统拼音包仍保留。重新登录远程桌面后生效。'
+        : '中文输入法已卸载，重新登录远程桌面后生效。';
     }
-    async function runTask(index){
-      if(!connectionReady||!deploymentSettingsReady())throw new Error('请先保存工作用户和本土化设置。');
+    async function resumeJob(job){
+      busy=true;
+      const removal=job.operation==='input_remove';
+      const advanced=job.operation==='cloud'||job.operation==='mount_install';
+      if(advanced)beginOperation(job.operation,job.operation==='cloud'?'恢复 CloudCLI 安装进度':'恢复目录挂载安装进度');
+      currentTask=ids.indexOf(removal?'input':job.operation);
+      if(currentTask>=0){states[currentTask]='running';taskLogs[currentTask]='恢复远端部署监控…';}renderTasks();
+      try{
+        const server=await native('job.resume',job);applyServer(server);
+        if(currentTask>=0){
+          states[currentTask]=server.statuses?.[ids[currentTask]]?'done':'pending';
+          taskLogs[currentTask]=removal?inputRemovalMessage(server):'部署完成，已检查服务器状态。';
+        }
+        if(advanced){appendOperationLog('后台安装任务已完成。');advancedOperation.status='安装完成。';}
+      }catch(error){
+        if(advanced){appendOperationLog('安装未完成：'+error.message);advancedOperation.status='安装未完成，请查看日志后重试。';}
+        else{
+          if(currentTask>=0){
+            states[currentTask]=nativeServer?.statuses?.[ids[currentTask]]?'done':'pending';
+            taskLogs[currentTask]=error.message;
+          }
+          showAppMessage(error.message);
+        }
+      }finally{
+        if(advanced){advancedOperation.done=true;if(displayedOperation===advancedOperation)$('#operation-log-status').textContent=advancedOperation.status;}
+        currentTask=-1;busy=false;renderTasks();
+      }
+    }
+    async function runTask(index,removal=false){
+      if(!connectionReady||(!removal&&!deploymentSettingsReady()))throw new Error('请先保存工作用户和本土化设置。');
       const previousState=states[index];currentTask=index;states[index]='running';taskLogs[index]='正在连接 Ubuntu 部署模块…';renderTasks();
       try{
         const preset=currentLocale();
         const locale=preset?{region:preset.name,timezone:preset.timezone,locale:preset.locale,language:preset.language}:null;
-        const result=await native('deploy',{step:ids[index],locale,username:accountOptions.username||nativeServer?.username||'workspace',hostname:accountOptions.hostname||'',password:accountOptions.password||''});applyServer(result);
-        if(!result.statuses?.[ids[index]])throw new Error(tasks[index][0]+'验证未通过，请查看日志。');
-        taskLogs[index]='部署完成，已通过实际状态检查。';if(index===0){accountOptions={};accountDraftPending=false;}
-      }catch(error){states[index]=index===0&&previousState==='done'?'done':'pending';taskLogs[index]='失败：'+error.message;throw error;}
-      finally{currentTask=-1;renderTasks();}
+        const step=removal?'input_remove':ids[index];
+        const result=await native('deploy',removal?{step}:{step,locale,username:accountOptions.username||nativeServer?.username||'workspace',hostname:accountOptions.hostname||'',password:accountOptions.password||''});
+        applyServer(result);
+        if(removal){
+          if(result.inputManaged||result.statuses?.input)throw new Error('中文输入法卸载验证未通过，请查看日志。');
+          states[index]='pending';taskLogs[index]=inputRemovalMessage(result);
+        }else{
+          if(!result.statuses?.[step])throw new Error(tasks[index][0]+'验证未通过，请查看日志。');
+          taskLogs[index]='部署完成，已通过实际状态检查。';
+          if(index===0){accountOptions={};accountDraftPending=false;}
+        }
+      }catch(error){
+        states[index]=removal||index===0?previousState:'pending';
+        taskLogs[index]=error.message;
+        throw error;
+      }finally{currentTask=-1;renderTasks();}
     }
     deployOne=async function(index){if(busy||!connectionReady||!deploymentSettingsReady()||!canDeployTask(index))return;selecting=false;selectedTasks.clear();busy=true;try{await runTask(index);}catch(error){showAppMessage(error.message);}finally{busy=false;renderTasks();}};
+    removeChineseInput=async()=>{
+      if(busy||!connectionReady||!inputManaged)return;
+      const attempt=connectionAttempt;
+      const confirmed=await showAppMessage('将卸载当前工作用户的 SafeCode 中文输入法。中文字体、词库和其他输入法会保留。卸载后请重新登录远程桌面。',{title:'卸载中文输入法',confirm:'卸载',cancel:'取消'});
+      if(!confirmed||busy||attempt!==connectionAttempt||!connectionReady||!inputManaged)return;
+      busy=true;
+      try{await runTask(ids.indexOf('input'),true);}catch(error){showAppMessage(error.message);}
+      finally{busy=false;renderTasks();}
+    };
     $('#deploy-all').onclick=async()=>{
       if(busy||!connectionReady||!deploymentSettingsReady())return;if(!selecting){selecting=true;selectedTasks.clear();renderTasks();return;}
       const queue=[...selectedTasks].filter(i=>states[i]!=='done').sort((a,b)=>a-b);if(!queue.length)return;

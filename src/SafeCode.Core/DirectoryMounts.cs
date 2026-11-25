@@ -140,24 +140,8 @@ public sealed partial class SshSession
     private async Task RestoreMountControlAsync(CancellationToken ct)
     {
         await operations.WaitAsync(ct);
-        try
-        {
-            if(IsConnected)return;
-            DisposeMountResource(client);client=null;var replacement=NewMountConnection();
-            try
-            {
-                await replacement.ConnectAsync(ct);
-                using var check=replacement.CreateCommand("cat /etc/os-release");check.CommandTimeout=TimeSpan.FromSeconds(10);await check.ExecuteAsync(ct);
-                if(!ParseOsRelease(check.Result).TryGetValue("ID",out var id)||id!="ubuntu")throw new UnsupportedOsException("恢复目标不再是 Ubuntu，已停止挂载恢复。");
-                using var create=replacement.CreateCommand("mktemp -d /tmp/safe-code.XXXXXXXX");create.CommandTimeout=TimeSpan.FromSeconds(10);await create.ExecuteAsync(ct);string restoredDirectory=create.Result.Trim();
-                if(!restoredDirectory.StartsWith("/tmp/safe-code."))throw new IOException("无法恢复管理通道。");
-                using var sftp=MakeSftp();await sftp.ConnectAsync(ct);
-                await UploadManagementModulesAsync(sftp,restoredDirectory,ct);
-                remoteDirectory=restoredDirectory;client=replacement;
-            }
-            catch{DisposeMountResource(replacement);throw;}
-        }
-        finally{operations.Release();}
+        try { await RestoreManagementConnectionAsync(ct); }
+        finally { operations.Release(); }
     }
     private string MountSettingsPath=>Path.Combine(dataDirectory,"mounts-"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Fingerprint)))[..20].ToLowerInvariant()+".json");
     private void SaveMountMappings(List<MountMapping> mappings)=>File.WriteAllText(MountSettingsPath,JsonSerializer.Serialize(mappings,JsonDefaults.Options));

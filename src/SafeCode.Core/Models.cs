@@ -29,6 +29,9 @@ public sealed class ServerInfo
     public string SystemLocale { get; set; } = "";
     public bool IpPolicyHealthy { get; set; }
     public string ClaudeVersion { get; set; } = "";
+    public bool RebootRequired { get; set; }
+    public bool InputManaged { get; set; }
+    public bool InputPinyinInstalled { get; set; }
     public bool DesktopReady { get; set; }
     public bool CloudReady { get; set; }
     public bool MountReady { get; set; }

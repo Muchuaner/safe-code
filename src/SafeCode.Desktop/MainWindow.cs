@@ -706,7 +706,7 @@ public sealed class MainWindow : Window
                 try
                 {
                     var target = RequireSession();
-                    var locale = preferences.RequireDeploymentChoices(target);
+                    var locale = activeStep=="input_remove" ? null : preferences.RequireDeploymentChoices(target);
                     var draft = activeStep=="account" ? preferences.ReadDraft(target) ?? throw new InvalidOperationException("请先保存工作账户设置。") : null;
                     var result = await target.DeployAsync(activeStep, locale, draft?.Username??"workspace", lifetime.Token, draft?.Password??"", draft?.Hostname??"");
                     if(activeStep=="account"&&result.Statuses.GetValueOrDefault("account"))preferences.ClearDraft(target);

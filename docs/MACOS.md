@@ -16,7 +16,7 @@ SSH 终端调用 macOS 的 Terminal 和 SSH 客户端。登录信息与工作账
 
 ## 远程桌面和目录挂载
 
-远程桌面复用已验证的 SSH 隧道。可在「分辨率设置」中选择原始大小、等比缩放、动态分辨率及启动时全屏。安装 SDL FreeRDP 3 时可由 Safe Code 提交工作账户凭据。使用 Windows App 或其他默认 RDP 客户端时，由相应客户端处理凭据和显示设置。
+在维护模式点击「打开桌面」，Safe Code 会通过已验证的 SSH 隧道使用服务器的工作账户登录。安装包内置远程桌面组件，凭据通过本机进程管道传入。可在「分辨率设置」中选择原始大小、等比缩放、动态分辨率及启动时全屏。
 
 目录挂载支持多组本机目录与服务器目录。关闭主窗口后，Safe Code 继续在后台运行。点击屏幕右上方的终端形菜单栏图标，可以查看状态、打开主界面、重连或安全退出。首次关闭主窗口时，macOS 会询问是否允许通知。允许后，点击后台运行通知也能回到主界面。安全退出会等待目录同步和卸载完成。
 
@@ -30,3 +30,7 @@ SSH 终端调用 macOS 的 Terminal 和 SSH 客户端。登录信息与工作账
 ## 更新和反馈
 
 可在应用菜单打开「更新与反馈」，手动检查版本、提交反馈，或选择是否开启使用统计和匿名功能诊断。更新仅匹配 Apple 芯片安装包。下载并校验后退出旧版，再打开镜像替换应用。[在线更新](https://github.com/Muchuaner/safe-code/blob/main/docs/UPDATES.md) · [匿名功能诊断](https://github.com/Muchuaner/safe-code/blob/main/docs/DIAGNOSTICS.md)
+
+## 本地构建
+
+使用 Apple Silicon、Apple Command Line Tools、.NET 10 SDK 和 CMake 构建安装包。构建工具核验上游源码及用于静态链接的 Apple Silicon OpenSSL 构建包，随应用分发 FreeRDP、OpenSSL、SDL3、SDL3_ttf、FreeType 以及 Open Sans 的许可证。

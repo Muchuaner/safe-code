@@ -2,15 +2,18 @@
 """Build a self-contained Apple Silicon app and disk image without changing installed apps or publishing."""
 import argparse,hashlib,json,os,plistlib,shutil,subprocess,tarfile,tempfile,urllib.request
 from pathlib import Path,PurePosixPath
+from build_macos_rdp import build as build_rdp, verify_library_paths
 root=Path(__file__).resolve().parents[1]
 frp_version='0.65.0';frp_archive='frp_'+frp_version+'_darwin_arm64.tar.gz'
 frp_url='https://github.com/fatedier/frp/releases/download/v'+frp_version+'/'+frp_archive
 frp_sha256='bce3badaf40cf5d3811c9eae593f3b24833bf7cb13b8b7c3f9453e94af45ded1'
-p=argparse.ArgumentParser();p.add_argument('--arch',choices=['arm64'],default='arm64');p.add_argument('--dotnet',default=str(root/'.local/dotnet/dotnet') if (root/'.local/dotnet/dotnet').is_file() else shutil.which('dotnet') or 'dotnet');p.add_argument('--output-dir',type=Path,default=root/'dist/macos');p.add_argument('--sign-identity',default='-');p.add_argument('--skip-dmg',action='store_true');p.add_argument('--work-dir',type=Path,default=Path.home()/'Library/Caches/SafeCode/Builds');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--arch',choices=['arm64'],default='arm64');p.add_argument('--dotnet',default=str(root/'.local/dotnet/dotnet') if (root/'.local/dotnet/dotnet').is_file() else shutil.which('dotnet') or 'dotnet');p.add_argument('--output-dir',type=Path,default=root/'dist/macos');p.add_argument('--sign-identity',default='-');p.add_argument('--skip-dmg',action='store_true');p.add_argument('--work-dir',type=Path,default=Path.home()/'Library/Caches/SafeCode/Builds');p.add_argument('--cmake',default='cmake');p.add_argument('--rdp-build-dir',type=Path);a=p.parse_args()
 sdk=subprocess.check_output([a.dotnet,'--list-sdks'],text=True)
 if not any(line.startswith('10.') for line in sdk.splitlines()):raise SystemExit('需要 .NET 10 SDK；可用 --dotnet 指定 SDK 所在的 dotnet。')
 if not shutil.which('swiftc'):raise SystemExit('需要 Apple Command Line Tools / Swift。')
-version='0.4.9';base=a.output_dir.resolve()/a.arch;base.mkdir(parents=True,exist_ok=True);work=a.work_dir.resolve()/version/a.arch;work.mkdir(parents=True,exist_ok=True);app=work/'Safe Code.app'
+if not shutil.which(a.cmake):raise SystemExit('需要 CMake 编译随包分发的远程桌面组件，可用 --cmake 指定路径。')
+version='0.4.10';base=a.output_dir.resolve()/a.arch;base.mkdir(parents=True,exist_ok=True);work=a.work_dir.resolve()/version/a.arch;work.mkdir(parents=True,exist_ok=True);app=work/'Safe Code.app'
+rdp_payload=build_rdp(a.rdp_build_dir or a.work_dir/'rdp',a.cmake)
 if app.exists():shutil.rmtree(app)
 contents=app/'Contents';resources=contents/'Resources';core=resources/'Core';web=resources/'Web';macos=contents/'MacOS'
 web_pages=web/'web'
@@ -43,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='safecode-icon-') as temp:
  for size in [16,32,128,256,512]:
   for scale in [1,2]:run(['sips','-z',str(size*scale),str(size*scale),root/'assets/icons/safe-code-shortcut.png','--out',iconset/('icon_'+str(size)+'x'+str(size)+('@2x' if scale==2 else '')+'.png')],stdout=subprocess.DEVNULL)
  run(['iconutil','-c','icns',iconset,'-o',resources/'AppIcon.icns'])
-info={'CFBundleIdentifier':'org.safecode.desktop','CFBundleName':'Safe Code','CFBundleDisplayName':'Safe Code','CFBundleExecutable':'SafeCode','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.4.9','CFBundleVersion':'0.4.9','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'15.0','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'用系统 Terminal 打开已核验服务器的 SSH 终端；不向终端传递密码。','NSHumanReadableCopyright':'Safe Code contributors. MIT License.'}
+info={'CFBundleIdentifier':'org.safecode.desktop','CFBundleName':'Safe Code','CFBundleDisplayName':'Safe Code','CFBundleExecutable':'SafeCode','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.4.10','CFBundleVersion':'0.4.10','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'15.0','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'用系统 Terminal 打开已核验服务器的 SSH 终端；不向终端传递密码。','NSHumanReadableCopyright':'Safe Code contributors. MIT License.'}
 (contents/'Info.plist').write_bytes(plistlib.dumps(info))
 shutil.copy2(root/'LICENSE',resources/'LICENSE')
 shutil.copy2(root/'third_party'/'THIRD_PARTY_NOTICES.md',resources/'THIRD_PARTY_NOTICES.md')
@@ -61,11 +64,16 @@ for package in packages:
  for path in source.rglob('*'):
   if path.is_file() and ('license' in path.name.lower() or 'notice' in path.name.lower()) and path.suffix.lower() in ['.txt','.md','']:
    shutil.copy2(path,legal/(name+'-'+ver+'-'+str(path.relative_to(source)).replace('/','_')))
+for path in (rdp_payload/'licenses').iterdir():
+ if path.is_file():shutil.copy2(path,legal/path.name)
+rdp=resources/'RDP';rdp.mkdir();rdp_executable=rdp/'sdl-freerdp'
+shutil.copy2(rdp_payload/'sdl-freerdp',rdp_executable)
+verify_library_paths(rdp_executable)
 mit=(root/'LICENSE').read_text();(legal/'SSH.NET-2026.0.0-MIT.txt').write_text('MIT License\nCopyright Renci 2010-2026\n\n'+mit[mit.index('Permission is hereby'):])
 run(['xattr','-cr',app])
 # Sign Mach-O helpers before sealing the outer bundle. No hardened-runtime entitlement escalation.
 magics=[b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca']
-for path in core.rglob('*'):
+for path in [*core.rglob('*'),rdp_executable]:
  if path.is_file():
   with path.open('rb') as f:magic=f.read(4)
   if magic in magics:run(['codesign','--force','--sign',a.sign_identity,'--timestamp=none',path],stdout=subprocess.DEVNULL)

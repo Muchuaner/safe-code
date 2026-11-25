@@ -432,7 +432,7 @@ internal sealed class MacBackend : IDisposable
                 step=Read("step");
                 if(step=="account"&&hostControl?.Enabled==true)throw new InvalidOperationException("请先停用本机控制，再修改工作账户。");
                 var deploymentTarget=RequireSession();
-                var locale=preferences.RequireDeploymentChoices(deploymentTarget);
+                var locale=step=="input_remove"?null:preferences.RequireDeploymentChoices(deploymentTarget);
                 var draft=step=="account"?preferences.ReadDraft(deploymentTarget)??throw new InvalidOperationException("请先保存工作账户设置。"):null;
                 var result=await deploymentTarget.DeployAsync(step,locale,draft?.Username??"workspace",ct,draft?.Password??"",draft?.Hostname??"");
                 if(step=="account"&&result.Statuses.GetValueOrDefault("account"))preferences.ClearDraft(deploymentTarget);

@@ -30,12 +30,15 @@ let selectedTasks = new Set();
 let states = [];
 let taskLogs = [];
 let accountDraftPending=false;
+let inputManaged=false;
+let rebootRequired=false;
+let removeChineseInput;
 const tasks = [
   ['更新系统并设置工作用户', '先等待系统更新、更新软件包，再设置工作用户和机器名称。'],
   ['本土化设置', '点击「自定义」选择所在地、时区与系统语言。'],
   ['安装虚拟桌面', '配置 XFCE 与远程桌面，保留断线后的工作状态。'],
   ['安装 Chrome', '安装 Chrome 浏览器，配置桌面启动入口。'],
-  ['安装中文输入法', '配置 Fcitx5 拼音输入法与中文字体。'],
+  ['安装中文输入法', '按需安装 Fcitx5 拼音输入法，支持卸载。'],
   ['安装 Claude Code', '准备 Claude Code、Git 和 tmux 开发工具。'],
   ['配置 SSH 安全通道', '通过加密隧道连接终端与远程桌面。']
 ];
@@ -139,6 +142,10 @@ function renderTasks(){
     const heading=document.createElement('h3');heading.textContent=title;
     const desc=document.createElement('p');desc.className=taskLogs[i]?'task-log':'';const detail=i===1&&preset?preset.name+' · '+preset.timezone+' · '+preset.locale:description;desc.textContent=taskLogs[i]||detail;desc.setAttribute('role','status');desc.setAttribute('aria-live','polite');copy.append(heading,desc);
     const button=document.createElement('button');button.className='deploy-button';button.textContent=i===0&&accountDraftPending&&states[i]==='done'?'更新':states[i]==='done'?'已完成':states[i]==='running'?'部署中…':'开始部署';button.disabled=busy||!ready||!canDeployTask(i);button.setAttribute('aria-label',title+'：'+button.textContent);button.onclick=()=>deployOne(i);
+    if(i===4&&inputManaged&&!selecting&&states[i]!=='running'){
+      button.classList.add('input-remove-button');button.textContent='卸载';button.disabled=busy;
+      button.setAttribute('aria-label','卸载中文输入法');button.onclick=()=>removeChineseInput();
+    }
     if(selecting){
       const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.className='task-checkbox';checkbox.disabled=states[i]==='done'||busy||!ready;checkbox.checked=states[i]!=='done'&&selectedTasks.has(i);checkbox.setAttribute('aria-label','选择'+title);
       checkbox.onchange=()=>{if(checkbox.checked)selectedTasks.add(i);else selectedTasks.delete(i);updateBatchControls();};
@@ -151,6 +158,7 @@ function renderTasks(){
   const finished=completed===tasks.length;
   $('#overall-detail').textContent=!ready&&(!finished||accountDraftPending)?'请先分别打开前两项「自定义」并保存设置。':finished?'开发环境已就绪。':'可单项部署，或选择所需项目批量部署。';
   $('#deploy-all').disabled=busy||!ready||finished;$('#deploy-all').textContent=finished?'部署完成':busy?'正在部署…':'一键部署';
+  $('#reboot-required').hidden=!rebootRequired;
   updateBatchControls();
 }
 function canDeployTask(index){return states[index]!=='done'||(index===0&&accountDraftPending);}

@@ -19,7 +19,12 @@ def error_code(error):
     if isinstance(error,subprocess.TimeoutExpired):return 'timeout'
     return 'operation_failed'
 
-LONG_OPERATIONS={'account','localization','desktop','chrome','input','claude','ssh','cloud','mount_install','safe_code_api_repair'}
+LONG_OPERATIONS={'account','localization','desktop','chrome','input','input_remove','claude','ssh','cloud','mount_install','safe_code_api_repair'}
+INPUT_PACKAGES=['fcitx5','fcitx5-pinyin','fcitx5-frontend-gtk3','fcitx5-frontend-qt5']
+INPUT_AUTOSTART='.config/autostart/fcitx5.desktop'
+INPUT_DESKTOP='[Desktop Entry]\nType=Application\nName=Fcitx5\nExec=fcitx5 -d\nTerminal=false\n'
+INPUT_ENVIRONMENT='export XMODIFIERS="@im=fcitx"\nexport GTK_IM_MODULE=fcitx\nexport QT_IM_MODULE=fcitx\n'
+INPUT_PROFILE='[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=pinyin\n\n[Groups/0/Items/0]\nName=keyboard-us\nLayout=\n\n[Groups/0/Items/1]\nName=pinyin\nLayout=\n\n[GroupOrder]\n0=Default\n'
 TASKS=['account','localization','desktop','chrome','input','claude','ssh']
 def os_info():
     data={}
@@ -58,16 +63,20 @@ def run(args,check=True,env=None,stdin=None,timeout=180):
         raise RuntimeError(detail[-1600:] or '命令执行失败')
     return p
 
-def stream(args,env=None):
+def stream(args,env=None,report_upgrade=False):
     p=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,env=env,bufsize=1)
     reason=None
+    applying=False
     for line in p.stdout:
+        if report_upgrade and not applying and line.startswith(("Preconfiguring packages", "Preparing to unpack", "Unpacking", "Setting up")):
+            applying=True
+            log("软件包已下载，正在安装系统更新。")
         if line.strip():log(line.rstrip())
         lower=line.lower()
         if 'could not resolve' in lower or 'temporary failure resolving' in lower:reason='dns_failure'
         elif 'no space left on device' in lower:reason='disk_full'
         elif 'dpkg was interrupted' in lower:reason='package_interrupted'
-        elif 'failed to fetch' in lower and reason not in ['dns_failure','disk_full']:reason='package_fetch_failed'
+        elif ('failed to fetch' in lower or 'unable to locate package' in lower or 'has no installation candidate' in lower) and reason not in ['dns_failure','disk_full']:reason='package_fetch_failed'
         elif ('lock-frontend' in lower or 'waiting for cache lock' in lower or 'could not get lock' in lower) and reason is None:reason='package_lock_wait'
     if p.wait():
         hints={'package_lock_wait':'系统包管理器正被占用，请稍后重试。','dns_failure':'服务器无法解析下载域名，请检查 DNS 后重试。','package_fetch_failed':'软件包下载失败，请检查服务器网络后重试。','disk_full':'服务器磁盘空间不足，请清理后重试。','package_interrupted':'上次软件包安装被中断，请修复 dpkg 后重试。'}
@@ -91,7 +100,7 @@ def account():
 
 def home():return Path(pwd.getpwnam(account()['username']).pw_dir)
 USER_FILES = r"""
-import json,os,pathlib,sys,tempfile
+import json,os,pathlib,re,sys,tempfile
 request=json.load(sys.stdin);base=pathlib.Path(os.environ['HOME']).resolve();relative=pathlib.Path(request['relative'])
 if relative.is_absolute() or '..' in relative.parts:raise ValueError('用户目录路径无效。')
 target=base/relative;operation=request['operation']
@@ -351,8 +360,36 @@ if operation=='remove_alias':
     destination=pathlib.Path(request['destination'])
     if target.is_symlink() and target.readlink()==destination:target.unlink();target.mkdir(mode=0o700)
     sys.exit(0)
+if operation in ['remove_exact','write_if_missing','session_environment']:
+    if target.is_symlink() or target.exists() and (not target.is_file() or target.stat().st_size>1048576):
+        raise ValueError('配置文件不是普通文件或超过大小限制。')
+    if operation=='remove_exact':
+        if target.is_file():
+            if target.read_text()!=request['content']:raise ValueError('输入法自启动文件已被修改，请先检查自定义配置。')
+            target.unlink()
+        sys.exit(0)
+    if operation=='write_if_missing' and target.exists():
+        if request.get('requireExact') and target.read_text()!=request['content']:
+            raise ValueError('已有其他输入法自启动配置，已保留现有设置。')
+        sys.exit(0)
+if operation=='session_environment':
+    previous=target.read_text() if target.exists() else ''
+    environment=request['inputEnvironment']
+    # Match the marked block or the contiguous lines written after LANG by earlier versions.
+    block='# Safe Code: Fcitx5\n'+environment+'# Safe Code: end Fcitx5\n'
+    content=previous.replace(block,'')
+    generated_lang=r'\Aexport LANG=[a-z]{2}_[A-Z]{2}\.UTF-8\n'
+    content=re.sub('('+generated_lang+')'+re.escape(environment),r'\1',content,count=1)
+    locale=request.get('locale')
+    if locale:
+        locale_line='export LANG='+locale+'\n'
+        if re.match(generated_lang,content):content=re.sub(generated_lang,locale_line,content,count=1)
+        else:content=locale_line+content
+    if request['inputEnabled']:content=(content.rstrip('\n')+'\n' if content else '')+block
+    if content==previous:sys.exit(0)
+    if target.exists():request['mode']=target.stat().st_mode&0o777
+else:content=request['content']
 target.parent.mkdir(parents=True,exist_ok=True)
-content=request['content']
 if operation=='append_unique':
     if target.exists() and (not target.is_file() or target.stat().st_size>1048576):raise ValueError('配置文件不是普通文件或超过大小限制。')
     previous=target.read_text() if target.exists() else ''
@@ -428,6 +465,27 @@ def wait_package_manager(timeout=900):
         log('系统正在更新，正在等待包管理器完成，请勿关闭服务器…')
         time.sleep(15)
 
+def refresh_package_lists(options,env,force=False):
+    sources=Path('/etc/apt/sources.list.d')
+    files=[Path('/etc/apt/sources.list'),*sorted(sources.glob('*.list')),*sorted(sources.glob('*.sources'))]
+    digest=hashlib.sha256()
+    for path in files:
+        if path.is_file():
+            digest.update(str(path).encode()+b'\0'+path.read_bytes()+b'\0')
+    marker=STATE/'apt-index.json'
+    fingerprint=digest.hexdigest()
+    if marker.is_file() and not force:
+        try:saved=json.loads(marker.read_text())
+        except (OSError,ValueError):saved={}
+        updated=saved.get('updatedAt') if isinstance(saved,dict) else None
+        if isinstance(updated,(int,float)) and saved.get('sources')==fingerprint and 0<=time.time()-updated<900:
+            log('软件源索引刚刚更新，复用本次部署的索引。')
+            return True
+    log('正在更新软件源，请稍候…')
+    stream(options+['update'],env)
+    write(marker,json.dumps({'sources':fingerprint,'updatedAt':time.time()}),0o600)
+    return False
+
 def prepare_system():
     marker=STATE/'system-prepared.json'
     if marker.exists():return
@@ -438,9 +496,9 @@ def prepare_system():
     if audit.stdout.strip():
         log('检测到未完成的软件包配置，正在继续完成…')
         stream(['dpkg','--configure','-a'],env)
-    log('正在更新软件源，请稍候…');stream(opts+['update'],env)
-    log('正在更新系统软件包，首次安装可能需要较长时间…')
-    stream(opts+['upgrade','-y','--with-new-pkgs','--no-remove'],env)
+    refresh_package_lists(opts,env,force=True)
+    log('正在下载系统更新，首次安装可能需要较长时间…')
+    stream(opts+['upgrade','-y','--with-new-pkgs','--no-remove'],env,report_upgrade=True)
     write(marker,json.dumps({'completedAt':int(time.time())}),0o600)
     log('系统准备完成，继续安装所选组件。')
     if Path('/var/run/reboot-required').exists():log('系统更新提示稍后需要重启；本次不会自动重启服务器。')
@@ -450,8 +508,13 @@ def apt(packages):
     if not missing:log('所需组件已安装，跳过重复下载。');return
     wait_package_manager()
     env=package_environment();opts=package_options()
-    stream(opts+['update'],env)
-    stream(opts+['install','-y','--no-install-recommends']+missing,env)
+    reused=refresh_package_lists(opts,env)
+    try:stream(opts+['install','-y','--no-install-recommends']+missing,env)
+    except OperationError as error:
+        if error.code!='package_fetch_failed' or not reused:raise
+        # A mirror may have moved a package since a recent index refresh.
+        refresh_package_lists(opts,env,force=True)
+        stream(opts+['install','-y','--no-install-recommends']+missing,env)
 
 def active(unit):return run(['systemctl','is-active','--quiet',unit],False).returncode==0
 def version(path):
@@ -485,12 +548,14 @@ def inspect():
         timezone=run(['timedatectl','show','-p','Timezone','--value'],False).stdout.strip()
         localized=timezone==desired.get('timezone') and Path('/etc/default/locale').exists() and desired.get('locale','') in Path('/etc/default/locale').read_text() and all(package_installed(p) for p in locale_packages(desired.get('locale','')))
     pub=user_read('.ssh/authorized_keys') if account_ok else ''
+    pinyin=account_ok and package_installed('fcitx5-pinyin')
+    managed_input=account_ok and (user_read(INPUT_AUTOSTART)==INPUT_DESKTOP or owns_pinyin())
     statuses={
       'account':account_ok and bool(a.get('hostname')) and a['hostname']==os.uname().nodename,
       'localization':localized,
       'desktop':package_installed('xfce4-session') and package_installed('xorgxrdp') and active('xrdp') and loopback,
       'chrome':bool(version('/usr/bin/google-chrome-stable')),
-      'input':package_installed('fcitx5-pinyin') and (h/'.config/autostart/fcitx5.desktop').exists(),
+      'input':pinyin and (h/INPUT_AUTOSTART).exists(),
       'claude':'Claude Code' in version(h/'.local/bin/claude'),
       'ssh':bool('safe-code-' in pub),
     }
@@ -518,6 +583,7 @@ def inspect():
       'systemLocale':match[1] if match else '', 'ipPolicyHealthy':healthy,
       'claudeVersion':version(h/'.local/bin/claude'),'desktopReady':statuses['desktop'],
       'cloudReady':active('safe-code-cloudcli'),'mountReady':package_installed('davfs2'),
+      'rebootRequired':Path('/var/run/reboot-required').exists(),'inputManaged':managed_input,'inputPinyinInstalled':pinyin,
       'ipPolicy':policy,'socksEgress':socks,'activeJobs':active_jobs() if os.geteuid()==0 else []}
 
 def setup_account(options):
@@ -552,6 +618,7 @@ def setup_account(options):
         run(['systemctl','disable','--now','safe-code-cloudcli'])
         log('旧工作用户的 CloudCLI 已停止；可为新用户重新安装。')
     password=password or secrets.token_urlsafe(20)
+    log('正在创建工作用户并设置机器名称…')
     run(['hostnamectl','set-hostname',hostname])
     run(['useradd','-m','-s','/bin/bash',user])
     run(['chpasswd'],stdin=user+':'+password+'\n')
@@ -619,7 +686,10 @@ def setup_xsession():
     locale='en_US.UTF-8'
     if (STATE/'localization.json').exists():locale=json.loads((STATE/'localization.json').read_text())['locale']
     user_write('.xsession','#!/bin/sh\nunset DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER\nexec startxfce4\n',0o755)
-    user_write('.xsessionrc','export LANG='+locale+'\nexport XMODIFIERS="@im=fcitx"\nexport GTK_IM_MODULE=fcitx\nexport QT_IM_MODULE=fcitx\n')
+    update_input_environment(user_read(INPUT_AUTOSTART)==INPUT_DESKTOP and package_installed('fcitx5-pinyin'),locale)
+
+def update_input_environment(enabled,locale=None):
+    user_files('session_environment','.xsessionrc',inputEnvironment=INPUT_ENVIRONMENT,inputEnabled=enabled,locale=locale)
 
 def setup_desktop(options):
     account();apt(['xfce4-session','xfwm4','xfce4-panel','xfdesktop4','xfce4-settings','xfce4-terminal','thunar','dbus-x11','xrdp','xorgxrdp','xauth','x11-utils','x11-xserver-utils','xinput','xdg-user-dirs','fonts-noto-cjk'])
@@ -656,12 +726,45 @@ def setup_chrome(options):
     user_write('Desktop/Chrome.desktop','[Desktop Entry]\nType=Application\nName=Chrome\nExec=google-chrome-stable\nIcon=google-chrome\nTerminal=false\n',0o755)
     log(version('/usr/bin/google-chrome-stable'))
 
+def pinyin_owner():
+    entry=pwd.getpwnam(account()['username'])
+    return {'username':entry.pw_name,'uid':entry.pw_uid}
+
+def owns_pinyin():
+    marker=STATE/'input-pinyin-owner.json'
+    return marker.is_file() and json.loads(marker.read_text())==pinyin_owner()
+
 def setup_input(options):
-    account();apt(['fcitx5','fcitx5-pinyin','fcitx5-frontend-gtk3','fcitx5-frontend-qt5','fonts-noto-cjk'])
-    setup_xsession()
-    user_write('.config/fcitx5/profile','[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=pinyin\n\n[Groups/0/Items/0]\nName=keyboard-us\nLayout=\n\n[Groups/0/Items/1]\nName=pinyin\nLayout=\n\n[GroupOrder]\n0=Default\n')
-    user_write('.config/autostart/fcitx5.desktop','[Desktop Entry]\nType=Application\nName=Fcitx5\nExec=fcitx5 -d\nTerminal=false\n')
+    account()
+    existing=user_read(INPUT_AUTOSTART)
+    if existing and existing!=INPUT_DESKTOP:
+        raise RuntimeError('已有其他输入法自启动配置，已保留现有设置。')
+    marker=STATE/'input-pinyin-owner.json'
+    if not marker.exists() and not package_installed('fcitx5-pinyin'):
+        write(marker,json.dumps(pinyin_owner()),0o600)
+    apt(INPUT_PACKAGES+['fonts-noto-cjk'])
+    user_files('write_if_missing','.config/fcitx5/profile',content=INPUT_PROFILE)
+    user_files('write_if_missing',INPUT_AUTOSTART,content=INPUT_DESKTOP,requireExact=True)
+    update_input_environment(True)
     log('拼音与中文字体已就绪，重新登录桌面后生效。')
+
+def remove_input(options):
+    owner=pinyin_owner()
+    # Remove exactly the legacy or current Safe Code entry while preserving the user's profile.
+    user_files('remove_exact',INPUT_AUTOSTART,content=INPUT_DESKTOP)
+    update_input_environment(False)
+    if owns_pinyin():
+        shared=any((Path(entry.pw_dir)/'.config/fcitx5').exists() or (Path(entry.pw_dir)/INPUT_AUTOSTART).exists()
+                   for entry in pwd.getpwall() if entry.pw_uid!=owner['uid'] and entry.pw_dir.startswith(('/home/','/root')))
+        if package_installed('fcitx5-pinyin') and not shared:
+            wait_package_manager()
+            # dpkg checks dependencies and cannot remove any other package in this invocation.
+            removed=run(['dpkg','--remove','fcitx5-pinyin'],False,env=package_environment())
+            if removed.returncode:log('系统中仍保留拼音包，可能有其他软件依赖或包管理器正忙。')
+        (STATE/'input-pinyin-owner.json').unlink(missing_ok=True)
+    if package_installed('fcitx5-pinyin'):log('系统中的拼音包已保留，仅卸载当前工作用户的 Safe Code 输入法设置。')
+    log('工作用户的中文输入法配置已卸载，重新登录桌面后生效。')
+
 
 def file_sha256(file):
     digest=hashlib.sha256()
@@ -1731,6 +1834,21 @@ def active_jobs():
         if status in ['active','activating']:values.append({'jobId':directory.name,'operation':metadata['operation']})
     return values
 
+def job_outcome(directory):
+    value=directory/'result.json'
+    failure=directory/'error.json'
+    if value.is_file():return json.loads(value.read_text()),{}
+    if failure.is_file():return None,json.loads(failure.read_text())
+    return None,{}
+
+def install_in_progress():
+    try:
+        with (STATE/'install.lock').open('rb') as lock:
+            fcntl.flock(lock,fcntl.LOCK_SH|fcntl.LOCK_NB)
+    except BlockingIOError:return True
+    except FileNotFoundError:pass
+    return False
+
 def poll_job(job,offset):
     directory=job_directory(job);offset=max(0,int(offset));lines=[];next_offset=offset
     path=directory/'output.log'
@@ -1741,13 +1859,21 @@ def poll_job(job,offset):
         if complete:
             data=data[:complete];next_offset=offset+len(data)
             lines=[x for x in data.decode('utf-8',errors='replace').splitlines() if not x.startswith(('SC_RESULT:','SC_ERROR:','SC_ERROR_JSON:','SC_ERROR_CODE:'))]
-    value=json.loads((directory/'result.json').read_text()) if (directory/'result.json').exists() else None
-    failure=json.loads((directory/'error.json').read_text()) if (directory/'error.json').exists() else {}
+    value,failure=job_outcome(directory)
+    if value is None and not failure:
+        try:status=run(['systemctl','is-active','safe-code-job-'+job+'.service'],False,timeout=8)
+        except subprocess.TimeoutExpired:status=None
+        # A job can write its result and exit between our first read and systemctl.
+        value,failure=job_outcome(directory)
+        if value is None and not failure and status is not None:
+            metadata=json.loads((directory/'metadata.json').read_text())
+            last_activity=max(metadata['created'],path.stat().st_mtime if path.is_file() else 0)
+            inactive=status.returncode in [3,4] and status.stdout.strip() in ['inactive','failed','unknown']
+            if inactive and time.time()-last_activity>15 and not install_in_progress():
+                value,failure=job_outcome(directory)
+                if value is None and not failure:
+                    failure={'error':'服务器上的部署任务已停止，未写入结果。请检查实际安装状态后重试。'}
     error=failure.get('error')
-    if value is None and error is None:
-        status=run(['systemctl','is-active','safe-code-job-'+job+'.service'],False).stdout.strip()
-        age=time.time()-json.loads((directory/'metadata.json').read_text())['created']
-        if status not in ['active','activating'] and age>3:error='远端任务意外结束，重连后可检查实际安装状态。'
     return {'lines':lines,'nextOffset':next_offset,'done':value is not None or error is not None,'value':value,'error':error,'errorCode':failure.get('code')}
 
 def main():
@@ -1831,7 +1957,7 @@ def main():
         if op=='mount_apply':result(apply_mounts(options));return
         if op=='mount_recover':result(apply_mounts(options,recover=True));return
         if op=='mount_remove':result(remove_mounts(options));return
-        mapping={'account':setup_account,'localization':setup_locale,'desktop':setup_desktop,'chrome':setup_chrome,'input':setup_input,'claude':setup_claude,'ssh':setup_ssh,'mount_install':install_mount,'cloud':setup_cloud,'cloud_public':setup_cloud_public,'cloud_setup':setup_cloud_onboarding}
+        mapping={'account':setup_account,'localization':setup_locale,'desktop':setup_desktop,'chrome':setup_chrome,'input':setup_input,'input_remove':remove_input,'claude':setup_claude,'ssh':setup_ssh,'mount_install':install_mount,'cloud':setup_cloud,'cloud_public':setup_cloud_public,'cloud_setup':setup_cloud_onboarding}
         if op not in mapping:raise RuntimeError('未知部署操作。')
         log('开始部署：'+op)
         if (op=='account' and not read_config()) or op in ['localization','desktop','chrome','input','claude','cloud','mount_install']:
