@@ -941,6 +941,10 @@ class CloudCliStopped(ConnectionAbortedError):
     """CloudCLI confirmed that the execution owned by the Desktop stream stopped."""
 
 
+class CloudCliNativeStop(CloudCliError):
+    """The upstream response confirmed a stop initiated outside this gateway."""
+
+
 class CloudCliEditRefused(CloudCliError):
     """CloudCLI refused an edit before changing the transcript."""
 
@@ -1242,6 +1246,7 @@ class CloudCliProgress:
         self.on_session = None
         self.on_disconnect = None
         self.stop_requested = threading.Event()
+        self.client_detached = threading.Event()
         self.output_closed = False
         self.stopping = threading.Event()
         self.dispatched = False
@@ -1278,7 +1283,7 @@ class CloudCliProgress:
     def write(self, text, kind='text'):
         if not text or self.output_closed:
             return
-        if self.stream is not None:
+        if self.stream is not None and not self.client_detached.is_set():
             try:
                 if kind == 'thinking':
                     self.stream.thinking(text)
@@ -1288,7 +1293,8 @@ class CloudCliProgress:
                 if self.on_disconnect is None:
                     raise
                 self.on_disconnect(self.stream)
-                return
+                if self.output_closed:
+                    return
         if self.parts and self.parts[-1]['type'] == kind:
             self.parts[-1][kind] += text
         else:
@@ -1703,6 +1709,8 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
             if event.get('aborted') is True:
                 if progress.stopping.is_set():
                     raise CloudCliStopped('Desktop stopped its CloudCLI turn')
+                if progress.session and progress.dispatched:
+                    raise CloudCliNativeStop('本轮已在 CloudCLI 中停止。请在原对话发送下一条消息。', 400)
                 raise progress.incomplete('CloudCLI run was canceled', 409)
             if type(event.get('exitCode')) is not int or event['exitCode'] != 0 or event.get('success') is False:
                 raise cloudcli_failure(event, progress)
@@ -1848,6 +1856,7 @@ class CloudCliStopWatch:
         self.backend = backend
         self.progress = progress
         self.dispatch_ms = dispatch_ms
+        self.can_abort = bool(backend.config.get('desktopQuestions'))
         self.finished = threading.Event()
         self.lock = threading.Lock()
         self.session = None
@@ -1868,10 +1877,11 @@ class CloudCliStopWatch:
         return started if started is not None and self.dispatch_ms <= started <= self.opened_ms else None
 
     def watch(self):
-        try:
-            self.started_at = self.find_run()
-        except CloudCliError:
-            pass
+        if self.can_abort:
+            try:
+                self.started_at = self.find_run()
+            except CloudCliError:
+                pass
         while not self.finished.wait(.25):
             stream = self.progress.stream
             if stream is not None and (self.progress.stop_requested.is_set() or stream.disconnected()
@@ -1884,6 +1894,11 @@ class CloudCliStopWatch:
             if self.attempted or self.session is None or self.inactive(stream):
                 return
             self.attempted = True
+            self.progress.client_detached.set()
+            if not self.can_abort:
+                # The Agent API has no cancel operation. Keep reading this response
+                # so its owner can recover the result without dispatching it again.
+                return
             self.progress.output_closed = True
         try:
             connect, websocket_error = cloudcli_websocket()
@@ -1936,6 +1951,7 @@ def native_cloudcli_options():
 class ActiveCloudCliTurn:
     def __init__(self, history):
         self.history = history
+        self.client_detached = threading.Event()
         self.stop_requested = threading.Event()
         self.finished = threading.Event()
 
@@ -2530,7 +2546,7 @@ class CloudCliBackend:
 
     @contextmanager
     def observe_turn(self, progress, dispatch_ms):
-        if progress.stream is None or not self.config.get('desktopQuestions'):
+        if progress.stream is None:
             yield
             return
         observer = CloudCliStopWatch(self, progress, dispatch_ms)
@@ -2789,7 +2805,7 @@ class CloudCliBackend:
                 previous_history, project, workspace):
         try:
             question = next(events)
-        except CloudCliStopped:
+        except (CloudCliStopped, CloudCliNativeStop):
             self.save_interrupted_turn(messages, namespace, progress, previous_history, project, workspace,
                                        stopped=True)
             raise
@@ -3183,6 +3199,9 @@ class CloudCliBackend:
             active = self.active_conversations.get(conversation)
             if active is None:
                 self.active_conversations[conversation] = turn
+            elif not self.config.get('desktopQuestions') and (active.client_detached.is_set()
+                                                              or active.history in stopped_requests):
+                raise CloudCliError('上一轮仍在 CloudCLI 中执行。请等待完成后在本对话重试；如需立即停止，请在 CloudCLI 中停止上一轮。', 400)
             elif active.history not in stopped_requests:
                 raise CloudCliError('Another turn is already running in this CloudCLI conversation', 409)
         if active is not None:
@@ -3231,7 +3250,7 @@ class CloudCliBackend:
             return
         visible = without_desktop_model_commands([item for item in messages if item['role'] != 'system'])
         _, _, _, stopped = split_desktop_interruptions(visible)
-        if not stopped:
+        if not stopped or not self.config.get('desktopQuestions'):
             return
         with self.active_lock:
             active = self.active_conversations.get(self.identity+':'+scope)
@@ -3301,7 +3320,7 @@ class CloudCliBackend:
         approval_transport = self.config.get('desktopToolApprovals', False)
         tool_approvals = approval_transport and not unrestricted
         if chat_mode and not self.config.get('desktopQuestions'):
-            raise CloudCliError('Desktop attachments and plan mode require the authenticated CloudCLI connection', 503)
+            raise CloudCliError('此网关需要连接 CloudCLI 网页账户才能使用截图、附件或计划模式。请联系网关管理员，或改发普通文本。', 400)
         if not dispatch_task and not attachments:
             raise CloudCliError('CloudCLI requires text for the user task', 400)
         # Model checks can carry the current Desktop conversation ID. Reply
@@ -3383,7 +3402,10 @@ class CloudCliBackend:
                 prior = db.execute('SELECT reply FROM requests WHERE identity=?', (identity,)).fetchone()
                 if prior is not None:
                     if prior[0] is None:
-                        raise CloudCliError('This CloudCLI request was previously dispatched without a confirmed reply', 409)
+                        if scope and db.execute('SELECT 1 FROM sessions WHERE scope=? AND history=?',
+                                                (namespace, history_signature(messages, 'cloudcli'))).fetchone():
+                            raise CloudCliError('本轮已中断。请在原对话发送下一条消息。', 400)
+                        raise CloudCliError('上一轮已提交，尚无已确认的结果。请先在 CloudCLI 核对执行状态。', 409)
                     return json.loads(prior[0])
                 compact_context = desktop_compact_context(messages[:-1]) if scope else None
                 saved = self.closed_question_binding(db, namespace, interrupted_prefixes) if interrupted_prefixes else None
@@ -3450,6 +3472,7 @@ class CloudCliBackend:
                                         self.device)
             progress.account_footer = manager.account_footer
             progress.stop_requested = active_turn.stop_requested
+            progress.client_detached = active_turn.client_detached
             progress.forwarded_text = payload['message']
             progress.workspace_prompt_fingerprint = workspace_prompt_fingerprint
             progress.turn_position = position
@@ -3460,7 +3483,7 @@ class CloudCliBackend:
             try:
                 return self.advance(manager, data, messages, stream, namespace, identity, events, progress,
                                     before, project, workspace)
-            except CloudCliStopped:
+            except (CloudCliStopped, CloudCliNativeStop):
                 raise
             except Exception as error:
                 events.close()

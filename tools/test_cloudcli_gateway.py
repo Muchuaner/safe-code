@@ -2147,6 +2147,68 @@ class CloudCLIGatewayTests(unittest.TestCase):
                                            'allow': True, 'updatedInput': fields})
             self.assertFalse(self.cloud.requests)
 
+    def test_api_key_only_reconnects_to_owned_result_after_disconnect(self):
+        self.cloud.pause_after_frame = 0
+        self.cloud.release_stream = threading.Event()
+        self.addCleanup(self.cloud.release_stream.set)
+        original = conversation('Keep this turn.', stream=True)
+        headers = {'Authorization': f'Bearer {DESKTOP_TOKEN}', 'x-claude-code-session-id': self.session}
+        backend = self.manager.cloudcli
+        with patch.object(backend, 'running_sessions', side_effect=AssertionError('No web credential')), \
+             patch.object(gateway, 'CLOUDCLI_SSE_PING_INTERVAL', .05):
+            with closing(http.client.HTTPConnection(*self.desktop.server_address, timeout=3)) as conn:
+                conn.request('POST', '/v1/messages', json.dumps(original), headers)
+                response = conn.getresponse()
+                while True:
+                    line = response.readline()
+                    self.assertTrue(line)
+                    if line.startswith(b'event: ping'):
+                        break
+                response.close()
+            stop = {'role':'user', 'content':'[Request interrupted by user]'}
+            next_turn = {'role':'user', 'content':'Continue.'}
+            marked = [*original['messages'], stop, next_turn]
+            code, error = self.request(conversation('unused', messages=marked))
+            self.assertEqual(code, 400)
+            self.assertIn('仍在 CloudCLI', error['error']['message'])
+            self.cloud.release_stream.set()
+            deadline = time.monotonic()+3
+            while backend.active_conversations and time.monotonic()<deadline:
+                time.sleep(.01)
+            self.assertFalse(backend.active_conversations)
+            code, cached = self.request({**original, 'stream':False})
+            self.assertEqual(code, 200)
+            self.assertTrue(cached['content'][-1]['text'].endswith('Fixture reply'))
+            self.assertEqual(len(self.cloud.requests), 1)
+            self.assertEqual(self.request(conversation('unused', messages=marked))[0], 200)
+            self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+            self.assertEqual(len(self.cloud.requests), 2)
+
+    def test_api_key_only_attachment_and_plan_fail_without_dispatch(self):
+        image = {'type':'image', 'source':{'type':'base64', 'media_type':'image/png',
+                                           'data':base64.b64encode(b'fixture').decode()}}
+        for content in ([image], '<system-reminder>Plan mode is active</system-reminder>Plan a visit.'):
+            with self.subTest(content=content):
+                status, problem = self.request(conversation('unused', messages=[{'role':'user','content':content}]))
+                self.assertEqual(status, 400, problem)
+                self.assertIn('CloudCLI 网页账户', problem['error']['message'])
+        self.assertFalse(self.cloud.requests)
+
+    def test_api_key_only_native_stop_retains_checkpoint_and_never_replays(self):
+        original = conversation('Stop this in CloudCLI.')
+        self.cloud.reply = (200,[{'type':'session-id','sessionId':CLOUD_SESSION},
+                                 {'kind':'complete','aborted':True,'exitCode':0}])
+        status, error = self.request(original)
+        self.assertEqual(status, 400)
+        self.assertIn('停止', error['error']['message'])
+        self.assertEqual(self.request(original)[0], 400)
+        self.assertEqual(len(self.cloud.requests), 1)
+        self.cloud.reply = (200, cloud_turn('Continued.'))
+        marked = [*original['messages'], {'role':'user','content':'[Request interrupted by user]'},
+                  {'role':'user','content':'Continue from there.'}]
+        self.assertEqual(self.request(conversation('unused', messages=marked))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
     def test_disconnect_stops_only_the_owned_run_and_preserves_continuation(self):
         self.check_disconnect_stops_owned_run(stream=True)
 

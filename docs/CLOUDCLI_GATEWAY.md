@@ -55,6 +55,8 @@ Claude Desktop 的系统提示、客户端工具定义、模型输出预算、�
 
 在 SafeCode 点击「打开 Claude Desktop」时，客户端会核对当前接入配置，并通过本机转发器查询网关的模型目录。若 Claude 早于本次接入启动，请完全退出后再打开。Windows 支持已注册的 Claude 应用和带 Anthropic 签名的独立桌面程序，macOS 按应用标识启动。未找到应用时会打开[Claude Desktop 官方下载页](https://claude.com/download)，安装后可以回到 SafeCode 重试。
 
+仅配置 CloudCLI Agent API Key 的网关会在 Desktop 断线后继续接收这一轮的结果。重新连接时，如果任务仍在运行，请等待或在 CloudCLI 中停止它。完成后，在原对话重试可以取回结果，网关不会重复提交任务。截图、附件、计划模式和从 Desktop 停止云端任务需要管理员先连接已有的 CloudCLI 网页账户，配置方法见下文。
+
 ## 准备
 
 需要 VPS 上的 CloudCLI 1.37.7 或 1.37.8。Mac 通过 SafeCode 已启用的「本机远程控制」连接到同一台 VPS。Mac 需有可用的 `/usr/bin/python3`，且 macOS 已允许该 SSH 登录账户访问所选目录。CloudCLI 用的是工作用户配置的 Claude 认证。面向用户的服务使用 Claude Console API Key 或支持的云提供商认证。[Anthropic 认证说明](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
