@@ -304,6 +304,7 @@ internal sealed class MacBackend : IDisposable
                 if (bound == null || !ReferenceEquals(gatewaySession, bound.Session) || Read("context") != bound.Token)
                     throw new InvalidOperationException("SSH 会话已变更，请重新打开网关管理。");
                 var request=args.Deserialize<Dictionary<string,JsonElement>>()!;
+                request.Remove("context"); // The verified window token is local to the Mac backend.
                 return await gatewaySession.ManagePublicGatewayAsync(request,ct);
             case "codex.open":return await MacClients.OpenLocalClientAsync("Codex",ct);
             case "claudeDesktop.prepare":return await KeyAccess().PrepareLaunchAsync(ct);
