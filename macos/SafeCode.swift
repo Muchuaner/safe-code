@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private let popover = NSPopover()
     private var trayWeb: WKWebView!
     private var gatewayWeb: WKWebView?
-    private var gatewayPage: URL { resources.appendingPathComponent("Web/web/gateway.html") }
+    private var gatewayPage: URL { resources.appendingPathComponent("Web/web/gateway.html").absoluteURL }
     private var capturingTray = false
     private var trayReady = false
     private var trayState: [String:Any] = ["apiMode":false]
@@ -666,7 +666,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         gatewayWeb=view
         panel.contentViewController=nil
         panel.contentView=view
-        var address=URLComponents(url:gatewayPage,resolvingAgainstBaseURL:false)!
+        var address=URLComponents(url:gatewayPage,resolvingAgainstBaseURL:true)!
         address.fragment="directory"
         view.loadFileURL(address.url!,allowingReadAccessTo:gatewayPage.deletingLastPathComponent())
     }
