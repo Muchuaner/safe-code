@@ -1618,6 +1618,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
     usage = dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0)
     complete = False
     started = time.monotonic()
+    pending_tools = set()
     idle_deadline = started + CLOUDCLI_PROGRESS_TIMEOUT
     turn_deadline = started + CLOUDCLI_TURN_LIMIT
     while True:
@@ -1654,6 +1655,12 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
         if not isinstance(event, dict):
             raise CloudCliError('CloudCLI returned an invalid event')
         kind, event_type = event.get('kind'), event.get('type')
+        tool_id = event.get('toolId')
+        if isinstance(tool_id, str) and tool_id:
+            if kind == 'tool_use':
+                pending_tools.add(tool_id)
+            elif kind == 'tool_result':
+                pending_tools.discard(tool_id)
         if ((kind in ('stream_delta', 'thinking') or kind == 'text' and event.get('role') == 'assistant')
                 and isinstance(event.get('content'), str) and event['content']
                 or kind in ('tool_use', 'tool_result') and isinstance(event.get('toolId'), str)
@@ -1661,7 +1668,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                 or kind == 'permission_resolved' and progress.awaiting_decision
                 and event.get('requestId') == progress.awaiting_decision
                 or kind == 'complete'):
-            idle_deadline = time.monotonic() + CLOUDCLI_PROGRESS_TIMEOUT
+            idle_deadline = turn_deadline if pending_tools else time.monotonic() + CLOUDCLI_PROGRESS_TIMEOUT
         if kind == 'error' or event_type == 'error' or (kind != 'tool_result' and event.get('is_error') is True):
             raise cloudcli_failure(event, progress)
         if event_type == 'status' and event.get('message') not in ('Session started', 'Repository cloned and session started'):
@@ -1679,7 +1686,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
             if opened:
                 if progress.on_session:
                     progress.on_session(candidate)
-                if progress.stream is not None:
+                if progress.stream is not None and getattr(progress.stream, 'send_events', True):
                     progress.notice('已接收任务')
         if kind == 'text' and event.get('role') == 'assistant' and not event.get('parentToolUseId'):
             content = event.get('content')
@@ -2886,8 +2893,10 @@ class CloudCliBackend:
 
     @staticmethod
     def confirmed_partial_history(db, namespace, partial_history):
-        text = desktop_assistant_text(partial_history[-1])
-        if not text or not text.strip():
+        # A final user message here is an explicitly interrupted turn whose reply was lost.
+        missing = partial_history[-1]['role'] == 'user'
+        text = None if missing else desktop_assistant_text(partial_history[-1])
+        if not missing and (not text or not text.strip()):
             return None
         replies = db.execute('SELECT reply FROM requests WHERE scope=? AND reply IS NOT NULL LIMIT 2',
                              (namespace,)).fetchall()
@@ -2897,10 +2906,14 @@ class CloudCliBackend:
         if not isinstance(reply, dict) or reply.get('stop_reason') != 'end_turn':
             return None
         complete = desktop_assistant_text(reply)
-        if not complete or len(complete) <= len(text) or not complete.startswith(text):
+        if not complete:
             return None
-        # Only a checkpoint of this exact history may resume the CloudCLI session.
-        return history_signature([*partial_history[:-1], reply], 'cloudcli')
+        if not missing and text.strip() not in ('Request failed', '请求失败'):
+            if len(text) >= len(complete) or not complete.startswith(text):
+                return None
+        # The caller verifies the reconstructed history against the same conversation's checkpoint.
+        original = partial_history if missing else partial_history[:-1]
+        return history_signature([*original, reply], 'cloudcli')
 
     def session_binding(self, db, namespace, prefix, position, compact_context, interrupted_prefixes=(),
                         partial_history=None, legacy_prefix=None):
@@ -3252,6 +3265,10 @@ class CloudCliBackend:
             if visible is not messages:
                 legacy_prefix = history_signature(messages[:-1], 'cloudcli')
             messages, interrupted_prefixes, partial_history, stopped_requests = split_desktop_interruptions(visible)
+            if partial_history is None and len(messages) >= 2:
+                previous = messages[:-1]
+                if previous[-1]['role'] == 'assistant' or history_signature(previous, 'cloudcli') in stopped_requests:
+                    partial_history = previous
         if not messages or messages[-1]['role'] != 'user':
             raise CloudCliError('CloudCLI requires a new user task after stopping', 400)
         latest = blocks(messages[-1].get('content'))
@@ -3922,7 +3939,8 @@ class Server(ThreadingHTTPServer):
 
 
 class CloudCliMessagesStream:
-    def __init__(self, handler, model):
+    def __init__(self, handler, model, *, send_events=True):
+        self.send_events = send_events
         self.handler = handler
         self.model = model
         self.message_id = 'msg_'+uuid.uuid4().hex
@@ -3945,7 +3963,7 @@ class CloudCliMessagesStream:
                 return False
 
     def queue_ping(self):
-        if time.monotonic()-self.last_output >= 5:
+        if self.send_events and time.monotonic()-self.last_output >= 5:
             self.handler.start_sse()
             self.handler.send_sse('ping', {'type': 'ping'})
             self.queued = True
@@ -3975,7 +3993,7 @@ class CloudCliMessagesStream:
         self.write('thinking', part)
 
     def write(self, kind, part):
-        if not part:
+        if not self.send_events or not part:
             return
         with self.wire_lock:
             self.write_part(kind, part)
@@ -4140,8 +4158,8 @@ class Handler(BaseHTTPRequestHandler):
                         diagnostic(**{name: min(1000000, len(data[field]))})
             if path == COUNT_TOKENS_PATH:
                 return self.message_error(None, 404, 'not_found_error', 'Token counting is unavailable on this CLI bridge')
-            if isinstance(data, dict) and data.get('stream') and self.manager.cloudcli is not None:
-                stream = CloudCliMessagesStream(self, data.get('model'))
+            if isinstance(data, dict) and self.manager.cloudcli is not None:
+                stream = CloudCliMessagesStream(self, data.get('model'), send_events=bool(data.get('stream')))
             response = self.execute_message(data, stream=stream, session_header=self.headers.get('x-claude-code-session-id'),
                 context_1m='context-1m-2025-08-07' in {v.strip() for v in self.headers.get('anthropic-beta', '').split(',')})
             if stream is not None and stream.started:

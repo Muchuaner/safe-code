@@ -2133,6 +2133,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertFalse(self.cloud.requests)
 
     def test_disconnect_stops_only_the_owned_run_and_preserves_continuation(self):
+        self.check_disconnect_stops_owned_run(stream=True)
+
+    def test_json_disconnect_stops_only_the_owned_run_and_preserves_continuation(self):
+        self.check_disconnect_stops_owned_run(stream=False)
+
+    def check_disconnect_stops_owned_run(self, stream):
         self.enable_cloudcli_web_fixture()
         self.cloud.track_running = True
         self.cloud.pause_after_frame = 0
@@ -2147,14 +2153,20 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.cloud.release_stream.set()
 
         headers = {'Authorization': f'Bearer {DESKTOP_TOKEN}', 'x-claude-code-session-id': self.session}
-        original = conversation('Wait for an explicit stop.', stream=True)
+        original = conversation('Wait for an explicit stop.', stream=stream)
         with patch.object(gateway, 'cloudcli_websocket', return_value=(
                 lambda *a, **kw: ChatSocketFixture(stop), OSError)):
             with closing(http.client.HTTPConnection(*self.desktop.server_address, timeout=3)) as conn:
                 conn.request('POST', '/v1/messages', json.dumps(original), headers)
-                response = conn.getresponse()
-                self.assertEqual(response.status, 200)
-                response.close()
+                if stream:
+                    response = conn.getresponse()
+                    self.assertEqual(response.status, 200)
+                    response.close()
+                else:
+                    deadline = time.monotonic() + 2
+                    while not self.cloud.requests and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(self.cloud.requests)
             self.assertTrue(self.cloud.release_stream.wait(3))
             deadline = time.monotonic()+2
             with closing(sqlite3.connect(self.manager.cloudcli.path)) as db:
@@ -2240,7 +2252,6 @@ class CloudCLIGatewayTests(unittest.TestCase):
         followup = {'role':'user', 'content':'Continue after stopping.'}
         history = [*original['messages'], partial]
         invalid = [
-            [*history, followup],
             [{'role':'user', 'content':'Unrelated context.'}, partial, canceled, followup],
             [*original['messages'], {**partial, 'content':'A different reply'}, canceled, followup],
             [*original['messages'], {**partial, 'content':[
@@ -2273,6 +2284,26 @@ class CloudCLIGatewayTests(unittest.TestCase):
                         {'role':'user', 'content':'One more follow-up.'}]
         self.assertEqual(self.request(conversation('unused', messages=continuation))[0], 200)
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
+    def test_resume_only_the_confirmed_reply_after_lost_desktop_output(self):
+        follow = {'role': 'user', 'content': 'Continue this conversation.'}
+        for visible in ('Fixture', 'Request failed', '请求失败', None):
+            with self.subTest(visible=visible):
+                session = str(uuid.uuid4())
+                original = conversation('Keep this context.')
+                self.assertEqual(self.request(original, session=session)[0], 200)
+                if visible is None:
+                    tail = [{'role': 'user', 'content': '[Request interrupted by user]'}]
+                else:
+                    tail = [{'role': 'assistant', 'content': visible}]
+                unrelated = [{'role': 'user', 'content': 'Other context.'}, *tail, follow]
+                if visible is not None:
+                    self.assertEqual(self.request(conversation('unused', messages=unrelated), session=session)[0], 409)
+                history = [*original['messages'], *tail, follow]
+                result = self.request(conversation('unused', messages=history), session=session)
+                self.assertEqual(result[0], 200, result)
+                self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+                self.assertEqual(self.cloud.requests[-1][2]['message'], follow['content'])
 
     def test_stopped_prompt_can_be_edited_before_cloudcli_recorded_a_user_anchor(self):
         self.enable_cloudcli_web_fixture()
