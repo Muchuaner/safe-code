@@ -801,6 +801,85 @@ def history_signature(messages, scope):
 DESKTOP_INTERRUPTIONS = frozenset(('[Request interrupted by user]', '[Request interrupted by user for tool use]'))
 
 
+def recovery_transcript(history, attachments=None):
+    """Represent only client-supplied visible history. Tool records are quoted data."""
+    rows = []
+    for message in history:
+        parts = []
+        for block in blocks(message.get('content', [])):
+            kind = block.get('type')
+            if kind in ('thinking', 'redacted_thinking'):
+                continue
+            if kind == 'text':
+                value = SYSTEM_REMINDER.sub('', block.get('text', '')).strip()
+                if value:
+                    parts.append(value)
+            elif kind in ('tool_use', 'tool_result'):
+                record = {k:v for k,v in block.items() if k in ('type','name','id','tool_use_id','input','content','is_error')}
+                if kind == 'tool_result' and isinstance(record.get('content'), list):
+                    record['content'] = [item.get('text', '') if item.get('type') == 'text' else
+                                         {'type':item.get('type')} for item in record['content'] if isinstance(item,dict)]
+                parts.append(record)
+            else:
+                name = None
+                if kind in ('image','document') and attachments is not None and len(attachments) < 10:
+                    try:
+                        file = cloudcli_attachment(block, len(attachments)+1)
+                    except CloudCliError:
+                        pass
+                    else:
+                        attachments.append(file)
+                        name = file[0]
+                parts.append({'type':kind, 'title':name or block.get('title') or '',
+                              'note':'见附加文件' if name else '仅有历史附件说明，未恢复原文件'})
+        if parts:
+            rows.append(json.dumps({'role':message['role'],'content':parts},ensure_ascii=False))
+    return '\n'.join(rows)
+
+
+def portable_history(transcript, limit):
+    if len(transcript) <= limit:
+        return transcript
+    start = limit // 5
+    return transcript[:start]+'\n[… 中段省略 …]\n'+transcript[-(limit-start):]
+
+
+def recovery_context(history, attachments, extended):
+    transcript = recovery_transcript(history, attachments)
+    raw = transcript.encode()
+    # A gateway with web credentials can deliver the full transcript through
+    # the native file API. Keep each part valid UTF-8 and within its byte limit.
+    if attachments is not None and len(raw) > 90000:
+        chunks = []
+        offset = 0
+        while offset < len(raw) and len(chunks) < 10-len(attachments):
+            end = min(len(raw), offset+MAX_CLOUDCLI_ATTACHMENT)
+            while end < len(raw) and raw[end] & 0xc0 == 0x80:
+                end -= 1
+            chunks.append(raw[offset:end])
+            offset = end
+        if offset == len(raw):
+            for index, chunk in enumerate(chunks,1):
+                attachments.append((f'conversation-history-{index}.txt','text/plain',chunk))
+            return portable_history(transcript,22000), '完整文字记录见按序编号的 conversation-history 附件。'
+    # Without a file channel, send the full text while it fits a conservative
+    # model input budget. In particular, a long history is not itself an error.
+    budget = 750000 if extended else 150000
+    if len(raw) <= budget:
+        return transcript, ''
+    return portable_history(transcript,budget//4), '历史超出本轮可传预算，已保留开头和最近的记录。'
+
+
+def desktop_session_label(labels, messages, scope):
+    if not isinstance(labels,tuple) or len(labels) != 2:
+        return None
+    def segment(value, limit):
+        return re.sub(r'[^\w.@-]+', '-', str(value)).strip('-')[:limit] or 'Desktop'
+    user, gateway = labels
+    topic = segment(desktop_title(messages), 32)
+    return f'{segment(user,32)}·{segment(gateway,48)}·{topic}-{scope[:8]}'
+
+
 def desktop_assistant_text(message):
     if not isinstance(message, dict) or message.get('role') != 'assistant':
         return None
@@ -981,6 +1060,10 @@ class CloudCliError(GatewayError):
         }.get(status, 'invalid_request_error' if 400 <= status < 500 else 'api_error')
 
 
+class CloudCliHistoryMismatch(CloudCliError):
+    """The caller supplied history that cannot be attached to a verified remote turn."""
+
+
 class CloudCliStopped(ConnectionAbortedError):
     """CloudCLI confirmed that the execution owned by the Desktop stream stopped."""
 
@@ -991,6 +1074,10 @@ class CloudCliNativeStop(CloudCliError):
 
 class CloudCliRejected(CloudCliError):
     """CloudCLI explicitly refused the request before starting it."""
+
+
+class CloudCliSessionMissing(CloudCliRejected):
+    """The native API confirmed the requested session does not exist."""
 
 
 class CloudCliEditRefused(CloudCliRejected):
@@ -2045,8 +2132,16 @@ class CloudCliBackend:
             # Workspace and shell settings do not change the identity of a saved conversation.
             identity['hostControl'] = {k: v for k, v in config['hostControl'].items()
                                        if k not in ('projectWorkspaces', 'allowSshShell')}
-        self.identity = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        legacy_scope = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        # Keep the original namespace (including all pending-request receipts) when
+        # upgrading. Model catalogs and device display names may change between turns.
+        authority = [config['port'], identity['apiKey'], config['projectPath'],
+                     (config['hostControl'] or {}).get('clientId')]
+        binding = hashlib.sha256(json.dumps(authority).encode()).hexdigest()
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute('CREATE TABLE IF NOT EXISTS upstream_scopes (binding TEXT PRIMARY KEY, scope TEXT NOT NULL)')
+            db.execute('INSERT OR IGNORE INTO upstream_scopes VALUES (?,?)', (binding,legacy_scope))
+            self.identity = db.execute('SELECT scope FROM upstream_scopes WHERE binding=?',(binding,)).fetchone()[0]
             db.execute('CREATE TABLE IF NOT EXISTS sessions (scope TEXT NOT NULL, history TEXT NOT NULL, '
                        'session TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (scope, history))')
             db.execute('CREATE TABLE IF NOT EXISTS session_projects (session TEXT PRIMARY KEY NOT NULL, '
@@ -2473,6 +2568,14 @@ class CloudCliBackend:
                     if response.status != 200:
                         status = response.status if response.status in CLOUDCLI_ERROR_STATUS else 502
                         error = CloudCliRejected if status in (400, 401, 403, 404, 409, 413, 429) else CloudCliError
+                        if status == 404 and payload.get('sessionId'):
+                            try:
+                                reason = json.loads(response.read(2048)).get('error')
+                            except (ValueError, AttributeError):
+                                reason = None
+                            if reason == f'Session "{payload["sessionId"]}" was not found':
+                                progress.dispatched = False
+                                raise CloudCliSessionMissing('CloudCLI session no longer exists', 404)
                         if status in (401, 403):
                             raise error('CloudCLI rejected the configured gateway credential', 403)
                         raise error(f'CloudCLI Agent API returned HTTP {response.status}', status)
@@ -2500,6 +2603,13 @@ class CloudCliBackend:
                 with conn.getresponse() as response:
                     if response.status not in (200, 201):
                         status = response.status if response.status in (400, 404, 409, 413, 429) else 503
+                        if status == 404 and method == 'GET' and path.startswith('/api/providers/sessions/'):
+                            try:
+                                error = json.loads(response.read(4096)).get('error')
+                            except (ValueError, AttributeError):
+                                error = None
+                            if isinstance(error,dict) and error.get('code') == 'SESSION_NOT_FOUND':
+                                raise CloudCliSessionMissing('CloudCLI session no longer exists',404)
                         raise CloudCliError(f'CloudCLI web API returned HTTP {response.status}', status)
                     raw = response.read(response_limit + 1)
                     if len(raw) > response_limit:
@@ -2676,7 +2786,7 @@ class CloudCliBackend:
             if edit is not None:
                 head = self.history_users(session)
                 if not head or head[-1].get('transcriptAnchorId') != edit[1]:
-                    raise CloudCliError('CloudCLI history changed after the last Desktop turn', 409)
+                    raise CloudCliHistoryMismatch('CloudCLI history changed after the last Desktop turn', 409)
             descriptors = self.upload_attachments(attachments)
             with closing(self.web_socket(connect, timeout=8 if review else 90)) as ws:
                 if progress.stream is not None and progress.stream.disconnected():
@@ -2994,6 +3104,9 @@ class CloudCliBackend:
                        (namespace, session, prefix, progress.turn_position, anchor, now))
 
     def save_session(self, db, namespace, previous_history, session, project, workspace, histories):
+        if namespace.rpartition(':')[2]:
+            # A Desktop thread has one live tip. Keep old receipts for duplicate detection.
+            db.execute('DELETE FROM sessions WHERE scope=? AND session<>?', (namespace, session))
         now = time.time()
         db.execute('DELETE FROM sessions WHERE scope=? AND (history=? OR session=?)', (namespace, previous_history, session))
         db.executemany('INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?)',
@@ -3076,13 +3189,13 @@ class CloudCliBackend:
                             return binding, (anchor, anchor)
                         if self.stopped_before_user_message(db,namespace,prefix,binding[0]):
                             return binding, None
-                raise CloudCliError('No verified CloudCLI message anchor for this Desktop edit', 409)
+                raise CloudCliHistoryMismatch('No verified CloudCLI message anchor for this Desktop edit', 409)
             if position:
                 branch = self.desktop_branch_source(db, namespace, prefix, interrupted_prefixes)
                 if branch is not None:
                     return self.fork_desktop_branch(branch)
         if position and history_signature([], 'cloudcli') not in interrupted_prefixes:
-            raise CloudCliError('No matching CloudCLI session; start a new Desktop conversation', 409)
+            raise CloudCliHistoryMismatch('No matching CloudCLI session; start a new Desktop conversation', 409)
         return None, None
 
     def stopped_before_user_message(self, db, namespace, prefix, session):
@@ -3149,7 +3262,7 @@ class CloudCliBackend:
             if len(candidates) == 1:
                 return candidates[0]
             if candidates:
-                raise CloudCliError('More than one CloudCLI conversation matches this Desktop branch', 409)
+                raise CloudCliHistoryMismatch('More than one CloudCLI conversation matches this Desktop branch', 409)
         return None
 
     def common_rewind_source(self, candidates):
@@ -3157,23 +3270,23 @@ class CloudCliBackend:
         # Identify the unmodified prefix before choosing which native chat to fork.
         error = 'More than one CloudCLI conversation matches this Desktop branch'
         if any(candidate[2:4] != candidates[0][2:4] for candidate in candidates):
-            raise CloudCliError(error, 409)
+            raise CloudCliHistoryMismatch(error, 409)
         deadline = time.monotonic() + 12
         histories = [self.history_before_edit(candidate[1], candidate[6], deadline-time.monotonic())
                      for candidate in candidates]
         index = min(range(len(histories)), key=lambda i: len(histories[i][0]))
         prefix, original_prompt = histories[index]
         if not prefix or not isinstance(original_prompt, str) or self.history_timestamp(prefix[0]) is None:
-            raise CloudCliError(error, 409)
+            raise CloudCliHistoryMismatch(error, 409)
         for history, _ in histories:
             if history[:len(prefix)] != prefix:
-                raise CloudCliError(error, 409)
+                raise CloudCliHistoryMismatch(error, 409)
             # CloudCLI can retain a regenerated copy of the old user prompt
             # between the common prefix and the replacement. Fork the clean
             # source so that this extra prompt is never carried forward again.
             if any(row.get('role') != 'user' or row.get('kind') != 'text'
                    or row.get('content') != original_prompt for row in history[len(prefix):]):
-                raise CloudCliError(error, 409)
+                raise CloudCliHistoryMismatch(error, 409)
         return candidates[index]
 
     def fork_desktop_branch(self, branch):
@@ -3190,14 +3303,14 @@ class CloudCliBackend:
                 anchor = tip
             users = self.history_users(source)
             if not users or users[-1].get('transcriptAnchorId') != tip:
-                raise CloudCliError('CloudCLI history changed after the last Desktop turn', 409)
+                raise CloudCliHistoryMismatch('CloudCLI history changed after the last Desktop turn', 409)
             previous = None
             if anchor:
                 # Read through the target and its preceding user prompt.
                 users = self.history_users(source,anchor=anchor)
                 matches = [index for index,row in enumerate(users) if row.get('transcriptAnchorId') == anchor]
                 if len(matches) != 1 or users[-1].get('transcriptAnchorId') != tip:
-                    raise CloudCliError('No verified CloudCLI message anchor for this Desktop branch', 409)
+                    raise CloudCliHistoryMismatch('No verified CloudCLI message anchor for this Desktop branch', 409)
                 index = matches[0]
                 original = users[index]
                 previous = users[index-1] if index else None
@@ -3233,7 +3346,7 @@ class CloudCliBackend:
         bindings = db.execute('SELECT DISTINCT session FROM sessions WHERE scope=? LIMIT 2', (namespace,)).fetchall()
         if len(bindings) != 1 or not db.execute('SELECT 1 FROM sessions WHERE scope=? AND history=?',
                                                 (namespace, history)).fetchone():
-            raise CloudCliError('Cannot verify the conversation history for Desktop compaction', 409)
+            raise CloudCliHistoryMismatch('Cannot verify the conversation history for Desktop compaction', 409)
         session = bindings[0][0]
         row = db.execute('SELECT marker FROM compact_receipts WHERE scope=? AND history=? AND session=?',
                          (namespace, history, session)).fetchone()
@@ -3469,7 +3582,23 @@ class CloudCliBackend:
                   closing(sqlite3.connect(self.path)) as db, db):
                 if namespace in self.paused_turns:
                     raise CloudCliError('This CloudCLI conversation is waiting for a Desktop answer', 409)
-                return self.compact_checkpoint(db, namespace, before, data['model'])
+                try:
+                    receipt = self.compact_checkpoint(db, namespace, before, data['model'])
+                    if manager.restore_desktop_history:
+                        extract = portable_history(recovery_transcript(messages[:-1]),12000).replace('<',r'\u003c')
+                        block = receipt['content'][0]
+                        block['text'] = block['text'].removesuffix('</summary>')+'\n'+extract+'</summary>'
+                    return receipt
+                except CloudCliHistoryMismatch:
+                    # No remote checkpoint exists. Give Desktop a portable extract
+                    # instead of a UUID which only the lost binding could resolve.
+                    if not manager.restore_desktop_history:
+                        raise
+                    transcript = recovery_transcript(messages[:-1])
+                    if not transcript:
+                        raise
+                    excerpt = portable_history(transcript, 24000).replace('<',r'\u003c')
+                    return self.local_reply(data['model'], '<summary>'+excerpt+'</summary>')
         forwarded_task = (manager.review_prompt(dispatch_task)
                           if dispatch_task and manager.review_prompt is not None else dispatch_task)
         payload = {'provider': 'claude', 'message': forwarded_task or '请查看本轮附加的文件。',
@@ -3556,9 +3685,20 @@ class CloudCliBackend:
                 compact_context = desktop_compact_context(messages[:-1]) if scope else None
                 saved = self.closed_question_binding(db, namespace, interrupted_prefixes) if interrupted_prefixes else None
                 edit = None
+                recovering = False
+                may_restore = (manager.restore_desktop_history and position
+                            and not db.execute('SELECT 1 FROM requests JOIN request_operations USING(identity) '
+                                               'WHERE scope=? AND pending=1 LIMIT 1', (namespace,)).fetchone()
+                            and not db.execute('SELECT 1 FROM question_receipts WHERE scope=?', (namespace,)).fetchone())
+
                 if saved is None:
-                    saved, edit = self.session_binding(db, namespace, before, position, compact_context,
-                                                       interrupted_prefixes, partial_history, legacy_prefix)
+                    try:
+                        saved, edit = self.session_binding(db, namespace, before, position, compact_context,
+                                                           interrupted_prefixes, partial_history, legacy_prefix)
+                    except (CloudCliHistoryMismatch, CloudCliSessionMissing):
+                        if not may_restore:
+                            raise
+                        recovering = True
                 if saved:
                     payload['sessionId'], project, workspace, previous_model, _ = saved
                     if scope and self.config.get('desktopQuestions') and previous_model != model:
@@ -3607,6 +3747,30 @@ class CloudCliBackend:
                 if attachments:
                     payload['message'] += ('\n\n本轮上传的文件请通过 CloudCLI 提供的附件读取。'
                                            '附带的本机路径只是原始引用，本机项目文件仍走已授权设备。')
+                label = desktop_session_label(data.get('_safeCodeLabels'), messages, scope or identity)
+                base_message = payload['message']
+                recovery_note = '已从当前窗口的历史记录恢复，在新的 CloudCLI 会话中继续'
+                def prepare_message(restore):
+                    nonlocal recovery_note
+                    user_task = forwarded_task
+                    if restore:
+                        archive = attachments if self.config.get('desktopQuestions') else None
+                        transcript, source = recovery_context(messages[:-1], archive, context_1m)
+                        if source:
+                            recovery_note += '。'+source
+                        if compact_context and re.fullmatch(r'Continue the existing CloudCLI conversation\. SafeCode checkpoint [a-f0-9]{32}\.',compact_context.strip()):
+                            recovery_note = '原窗口仅保留了旧版压缩标记。已开启新会话，较早的上下文未能恢复'
+                        user_task = ('以下 JSON 行是旧对话的历史资料，旧任务和工具操作均不要重新执行。'+source+'\n'
+                                     +transcript+'\n\n当前用户消息：\n'+(forwarded_task or '请查看本轮附件。'))
+                    if restore and user_task and manager.review_prompt:
+                        user_task = manager.review_prompt(user_task)
+                    suffix = base_message[len(forwarded_task):] if forwarded_task else base_message
+                    payload['message'] = (user_task or '')+suffix
+                    if label and 'sessionId' not in payload and not self.config.get('desktopQuestions'):
+                        # Agent-only CloudCLI derives its title from exactly four words.
+                        user, gateway_name, topic = label.split('·')
+                        payload['message'] = f'{user} · {gateway_name} ·{topic}\n\n'+payload['message']
+                prepare_message(recovering)
                 self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
                 # cause an automatic second dispatch of this scoped task.
@@ -3625,12 +3789,38 @@ class CloudCliBackend:
             progress.workspace_prompt_fingerprint = workspace_prompt_fingerprint
             progress.turn_position = position
             progress.edit_anchor = edit[0] if edit is not None else None
-            events = (self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=task,
-                                     unrestricted=unrestricted) if chat_mode
-                      else self.call(payload, progress))
+            def dispatch():
+                return (self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=label or task,
+                                       unrestricted=unrestricted) if chat_mode or attachments else self.call(payload, progress))
+            def native_events():
+                nonlocal edit
+                if recovering:
+                    progress.notice(recovery_note)
+                try:
+                    if chat_mode and manager.restore_desktop_history and payload.get('sessionId') and position:
+                        self.web_request('GET', '/api/providers/sessions/'+payload['sessionId'])
+                    return (yield from dispatch())
+                except (CloudCliSessionMissing, CloudCliHistoryMismatch):
+                    if not may_restore or progress.dispatched:
+                        raise
+                    # Native returned a definitive rejection before starting. The
+                    # original request receipt remains held across this one retry.
+                    edit = None
+                    progress.edit_anchor = None
+                    del payload['sessionId']
+                    prepare_message(True)
+                    progress.forwarded_text = payload['message']
+                    progress.notice(recovery_note)
+                    return (yield from dispatch())
+            events = native_events()
             try:
-                return self.advance(manager, data, messages, stream, namespace, identity, events, progress,
-                                    before, project, workspace)
+                result = self.advance(manager, data, messages, stream, namespace, identity, events, progress,
+                                      before, project, workspace)
+                if label and self.config.get('desktopQuestions') and 'sessionId' not in payload and progress.session:
+                    with suppress(CloudCliError):
+                        self.web_request('PUT', f'/api/providers/sessions/{progress.session}',
+                                         json.dumps({'summary':label}).encode(), timeout=3)
+                return result
             except (CloudCliStopped, CloudCliNativeStop):
                 raise
             except Exception as error:
@@ -3956,6 +4146,7 @@ class Conversation:
 
 class Manager:
     account_footer = None
+    restore_desktop_history = False
     unrestricted_tools = False
 
     def __init__(self, directory, config, *, require_cloudcli=False, review_prompt=None):

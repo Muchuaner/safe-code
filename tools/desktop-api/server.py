@@ -35,7 +35,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 27
+GATEWAY_REVISION = 28
 PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
@@ -46,6 +46,8 @@ TICKET_AUTH_KEY = bytes.fromhex('bf8145e375d11db0fdd2fb0d9734fdda504c5a480fc2eae
 
 
 class PublicManager(Manager):
+    # Recovery uses only history supplied to this authenticated, per-key gateway.
+    restore_desktop_history = True
     unrestricted_tools = True
 
     def __init__(self, folder, config, *, require_cloudcli=True, review_prompt=None):
@@ -451,7 +453,17 @@ class PublicHandler(Handler):
                 manager.accounting.model = model
                 manager.accounting.finished = None
                 try:
-                    return manager.run(data, **options, check_model=self.check_model)
+                    try:
+                        encoded = self.headers.get('X-SafeCode-Desktop-User','')
+                        user = base64.b64decode(encoded[:512], validate=True).decode() if encoded else ''
+                    except (ValueError, UnicodeError):
+                        user = ''
+                    device = self.device or {}
+                    user = user or device.get('username') or device.get('hostname') or self.platform
+                    origin = self.server.public_origin
+                    gateway = urlsplit(origin).hostname if origin else socket.gethostname()
+                    labels = (user, gateway) if (encoded or options.get('session_header') or data.get('metadata')) else None
+                    return manager.run({**data, '_safeCodeLabels':labels}, **options, check_model=self.check_model)
                 except GatewayError as error:
                     record.update(outcome='failed', status=error.status)
                     raise

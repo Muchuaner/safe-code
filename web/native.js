@@ -151,7 +151,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let publicGatewayCreatedAccount;
     let publicGatewayEnabled=false,publicGatewayLoading=false,publicGatewayReachable=false,publicGatewayMissing=false;
     let publicGatewayUpgrade=false,publicGatewayNeedsCloudKey=false;
-    const requiredGatewayRevision=23;
+    const minimumGatewayRevision=23;
+    let bundledGatewayRevision=minimumGatewayRevision, publicGatewayLegacy=false;
     let publicGatewayTask,publicGatewayTimer;
     let publicGatewaySubscription;
     let startupRetryTimer;
@@ -288,6 +289,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       clearTimeout(publicGatewayTimer);
       publicGatewayEnabled=false;publicGatewayReachable=false;publicGatewayLoading=false;publicGatewayMissing=false;
       publicGatewayUpgrade=false;publicGatewayNeedsCloudKey=false;
+      bundledGatewayRevision=minimumGatewayRevision;publicGatewayLegacy=false;
       publicGatewayOperation=publicGatewayStatusError='';
       publicGatewayError=undefined;
       publicGatewayCreatedAccount=undefined;
@@ -772,11 +774,17 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#claude-desktop-state').textContent=connectionLabel();
       $('#claude-connection-reason').textContent=keyState.deviceProblem||keyState.requestError||'';
       setLaunchAvailability('claude-desktop-launch',keyState.running&&!keyBusy);
+      const updateAvailable=publicGatewayReachable&&publicGatewayUpgrade;
+      $('#claude-desktop-manage').textContent=updateAvailable?'网关设置 · 有更新':'网关设置';
       $('#claude-desktop-manage').disabled=!ready;
+      const updateButton=$('#safe-code-api-update');
+      updateButton.hidden=!updateAvailable;
+      updateButton.type=updateAvailable?'submit':'button';
+      updateButton.disabled=unavailable||!updateAvailable;
       $('#public-gateway-runtime').disabled=!ready;
-      $('#safe-code-api-enable').disabled=unavailable||checking||publicGatewayEnabled;
+      $('#safe-code-api-enable').disabled=unavailable||checking||publicGatewayEnabled||updateAvailable;
       $('#safe-code-api-enable').textContent=publicGatewayEnabled?'已启用':'启用';
-      $('#safe-code-api-manage').disabled=unavailable||!publicGatewayEnabled;
+      $('#safe-code-api-manage').disabled=unavailable||!publicGatewayEnabled||publicGatewayLegacy;
       $('#safe-code-api-repair').disabled=unavailable||publicGatewayMissing;
       $('#safe-code-cloudcli-config').hidden=!publicGatewayNeedsCloudKey;
       $('#safe-code-cloudcli-api-key').disabled=!!publicGatewayOperation;
@@ -797,9 +805,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       }
       if(!publicGatewayReachable&&publicGatewayStatusError)return publicGatewayStatusError+
         (publicGatewayEnabled?' 点击「管理网关」重试，也可以关闭窗口后检查 SSH 连接。':' 检查 SSH 连接后，点击「启用」重试。');
-      if(publicGatewayNeedsCloudKey)return '填写下方的 CloudCLI API Key，再点击「启用」。';
+      if(publicGatewayNeedsCloudKey)return '填写下方的 CloudCLI API Key，再点击「'+(publicGatewayUpgrade?'更新网关':'启用')+'」。';
+      if(publicGatewayUpgrade)return '当前客户端包含新版网关。点击「更新网关」更新 VPS，保留已有 API Key。';
       if(publicGatewayEnabled)return '点击「管理网关」创建 API Key，再回到主界面粘贴。';
-      if(publicGatewayUpgrade)return '点击「启用」升级公网网关。已有密钥可继续使用。';
       if(publicGatewayMissing)return '点击「启用」安装并开放公网网关。首次安装可能需要几分钟。';
       return '点击「启用」开放公网网关。';
     }
@@ -818,10 +826,12 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const reachable=Boolean(status);
       if(reachable) {
         publicGatewayMissing=status.installed===false;
-        publicGatewayUpgrade=!publicGatewayMissing&&(status.backend!=='cloudcli'||(status.gatewayRevision??0)<requiredGatewayRevision);
-        publicGatewayEnabled=status.enabled===true&&!publicGatewayUpgrade;
-        if(status.cloudcliConfigured===true||publicGatewayEnabled)publicGatewayNeedsCloudKey=false;
-        if(publicGatewayEnabled&&publicGatewayError?.action==='enable')publicGatewayError=undefined;
+        if(Number.isInteger(status.bundledGatewayRevision))bundledGatewayRevision=status.bundledGatewayRevision;
+        publicGatewayLegacy=!publicGatewayMissing&&(status.backend!=='cloudcli'||(status.gatewayRevision??0)<minimumGatewayRevision);
+        publicGatewayUpgrade=!publicGatewayMissing&&(publicGatewayLegacy||(status.gatewayRevision??0)<bundledGatewayRevision);
+        publicGatewayEnabled=status.enabled===true;
+        if(status.cloudcliConfigured===true||(publicGatewayEnabled&&!publicGatewayLegacy))publicGatewayNeedsCloudKey=false;
+        if(!publicGatewayUpgrade&&(publicGatewayError?.action==='update'||(publicGatewayEnabled&&publicGatewayError?.action==='enable')))publicGatewayError=undefined;
       }
       publicGatewayReachable=reachable;
       publicGatewayStatusError=error;
@@ -900,7 +910,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#claude-desktop-manage').onclick=openPublicGatewaySettings;
     $('#public-gateway-runtime').onclick=()=>{
       openPublicGatewaySettings();
-      if(!publicGatewayCreatedAccount&&!$('#app-message-dialog').open&&publicGatewayEnabled)
+      if(!publicGatewayCreatedAccount&&!$('#app-message-dialog').open&&publicGatewayEnabled&&!publicGatewayLegacy)
         void openManagedGateway();
     };
     $('#claude-desktop-close').onclick=()=>publicGatewayDialog.close();
@@ -966,7 +976,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     };
     $('#safe-code-api-form').onsubmit=async event=>{
       event.preventDefault();
-      if($('#safe-code-api-enable').disabled)return;
+      const updating=event.submitter?.id==='safe-code-api-update';
+      if($(updating?'#safe-code-api-update':'#safe-code-api-enable').disabled)return;
       const attempt=connectionAttempt, keyField=$('#safe-code-cloudcli-api-key');
       const apiKey=publicGatewayNeedsCloudKey?keyField.value.trim():'';
       if(publicGatewayNeedsCloudKey&&!apiKey){
@@ -978,15 +989,18 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       try{
         await publicGatewayTask?.promise;
         if(attempt!==connectionAttempt)return;
-        if(!publicGatewayReachable){
+        if(updating||!publicGatewayReachable){
           const status=await readPublicGatewayStatus();
           if(attempt!==connectionAttempt)return;
           renderPublicGatewayStatus(status);
         }
+        if(updating!==publicGatewayUpgrade)return;
         if(publicGatewayMissing||publicGatewayUpgrade){
           keyField.value='';
-          setPublicGatewayOperation('正在准备 CloudCLI 并部署公网网关，可能需要几分钟。');
-          const status=await native('safeCodeApi.install',apiKey?{accepted:true,cloudcli:{apiKey}}:{accepted:true},{
+          setPublicGatewayOperation(updating?'正在更新公网网关。':'正在准备 CloudCLI 并部署公网网关，可能需要几分钟。');
+          const status=updating&&!publicGatewayLegacy?
+            await native('safeCodeApi.repair',{accepted:true,reinstallCloudCLI:false}):
+            await native('safeCodeApi.install',apiKey?{accepted:true,cloudcli:{apiKey}}:{accepted:true},{
             ms:13*60000,message:'等待网关部署结果超时，服务器可能仍在处理。'
           });
           if(attempt!==connectionAttempt)return;
@@ -998,6 +1012,10 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           }
           publicGatewayCreatedAccount=status.cloudcliAccount;
           renderPublicGatewayStatus(status);
+        }
+        if(updating){
+          if(publicGatewayUpgrade)throw new Error('网关仍报告旧版本，请重试更新。');
+          return;
         }
         if(!publicGatewayEnabled){
           setPublicGatewayOperation('正在启用公网网关。');
@@ -1011,7 +1029,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       }catch(error){
         if(attempt===connectionAttempt){
           publicGatewayReachable=false;
-          publicGatewayError={action:'enable',message:error.message+' 检查连接后，点击「启用」重试。'};
+          publicGatewayError={action:updating?'update':'enable',message:error.message+(updating?' 检查连接后重试更新。':' 检查连接后，点击「启用」重试。')};
         }
       }finally{
         if(attempt===connectionAttempt){

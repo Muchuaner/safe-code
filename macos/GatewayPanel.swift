@@ -6,6 +6,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     typealias Manage = (String, [String: Any], @escaping Reply) -> Void
 
     private let manage: Manage
+    private let versionLabel = GatewayStyle.label("网关版本 —", color: GatewayStyle.muted, size: SafeCodeType.small)
+    private let updateDot = NSView()
     private let table = NSTableView()
     private let scroller = NSScrollView()
     private let notice = NSTextField(wrappingLabelWithString: "正在读取网关…")
@@ -107,7 +109,19 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         let update = button("更新旧 Key", #selector(updateTicket))
         let create = button("＋ 创建密钥", #selector(createKey), kind: .primary)
         toolbarButtons = [refresh, slots, update, create]
-        let toolbar = row([heading, NSView(), refresh, reviewButton, slots, quotaButton, update, create])
+        updateDot.wantsLayer = true
+        updateDot.layer?.backgroundColor = NSColor.systemYellow.cgColor
+        updateDot.layer?.cornerRadius = 3.5
+        updateDot.widthAnchor.constraint(equalToConstant: 7).isActive = true
+        updateDot.heightAnchor.constraint(equalToConstant: 7).isActive = true
+        updateDot.isHidden = true
+        let version = row([versionLabel, updateDot], spacing: 2)
+        version.alignment = .top
+        let title = NSStackView(views: [heading, version])
+        title.orientation = .vertical
+        title.alignment = .leading
+        title.spacing = 1
+        let toolbar = row([title, NSView(), refresh, reviewButton, slots, quotaButton, update, create])
         append(toolbar, to: root)
         root.setCustomSpacing(19, after: toolbar)
 
@@ -274,6 +288,17 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
 
     @objc private func refresh(_ sender: Any?) { loadSnapshot(background: false) }
 
+    private func showGatewayVersion(_ state: [String: Any]) {
+        let revision = state["gatewayRevision"] as? Int ?? 0
+        let available = revision > 0 && state["gatewayUpdateAvailable"] as? Bool == true
+        versionLabel.stringValue = revision > 0 ? "网关版本 rev\(revision)" : "网关版本 —"
+        let hint = available ? "有新版网关，可在「网关设置」中更新" : nil
+        versionLabel.toolTip = hint
+        versionLabel.setAccessibilityHelp(hint)
+        updateDot.toolTip = hint
+        updateDot.isHidden = !available
+    }
+
     private func loadSnapshot(background: Bool) {
         guard !fetching, !busy, !checkingQuota || snapshot.isEmpty else { return }
         fetching = true
@@ -286,6 +311,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             switch result {
             case .success(let response):
                 self.snapshot = response as? [String: Any] ?? [:]
+                self.showGatewayVersion(self.snapshot)
                 if !background { self.notice.stringValue = "" }
                 self.notice.isHidden = self.notice.stringValue.isEmpty
                 self.updateTotals()
@@ -294,6 +320,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
                     self.loadSnapshot(background: false)
                 }
             case .failure(let error):
+                self.showGatewayVersion([:])
                 self.showNotice(error.localizedDescription)
             }
             self.updateButtons()

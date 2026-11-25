@@ -152,7 +152,8 @@ class OwnerHosts:
             alias = re.fullmatch(r'Host ([a-z][a-z0-9_-]{0,31})', lines[1])
             if alias is None or lines[2].strip() != 'HostName 127.0.0.1':
                 raise ValueError()
-            return alias[1], hashlib.sha256(public_key).hexdigest(), shlex.join(['ssh', '-F', str(folder/'config'), alias[1]])
+            login = next((m[1] for line in lines if (m := re.fullmatch(r'\s*User\s+([\w.@\\-]{1,128})\s*', line))), None)
+            return alias[1], hashlib.sha256(public_key).hexdigest(), shlex.join(['ssh', '-F', str(folder/'config'), alias[1]]), login
         except (OSError, ValueError):
             raise DeviceOffline('The verified SSH tunnel is unavailable') from None
 
@@ -161,7 +162,7 @@ class OwnerHosts:
         target = self.path(owner, device)
         if not isinstance(hostname, str) or not re.fullmatch(r'[\w .-]{1,48}', hostname) or not hostname.strip():
             raise DeviceError('Invalid SSH device name')
-        alias, identity, _ = self.identity(device)
+        alias, identity, _, _ = self.identity(device)
         proof = secrets.token_urlsafe(32)
         with pairing_lock(self.state, owner):
             target = self.path(owner, device)
@@ -192,10 +193,10 @@ class OwnerHosts:
     def chat_binding(self, owner, platform, device, proof):
         _, record = self.authenticate(owner, platform, device, proof)
         require_paired_device(self.state, owner, device)
-        alias, identity, command = self.identity(device)
+        alias, identity, command, login = self.identity(device)
         if not hmac.compare_digest(identity, record['identity']):
             raise DeviceError('The SSH device was changed')
-        return {'id':device,'platform':platform,'hostname':record['hostname'],'alias':alias,'command':command}
+        return {'id':device,'platform':platform,'hostname':record['hostname'],'username':login,'alias':alias,'command':command}
 
     def revoke(self, owner, platform, device, proof):
         with pairing_lock(self.state, owner):
@@ -421,7 +422,7 @@ class Devices:
         except OSError:
             raise DeviceOffline('SafeCode device control is offline') from None
         return {'id': row['id'], 'platform': row['platform'], 'hostname': row['hostname'],
-                'alias': row['alias'], 'command': self.command(row)}
+                'username': row['username'], 'alias': row['alias'], 'command': self.command(row)}
 
 
 def read_json(handler):

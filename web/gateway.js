@@ -107,7 +107,18 @@ function action(text, handler, className) {
   return button;
 }
 
+function renderGatewayVersion(state) {
+  const badge = byId('gateway-version');
+  const revision = state?.gatewayRevision;
+  const known = Number.isInteger(revision) && revision > 0;
+  const update = known && state.gatewayUpdateAvailable === true;
+  badge.textContent = known ? `网关版本 rev${revision}` : '网关版本 —';
+  badge.toggleAttribute('data-update', update);
+  badge.title = update ? '有新版网关，可在「网关设置」中更新' : '';
+  badge.setAttribute('aria-label', update ? badge.textContent + '，' + badge.title : badge.textContent);
+}
 function renderOverview() {
+  renderGatewayVersion(snapshot);
   renderClaudeSubscription(quotaCard, queriedSubscription ?? snapshot.subscription);
   const {keys, waiting, stats} = snapshot;
   const current = keys.find(key => key.active);
@@ -500,6 +511,7 @@ async function loadSnapshot(showProgress) {
     notice('status', '');
     return true;
   } catch (error) {
+    renderGatewayVersion(null);
     const subscription = queriedSubscription ?? snapshot?.subscription;
     renderClaudeSubscription(quotaCard, subscription ? {...subscription, state: 'stale'} : undefined);
     notice('status', error.message, true);

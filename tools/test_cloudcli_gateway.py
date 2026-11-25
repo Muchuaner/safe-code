@@ -90,6 +90,9 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
+        if self.path == f'/api/providers/sessions/{CLOUD_SESSION}':
+            self.send_json({'data':{'sessionId':CLOUD_SESSION}})
+            return
         if self.path.split('?')[0] == f'/api/providers/sessions/{CLOUD_SESSION}/messages':
             query = parse_qs(urlsplit(self.path).query)
             limit = int(query.get('limit', ['64'])[0])
@@ -157,6 +160,8 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
         if server.track_running:
             server.running_since = int(time.time()*1000)
         status, payload = server.reply
+        if getattr(server,'missing_session',None) == data.get('sessionId') and 'sessionId' in data:
+            status, payload = 404, {'error':f'Session "{data["sessionId"]}" was not found'}
         if isinstance(payload, list):
             frames = [('data: ' + json.dumps(event) + '\n\n').encode() for event in payload]
             content_type = 'text/event-stream'
@@ -582,6 +587,84 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertNotIn('message_stop', [event['type'] for event in events])
         self.assertEqual(self.request(payload)[0], 409)
         self.assertEqual(len(self.cloud.requests), 1)
+
+    def test_full_recovery_archive_keeps_unicode_and_excludes_private_thinking(self):
+        history = [{'role':'user','content':'蓝'*35000}, {'role':'assistant','content':[
+            {'type':'thinking','thinking':'never copy me'}, {'type':'text','text':'end'}]}]
+        attachments = []
+        with patch.object(gateway,'MAX_CLOUDCLI_ATTACHMENT',20002):
+            inline, note = gateway.recovery_context(history,attachments,False)
+        text = ''.join(raw.decode() for _,_,raw in attachments)
+        self.assertGreater(len(attachments),1)
+        self.assertTrue(all(len(raw)<=20002 for _,_,raw in attachments))
+        self.assertEqual(text,gateway.recovery_transcript(history))
+        self.assertNotIn('never copy me',text)
+        self.assertIn('完整文字记录',note)
+        self.assertLess(len(inline),len(text))
+        self.assertEqual(gateway.recovery_context(history,None,False),(text,''))
+
+    def test_model_catalog_refresh_keeps_original_session_and_receipt(self):
+        initial = conversation('Remember the yellow notebook.')
+        status, reply = self.request(initial)
+        self.assertEqual(status,200)
+        old_scope = self.manager.cloudcli.identity
+        self.config['models'] = [*self.config['models'],'another-fixture-model']
+        self.save_config()
+        self.start_gateway()
+        self.assertEqual(self.manager.cloudcli.identity,old_scope)
+        self.assertEqual(self.request(initial),(200,reply))
+        self.assertEqual(len(self.cloud.requests),1)
+        follow = conversation('',messages=[*initial['messages'],{'role':'assistant','content':reply['content']},
+                                            {'role':'user','content':'Continue.'}])
+        self.assertEqual(self.request(follow)[0],200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'],CLOUD_SESSION)
+        # A changed upstream credential remains a separate authority.
+        self.config['apiKey'] = 'a-different-private-fixture-key'
+        self.save_config()
+        self.start_gateway()
+        self.assertNotEqual(self.manager.cloudcli.identity,old_scope)
+
+    def test_orphan_history_recovers_once_and_binds_next_turn(self):
+        self.manager.restore_desktop_history = True
+        history = [{'role':'user','content':'Remember notebook violet.'},
+                   {'role':'assistant','content':[{'type':'thinking','thinking':'private draft'},
+                                                  {'type':'text','text':'Notebook stored.'}]}]
+        latest = {'role':'user','content':'Which notebook?'}
+        payload = conversation('', messages=[*history,latest])
+        status, reply = self.request(payload)
+        self.assertEqual(status, 200, reply)
+        first = self.cloud.requests[-1][2]
+        self.assertNotIn('sessionId',first)
+        self.assertIn('notebook violet', first['message'])
+        self.assertNotIn('private draft', first['message'])
+        self.assertEqual(self.request(payload), (200,reply))
+        self.assertEqual(len(self.cloud.requests),1)
+        status, _ = self.request(conversation('',messages=[*payload['messages'],
+            {'role':'assistant','content':reply['content']},{'role':'user','content':'Continue.'}]))
+        self.assertEqual(status,200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'],CLOUD_SESSION)
+        self.assertNotIn('notebook violet',self.cloud.requests[-1][2]['message'])
+        self.assertEqual(gateway.desktop_session_label(('Alex','Office'),history,'12345678-abcd'),
+                         'Alex·Office·Remember-notebook-violet.-12345678')
+
+    def test_confirmed_deleted_session_recovers_but_generic_404_does_not(self):
+        self.manager.restore_desktop_history = True
+        first = conversation('First confirmed task.')
+        status, reply = self.request(first)
+        self.assertEqual(status,200)
+        payload = conversation('',messages=[*first['messages'], {'role':'assistant','content':reply['content']},
+                                            {'role':'user','content':'Follow up.'}])
+        self.cloud.reply = (404, {'error':'Unknown route'})
+        self.assertEqual(self.request(payload)[0],404)
+        self.assertEqual(len(self.cloud.requests),2)
+        self.cloud.missing_session = CLOUD_SESSION
+        self.cloud.reply = (200,cloud_turn('Restored.', session_id='replacement-session'))
+        status, reply = self.request(payload)
+        self.assertEqual(status,200,reply)
+        self.assertNotIn('sessionId',self.cloud.requests[-1][2])
+        self.assertIn('First confirmed task.',self.cloud.requests[-1][2]['message'])
+        self.assertEqual(self.request(payload),(200,reply))
+        self.assertEqual(len(self.cloud.requests),4)
 
     def test_original_cloud_session_resumes_and_usage_is_returned(self):
         first = conversation('First task')

@@ -42,6 +42,12 @@ textarea { resize: none; width: 100%; }
 main { width: min(100%, 1440px); margin: auto; padding: 23px 26px 28px; }
 .gateway-header, .section-heading, .dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .gateway-header { margin-bottom: 19px; }
+.overview-heading { flex-shrink: 0; }
+#gateway-version { position: relative; color: var(--muted); font-size: var(--type-small); white-space: nowrap; }
+#gateway-version[data-update]::after {
+  content: ""; position: absolute; top: -1px; right: -9px; width: 7px; height: 7px;
+  border-radius: 50%; background: #f2bd34; box-shadow: inset 0 0 0 1px #bd8d1d;
+}
 h1 { font-size: var(--type-large); font-weight: 720; letter-spacing: -.025em; }
 h2 { font-size: var(--type-large); font-weight: 670; }
 .muted, small { color: var(--muted); font-size: var(--type-small); }

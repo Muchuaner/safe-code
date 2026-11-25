@@ -393,6 +393,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(k=>{k.Limits.MaxRequestBodySize=MaxMessagesRequest;k.Limits.MaxConcurrentConnections=32;k.Listen(IPAddress.Loopback,port);});
         var app=builder.Build();var client=Remote(t);
+        client.DefaultRequestHeaders.Add("X-SafeCode-Desktop-User",
+            Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Environment.UserName)));
         client.Timeout=Timeout.InfiniteTimeSpan; // Messages follows the client cancellation and provider lifecycle.
         if(device!=null)
         {

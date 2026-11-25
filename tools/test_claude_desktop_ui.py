@@ -34,7 +34,7 @@ with sync_playwright() as p:
         if(m.op==='safeCodeApi.publicStatus'||m.op==='safeCodeApi.enablePublic'){
           if(m.op==='safeCodeApi.enablePublic')window.gatewayEnabled=true;
           const result=window.gatewayMissing?{installed:false,enabled:false}:
-            {enabled:!!window.gatewayEnabled,backend:'cloudcli',gatewayRevision:12};
+            {enabled:!!window.gatewayEnabled,backend:'cloudcli',gatewayRevision:27,bundledGatewayRevision:27};
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result}));return;
         }
         if(m.op.startsWith('desktopKey.')){
@@ -214,7 +214,7 @@ with sync_playwright() as p:
     page.locator('#claude-desktop-manage').click()
     settings=page.locator('#claude-desktop-dialog')
     footer=settings.locator('.config-footer')
-    expect(footer.locator('button')).to_have_text(['故障修复','启用','管理网关'])
+    expect(footer.locator('button:visible')).to_have_text(['故障修复','启用','管理网关'])
     progress=page.locator('#safe-code-api-progress')
     close_settings=page.locator('#claude-desktop-close')
     enable_gateway=page.locator('#safe-code-api-enable')
@@ -231,7 +231,7 @@ with sync_playwright() as p:
     expect(progress).to_contain_text('点击「启用」重试')
     expect(enable_gateway).to_be_enabled()
     page.evaluate("""safeCodeNativeResponse({
-        id:heldGatewayStatus,result:{enabled:true,backend:'cloudcli',gatewayRevision:12}
+        id:heldGatewayStatus,result:{enabled:true,backend:'cloudcli',gatewayRevision:27,bundledGatewayRevision:27}
     });window.holdGatewayStatus=false;window.gatewayMissing=true;window.holdGatewayInstall=true""")
     expect(enable_gateway).to_be_enabled()
     expect(manage_gateway).to_be_disabled()

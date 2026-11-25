@@ -4,7 +4,7 @@ import Security
 import UserNotifications
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "0.4.13"
+private let safeCodeVersion = "0.4.15"
 private enum AppError: LocalizedError {
     case message(String)
     case keychainCancelled
@@ -641,7 +641,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 let event: [String: Any] = ["key_id":key["id"] ?? "", "model":"claude-example", "at":1795225500,
                     "outcome":"success", "status":200, "wait_ms":82, "duration_ms":1600, "tokens":18]
                 let model: [String: Any] = ["model":"claude-example", "requests":42, "failures":2, "tokens":243810, "cost_nanos":104_300_000]
-                var fixture: [String: Any] = ["keys":[key],"key_policy_supported":true,"active_count":0,"waiting":0,"concurrency":0,"concurrency_text":"0",
+                var fixture: [String: Any] = ["gatewayRevision":27,"gatewayUpdateAvailable":true,"keys":[key],"key_policy_supported":true,"active_count":0,"waiting":0,"concurrency":0,"concurrency_text":"0",
                     "billing":["cost_nanos":104_300_000],"origin":"https://gateway.example.test","recent":[event],"models":[model]]
                 if let period=args["analytics"] as? String {
                     let step=["1h":300,"24h":3600,"7d":86400][period] ?? 300
@@ -970,20 +970,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           switchMode('deployment');
           await rpc('window.smoke.screenshot',{name:'deployment'});
           switchMode('maintenance');
+          const entry=document.querySelector('#claude-desktop-manage');
+          entry.disabled=false;
+          entry.textContent='网关设置 · 有更新';
           document.querySelector('.maintenance-panel').scrollTop=10000;
           await rpc('window.smoke.screenshot',{name:'homepage'});
         }
         const desktopDialog=document.querySelector('#claude-desktop-dialog');
         const gatewayForm=document.querySelector('#safe-code-api-form');
         const gatewayButtons=[...gatewayForm.querySelectorAll('.config-footer button')];
-        if(gatewayButtons.map(button=>button.textContent.trim()).join(',')!=='故障修复,启用,管理网关')
+        if(gatewayButtons.map(button=>button.textContent.trim()).join(',')!=='故障修复,更新网关,启用,管理网关')
           throw Error('Unexpected gateway actions');
         if(capture){
           gatewayForm.querySelector('#claude-desktop-dialog-state').textContent='公网已启用';
-          gatewayForm.querySelector('#safe-code-api-progress').textContent='点击「管理网关」创建 API Key，再回到主界面粘贴。';
-          gatewayButtons[1].textContent='已启用';
-          gatewayButtons[1].disabled=true;
-          gatewayButtons[2].disabled=false;
+          gatewayForm.querySelector('#safe-code-api-progress').textContent='当前客户端包含新版网关。点击「更新网关」更新 VPS，保留已有 API Key。';
+          gatewayButtons[1].hidden=false;
+          gatewayButtons[1].disabled=false;
+          gatewayButtons[2].textContent='已启用';
+          gatewayButtons[2].disabled=true;
+          gatewayButtons[3].disabled=false;
         }
         desktopDialog.showModal();
         await waitPanel('claude-desktop-dialog',1);
