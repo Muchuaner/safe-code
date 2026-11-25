@@ -532,7 +532,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 if start_fails:
                     raise RuntimeError('simulated service start failure')
                 return SimpleNamespace(stdout='')
-            return SimpleNamespace(stdout='true\n')
+            return SimpleNamespace(stdout='true\n', returncode=0)
 
         with (patch.object(agent, 'STATE', self.root),
               patch.object(agent, 'API_DIRECTORY', app),

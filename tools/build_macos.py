@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build a self-contained Apple Silicon app and disk image without changing installed apps or publishing."""
+from verify_gateway_bundle import verify_gateway_bundle
 import argparse,hashlib,json,os,plistlib,shutil,subprocess,tarfile,tempfile,urllib.request
 from pathlib import Path,PurePosixPath
 from build_macos_rdp import build as build_rdp, verify_library_paths
@@ -77,6 +78,7 @@ for path in [*core.rglob('*'),rdp_executable]:
  if path.is_file():
   with path.open('rb') as f:magic=f.read(4)
   if magic in magics:run(['codesign','--force','--sign',a.sign_identity,'--timestamp=none',path],stdout=subprocess.DEVNULL)
+verify_gateway_bundle(web_pages, core/'SafeCode.Core.dll')
 manifest={'version':version,'platform':'macOS','architecture':a.arch,'minimumSystemVersion':'15.0','signing':'ad-hoc developer build' if a.sign_identity=='-' else 'Developer ID; notarization separate','files':{}}
 for folder in [resources]:
  for path in sorted(folder.rglob('*')):

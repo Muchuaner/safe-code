@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """生成 Windows x64 自包含便携包。仅写本地 dist，不连接 GitHub。"""
+from verify_gateway_bundle import verify_gateway_bundle
 import argparse,hashlib,json,os,shutil,subprocess,zipfile
 from xml.etree import ElementTree
 from pathlib import Path
@@ -63,6 +64,7 @@ if a.codex_bridge_payload:
   for name in ['LICENSE.txt','THIRD_PARTY_LICENSES.txt','UPSTREAM.txt']:
    data=source.read(prefix+name);(bundled/name).write_bytes(data);(legal/('Claude-Codex-'+name)).write_bytes(data)
  (bundled/'source.json').write_bytes((root/'third_party/claude-codex-vps/SOURCE.json').read_bytes())
+verify_gateway_bundle(output/'Web/web', output/'SafeCode.Core.dll')
 manifest={'version':app_version,'target':'win-x64','selfContained':True,'files':{}}
 for path in sorted(output.rglob('*')):
  if path.is_file():manifest['files'][path.relative_to(output).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
