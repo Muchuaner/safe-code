@@ -41,6 +41,8 @@ class DirectoryError(ValueError):
 
 
 def check_operation(request):
+    if not isinstance(request, dict) or not isinstance(request.get('action'), str):
+        raise DirectoryError(400, '网关操作格式不正确。')
     fields = REMOTE_FIELDS.get(request.get('action'))
     if fields is None or request.keys() - fields - {'action'}:
         raise DirectoryError(400, '该操作不能通过已绑定网关执行。')
@@ -249,6 +251,9 @@ def installed_directory(root, request):
     state = Path('/var/lib/safe-code-mg-connector')
     script = Path('/opt/safe-code-mg-connector/connector.py')
     if not (state / 'identity.json').is_file() or not script.is_file():
+        return None
+    identity = json.loads((state / 'identity.json').read_text())
+    if Path(identity['source']).resolve() != (root / 'admin.sock').resolve():
         return None
     program = """import json, sys
 from pathlib import Path

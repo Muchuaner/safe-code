@@ -248,7 +248,8 @@
         needsEnrollment = true;
         show('home');
       } else {
-        note(error.message, true);
+        const older = Number.isInteger(snapshot?.gatewayRevision) && snapshot.gatewayRevision < 29;
+        note(older ? '请先回到网关设置，点击「更新网关」，再打开多网关管理。' : error.message, true);
       }
     }
   });
