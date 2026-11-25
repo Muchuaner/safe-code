@@ -2,28 +2,15 @@
 
 (() => {
   const main = document.querySelector('main');
-  const heading = main.querySelector('.gateway-header h1');
-  const bar = document.createElement('div');
-  bar.className = 'mg-title';
-  heading.replaceWith(bar);
-  bar.append(heading);
-  const selector = new Option('本机网关', 'local');
-  const select = document.createElement('select');
-  select.setAttribute('aria-label', '选择网关');
-  select.add(selector);
-  const gear = document.createElement('button');
-  gear.type = 'button';
-  gear.className = 'mg-gear';
-  gear.setAttribute('aria-label', '多网关管理');
-  gear.setAttribute('aria-haspopup', 'dialog');
-  gear.textContent = '多网关';
-  bar.append(select, gear);
+  const header = main.querySelector('.gateway-header');
+  const select = header.querySelector('#gateway-selector');
+  const gear = header.querySelector('.mg-gear');
 
   const panel = document.createElement('section');
   panel.className = 'mg-panel';
   panel.setAttribute('aria-label', '已绑定网关');
   panel.hidden = true;
-  bar.closest('header').after(panel);
+  header.after(panel);
   const dialog = document.createElement('dialog');
   dialog.className = 'mg-dialog';
   dialog.setAttribute('aria-labelledby', 'mg-heading');

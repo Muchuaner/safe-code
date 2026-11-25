@@ -41,7 +41,7 @@ textarea { resize: none; width: 100%; }
 .danger:hover:not(:disabled) { background: #83292a; }
 main { width: min(100%, 1440px); margin: auto; padding: 23px 26px 28px; }
 .gateway-header, .section-heading, .dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.gateway-header { margin-bottom: 19px; }
+.gateway-header { margin-bottom: 19px; flex-wrap: wrap; }
 .overview-heading { flex-shrink: 0; }
 #gateway-version { position: relative; color: var(--muted); font-size: var(--type-small); white-space: nowrap; }
 #gateway-version[data-update]::after {
@@ -228,8 +228,9 @@ dialog::backdrop { background: #19332b52; }
   .model-layout { flex-wrap: wrap; }
 }
 
-.gateway-header .actions{flex-wrap:wrap;justify-content:flex-end;flex-shrink:1}
-.gateway-header .actions>button{height:34px}
+.gateway-header .actions { flex: 1 1 max-content; flex-wrap: wrap; justify-content: flex-start; min-width: 0; }
+.gateway-header .actions > :is(button, select, .gateway-quota) { height: 34px; max-width: 100%; }
+.gateway-header .actions > button { white-space: nowrap; }
 .gateway-quota{display:inline-flex;align-items:center;gap:8px;border:1px solid #dce9df;border-radius:7px;background:var(--accent-wash);height:34px;padding:0 9px;font-size:var(--type-small);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .gateway-quota strong{color:var(--accent)}
 .quota-refresh{display:inline-grid;place-items:center;width:22px;height:22px;padding:0;min-height:0;background:transparent;border:0;color:inherit;border-radius:4px;cursor:pointer}

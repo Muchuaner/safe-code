@@ -20,6 +20,8 @@
         <span id="gateway-version">网关版本 —</span>
       </div>
       <div class="actions">
+        <select id="gateway-selector" aria-label="选择网关"><option value="local">本机网关</option></select>
+        <button type="button" class="mg-gear" aria-label="多网关管理" aria-haspopup="dialog">多网关</button>
         <button id="refresh" type="button">刷新</button>
         <button id="gateway-prompt-review" type="button" aria-haspopup="dialog" disabled>前置审查 <span id="prompt-review-state" hidden></span></button>
         <button id="gateway-key-queue" type="button" aria-haspopup="dialog" disabled>API 排队 <span id="key-queue-state" hidden></span></button>

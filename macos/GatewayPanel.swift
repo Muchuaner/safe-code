@@ -124,7 +124,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         title.alignment = .leading
         title.spacing = 1
         let directory = button("多网关", #selector(showDirectory))
-        let toolbar = row([title, directory, NSView(), refresh, reviewButton, slots, quotaButton, update, create])
+        let toolbar = row([title, NSView(), directory, refresh, reviewButton, slots, quotaButton, update, create])
         append(toolbar, to: root)
         root.setCustomSpacing(19, after: toolbar)
 
