@@ -135,6 +135,7 @@ public sealed partial class SshSession
 
     public async Task<JsonElement> ManagePublicGatewayAsync(Dictionary<string, JsonElement> request, CancellationToken ct)
     {
+        request.Remove("background", out var background);
         string? action = request.GetValueOrDefault("action").ValueKind == JsonValueKind.String
             ? request["action"].GetString() : null;
         if (action == "refresh_subscription") return await RefreshPublicGatewaySubscriptionAsync(ct);
@@ -142,7 +143,7 @@ public sealed partial class SshSession
         {
             var result = await RequestGatewayAsync(request, ct);
             return action == "list"
-                ? await WithGatewayOverviewAsync(result, request.GetValueOrDefault("background").ValueKind == JsonValueKind.True, ct)
+                ? await WithGatewayOverviewAsync(result, background.ValueKind == JsonValueKind.True, ct)
                 : result;
         }
 

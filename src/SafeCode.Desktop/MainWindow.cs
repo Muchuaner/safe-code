@@ -532,7 +532,6 @@ public sealed class MainWindow : Window
                         if(installingUpdate||!ReferenceEquals(gatewaySession,RequireGatewaySession()))
                             throw new InvalidOperationException("SSH 会话已变更，请重新打开网关管理。");
                         var request=options.Deserialize<Dictionary<string,JsonElement>>()!;
-                        request.Remove("background");
                         return gatewaySession.ManagePublicGatewayAsync(request,lifetime.Token);
                     }
                     var diagnostic=DiagnosticTrace.GatewayOperation(options);
