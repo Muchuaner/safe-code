@@ -44,12 +44,12 @@ def parse_review_result(text, *, translate):
         raise ValueError('Invalid review verdict')
     verdict = data['verdict']
     if translate and verdict == 'allow':
+        if not set(data) <= {'verdict', 'english'}:
+            raise ValueError('Unexpected review fields')
         english = data.get('english')
-        if set(data) != {'verdict', 'english'} or not isinstance(english, str) or not english.strip():
-            raise ValueError('Missing English translation')
-        if len(english.encode()) > MAX_REQUEST:
-            raise ValueError('English translation exceeds the gateway limit')
-        return verdict, english
+        if isinstance(english, str) and english.strip() and len(english.encode()) <= MAX_REQUEST:
+            return verdict, english
+        return verdict, None
     if set(data) != {'verdict'}:
         raise ValueError('Unexpected review fields')
     return verdict, None
@@ -119,7 +119,7 @@ class PromptReviewer:
             raise CloudCliError(REVIEW_UNAVAILABLE, 503) from None
         if verdict != 'allow':
             raise CloudCliError(WARNINGS[verdict], 403)
-        return english if translate else prompt
+        return english if english is not None else prompt
 
     def builtin_response(self, model, prompt, policy):
         if not self.builtin_available:

@@ -40,7 +40,7 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 MAX_REQUEST = 8 * 1024 * 1024
-MAX_MESSAGES_REQUEST = 16 * 1024 * 1024
+MAX_MESSAGES_REQUEST = 64 * 1024 * 1024
 MAX_CLOUDCLI_REPLY = 32 * 1024 * 1024
 MAX_CLOUDCLI_ATTACHMENT = 10 * 1024 * 1024  # CloudCLI /api/assets/files per-file limit
 CLOUDCLI_SSE_PING_INTERVAL = 15
@@ -451,7 +451,10 @@ def normalized(messages):
 
 
 def signature(messages):
-    return hashlib.sha256(json.dumps(normalized(messages), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    digest = hashlib.sha256()
+    for piece in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(normalized(messages)):
+        digest.update(piece.encode())
+    return digest.hexdigest()
 
 
 def validate_request(data):
@@ -946,8 +949,16 @@ class CloudCliNativeStop(CloudCliError):
     """The upstream response confirmed a stop initiated outside this gateway."""
 
 
-class CloudCliEditRefused(CloudCliError):
+class CloudCliRejected(CloudCliError):
+    """CloudCLI explicitly refused the request before starting it."""
+
+
+class CloudCliEditRefused(CloudCliRejected):
     """CloudCLI refused an edit before changing the transcript."""
+
+
+class CloudCliWebResponseTooLarge(CloudCliError):
+    """A native web response exceeded its read budget."""
 
 
 def cloudcli_web_login(port, credentials):
@@ -1631,6 +1642,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
     lines = total = 0
     usage = dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0)
     complete = False
+    possible_error = None
     # Bound an unacknowledged dispatch. After a session is confirmed, the
     # provider's completion, cancellation or transport failure ends the turn.
     deadline = time.monotonic() + CLOUDCLI_START_TIMEOUT
@@ -1642,6 +1654,8 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
         try:
             if isinstance(response, CloudCliSocketEvents):
                 line = response.readline(MAX_REQUEST + 1, deadline)
+            elif transport_socket is not None and response.isclosed():
+                line = b''
             else:
                 if transport_socket is not None:
                     transport_socket.settimeout(remaining)
@@ -1690,10 +1704,19 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                     progress.notice('已接收任务')
         if kind == 'text' and event.get('role') == 'assistant' and not event.get('parentToolUseId'):
             content = event.get('content')
-            if (isinstance(content, str) and (event.get('isApiErrorMessage') or event.get('is_api_error_message')
-                    or re.match(r'^API Error:\s*[45]\d\d\b', content)
-                    or content.startswith('Not logged in') and '/login' in content)):
+            if event.get('isApiErrorMessage') is True or event.get('is_api_error_message') is True:
                 raise cloudcli_failure(event, progress)
+            if possible_error is not None and content != possible_error['content']:
+                progress.feed(possible_error)
+                possible_error = None
+            if isinstance(content, str) and (re.match(r'^API Error:\s*[45]\d\d\b', content)
+                    or content.startswith('Not logged in') and '/login' in content):
+                # A successfully generated log example remains ordinary output.
+                possible_error = event
+                continue
+        if possible_error is not None and kind == 'stream_delta' and not event.get('parentToolUseId'):
+            progress.feed(possible_error)
+            possible_error = None
         if kind == 'status' and event.get('text') == 'token_budget':
             budget = event.get('tokenBudget')
             if isinstance(budget, dict):
@@ -1707,12 +1730,14 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                     raise CloudCliNativeStop('本轮已在 CloudCLI 中停止。请在原对话发送下一条消息。', 400)
                 raise progress.incomplete('CloudCLI run was canceled', 409)
             if type(event.get('exitCode')) is not int or event['exitCode'] != 0 or event.get('success') is False:
-                raise cloudcli_failure(event, progress)
+                raise cloudcli_failure(possible_error or event, progress)
             complete = True
         if event_type == 'done':
             if progress.session and complete:
                 if progress.awaiting_decision:
                     raise CloudCliError('CloudCLI did not confirm the Desktop answer', 409)
+                if possible_error is not None:
+                    progress.feed(possible_error)
                 return progress.session, progress.finish(usage), usage
             break
         if progress.awaiting_decision and event.get('requestId') == progress.awaiting_decision:
@@ -1739,6 +1764,8 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                     yield question
                 continue
         progress.feed(event)
+    if possible_error is not None:
+        raise cloudcli_failure(possible_error, progress)
     raise progress.incomplete('CloudCLI ended without a confirmed assistant reply')
 
 
@@ -1871,22 +1898,28 @@ class CloudCliStopWatch:
                 pass
         while not self.finished.wait(.25):
             stream = self.progress.stream
-            if stream is not None and (self.progress.stop_requested.is_set() or stream.disconnected()
-                                       or not stream.ping_if_idle(self.finished)):
+            if stream is None:
+                continue
+            if self.progress.stop_requested.is_set():
                 self.stop(stream)
                 return
+            if not self.progress.client_detached.is_set() and (stream.disconnected()
+                    or not stream.ping_if_idle(self.finished)):
+                self.detach(stream)
+
+    def detach(self, stream):
+        if not self.inactive(stream):
+            self.progress.client_detached.set()
 
     def stop(self, stream):
         with self.lock:
             if self.attempted or self.session is None or self.inactive(stream):
                 return
             self.attempted = True
-            self.progress.client_detached.set()
             if not self.can_abort:
                 # The Agent API has no cancel operation. Keep reading this response
                 # so its owner can recover the result without dispatching it again.
                 return
-            self.progress.output_closed = True
         try:
             connect, websocket_error = cloudcli_websocket()
         except CloudCliError:
@@ -1903,6 +1936,7 @@ class CloudCliStopWatch:
                     return
                 self.progress.stopping.set()
                 ws.send(json.dumps({'type': 'chat.abort', 'sessionId': self.session}))
+                self.progress.output_closed = True
         except (OSError, CloudCliError, websocket_error):
             return
 
@@ -1979,6 +2013,9 @@ class CloudCliBackend:
                        'project TEXT NOT NULL, workspace TEXT, updated REAL NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS requests (identity TEXT PRIMARY KEY, scope TEXT NOT NULL, '
                        'reply TEXT, created REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS request_operations (identity TEXT PRIMARY KEY, '
+                       'operation TEXT NOT NULL, pending INTEGER NOT NULL)')
+            db.execute('CREATE INDEX IF NOT EXISTS request_operations_pending ON request_operations(operation) WHERE pending=1')
             # A receipt identifies an issued card. It never authorizes a tool decision.
             db.execute('CREATE TABLE IF NOT EXISTS question_receipts (scope TEXT PRIMARY KEY, history TEXT NOT NULL, '
                        'card TEXT NOT NULL, session TEXT NOT NULL, model TEXT NOT NULL, project TEXT NOT NULL, '
@@ -2380,6 +2417,7 @@ class CloudCliBackend:
             started = time.monotonic()
             with closing(HTTPConnection('127.0.0.1', self.config['port'], timeout=90)) as conn:
                 diagnostic(stage='cloudcli_connect')
+                conn.connect()
                 progress.dispatched = True
                 dispatch_ms = int(time.time()*1000)
                 progress.dispatch_ms = dispatch_ms
@@ -2392,9 +2430,10 @@ class CloudCliBackend:
                                cloudcliHeadersMs=min(900000, round((time.monotonic()-started)*1000)))
                     if response.status != 200:
                         status = response.status if response.status in CLOUDCLI_ERROR_STATUS else 502
+                        error = CloudCliRejected if status in (400, 401, 403, 404, 409, 413, 429) else CloudCliError
                         if status in (401, 403):
-                            raise CloudCliError('CloudCLI rejected the configured gateway credential', 403)
-                        raise CloudCliError(f'CloudCLI Agent API returned HTTP {response.status}', status)
+                            raise error('CloudCLI rejected the configured gateway credential', 403)
+                        raise error(f'CloudCLI Agent API returned HTTP {response.status}', status)
                     if response.getheader('Content-Type', '').split(';', 1)[0].strip().lower() != 'text/event-stream':
                         raise CloudCliError('CloudCLI Agent API returned an unexpected response')
                     with self.observe_turn(progress, dispatch_ms):
@@ -2422,7 +2461,7 @@ class CloudCliBackend:
                         raise CloudCliError(f'CloudCLI web API returned HTTP {response.status}', status)
                     raw = response.read(response_limit + 1)
                     if len(raw) > response_limit:
-                        raise CloudCliError('CloudCLI web response exceeds the gateway limit')
+                        raise CloudCliWebResponseTooLarge('CloudCLI web response exceeds the gateway limit')
                     return json.loads(raw)
         except (OSError, HTTPException, ValueError, RecursionError):
             raise CloudCliError('CloudCLI did not return a valid web API response', 502) from None
@@ -2434,12 +2473,20 @@ class CloudCliBackend:
         # within each page. A single tool-heavy turn can fill several pages.
         deadline = time.monotonic() + timeout
         total = None
-        for offset in range(0, 1024, 64):
+        offset = 0
+        page_size = 64
+        while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                break
-            path = f'/api/providers/sessions/{session}/messages?limit=64&offset={offset}'
-            result = self.web_request('GET', path, timeout=min(5, remaining), response_limit=CLOUDCLI_HISTORY_LIMIT)
+                raise CloudCliError('CloudCLI history anchor lookup timed out', 504)
+            path = f'/api/providers/sessions/{session}/messages?limit={page_size}&offset={offset}'
+            try:
+                result = self.web_request('GET', path, timeout=min(5, remaining), response_limit=CLOUDCLI_HISTORY_LIMIT)
+            except CloudCliWebResponseTooLarge:
+                if page_size == 1:
+                    raise
+                page_size //= 2
+                continue
             data = result.get('data') if isinstance(result, dict) else None
             rows = data.get('messages') if isinstance(data, dict) else None
             if not isinstance(rows, list):
@@ -2451,9 +2498,9 @@ class CloudCliBackend:
             yield rows, has_more
             if not has_more:
                 return
-            if len(rows) != 64 or type(total) is not int or total <= offset + len(rows):
+            if len(rows) != page_size or type(total) is not int or total <= offset + len(rows):
                 raise CloudCliError('CloudCLI did not return its history pagination')
-        raise CloudCliError('CloudCLI history anchor search reached the gateway limit')
+            offset += len(rows)
 
     def history_users(self, session, *, since=None, anchor=None, minimum=1, timeout=12):
         users = []
@@ -2515,7 +2562,7 @@ class CloudCliBackend:
         if not self.config.get('desktopQuestions') or not progress.forwarded_text or progress.dispatch_ms is None:
             return None
         fingerprint = hashlib.sha256(progress.forwarded_text.encode()).hexdigest()
-        return self.resolve_turn_anchor(session,fingerprint,progress.dispatch_ms,int(time.time()*1000))
+        return self.resolve_turn_anchor(session, fingerprint, progress.dispatch_ms, int(time.time()*1000), timeout=2)
 
     def running_sessions(self):
         result = self.web_request('GET', '/api/providers/sessions/running')
@@ -2538,17 +2585,9 @@ class CloudCliBackend:
             return
         observer = CloudCliStopWatch(self, progress, dispatch_ms)
         progress.on_session = observer.start
-        progress.on_disconnect = observer.stop
+        progress.on_disconnect = observer.detach
         try:
             yield
-        except ConnectionAbortedError:
-            if progress.stream is not None:
-                observer.stop(progress.stream)
-            raise
-        except CloudCliError as error:
-            if error.status == 504 and progress.stream is not None:
-                observer.stop(progress.stream)
-            raise
         finally:
             observer.finished.set()
             if progress.stream is not None:
@@ -2820,6 +2859,8 @@ class CloudCliBackend:
         except (CloudCliStopped, CloudCliNativeStop):
             self.save_interrupted_turn(messages, namespace, progress, previous_history, project, workspace,
                                        stopped=True)
+            with closing(sqlite3.connect(self.path)) as db, db:
+                db.execute('UPDATE request_operations SET pending=0 WHERE identity=?', (identity,))
             raise
         except StopIteration as complete:
             session, content, usage = complete.value
@@ -2832,6 +2873,7 @@ class CloudCliBackend:
             turn = CloudCliPausedTurn(events, progress, question, previous_history, project, workspace, identity,
                                       result, expected)
             with closing(sqlite3.connect(self.path)) as db, db:
+                db.execute('UPDATE request_operations SET pending=0 WHERE identity=?', (identity,))
                 db.execute('INSERT OR REPLACE INTO question_receipts VALUES (?,?,?,?,?,?,?,?)',
                            (namespace, expected, question.block['id'], question.session, progress.model,
                             project, workspace, time.time()))
@@ -2850,6 +2892,7 @@ class CloudCliBackend:
                 db.execute('INSERT OR REPLACE INTO workspace_prompts VALUES (?, ?, ?, ?)',
                            (namespace, session, progress.turn_position, progress.workspace_prompt_fingerprint))
             db.execute('UPDATE requests SET reply=? WHERE identity=?', (json.dumps(result, ensure_ascii=False), identity))
+            db.execute('UPDATE request_operations SET pending=0 WHERE identity=?', (identity,))
         model = progress.reported_model or progress.model
         manager.count_usage({'id': result['id'], 'model': model, 'usage': usage}, result['id'])
         return result
@@ -3164,7 +3207,8 @@ class CloudCliBackend:
         # pending dispatch marker and the latest native user message.
         checkpoint = db.execute('SELECT updated FROM session_state WHERE scope=? AND session=?',
                                 (namespace, session)).fetchone()
-        pending = db.execute('SELECT identity, created, reply FROM requests WHERE scope=? '
+        pending = db.execute('SELECT COALESCE(operation, identity), created, reply FROM requests '
+                             'LEFT JOIN request_operations USING (identity) WHERE scope=? '
                              'ORDER BY created DESC LIMIT 1', (namespace,)).fetchone()
         if checkpoint is None or pending is None or pending[2] is not None or pending[1] > checkpoint[0]:
             return None
@@ -3363,11 +3407,14 @@ class CloudCliBackend:
         # CloudCLI session ID. Per-key gateway directories isolate these tables.
         before = history_signature(messages[:-1], 'cloudcli')
         now = time.time()
+        legacy_identity = None
         if scope or len(messages)>1:
             request_identity = [namespace, before, task]
             if chat_mode:
                 request_identity += [plan_mode, [(name, media, hashlib.sha256(raw).hexdigest())
                                                 for name, media, raw in attachments]]
+            legacy_identity = hashlib.sha256(json.dumps(request_identity, ensure_ascii=False).encode()).hexdigest()
+            request_identity.append([model, effort if effort != 'default' else None])
             identity = hashlib.sha256(json.dumps(request_identity, ensure_ascii=False).encode()).hexdigest()
         else:
             identity = uuid.uuid4().hex
@@ -3399,11 +3446,11 @@ class CloudCliBackend:
             workspace_prompt_fingerprint = None
             with closing(sqlite3.connect(self.path)) as db, db:
                 with db:
-                    db.execute('DELETE FROM requests WHERE created<?', (now-30*86400,))
-                    db.execute('DELETE FROM sessions WHERE created<?', (now-30*86400,))
-                    db.execute('DELETE FROM session_projects WHERE updated<?', (now-30*86400,))
-                    db.execute('DELETE FROM session_state WHERE updated<?', (now-30*86400,))
-                    db.execute('DELETE FROM edit_turns WHERE updated<?', (now-30*86400,))
+                    db.execute('DELETE FROM requests WHERE created<? AND NOT EXISTS '
+                               '(SELECT 1 FROM request_operations o WHERE o.identity=requests.identity AND o.pending=1)',
+                               (now-30*86400,))
+                    db.execute('DELETE FROM request_operations WHERE NOT EXISTS '
+                               '(SELECT 1 FROM requests WHERE requests.identity=request_operations.identity)')
                     db.execute('DELETE FROM workspace_prompts WHERE NOT EXISTS '
                                '(SELECT 1 FROM sessions WHERE sessions.scope=workspace_prompts.scope '
                                'AND sessions.session=workspace_prompts.session)')
@@ -3414,6 +3461,15 @@ class CloudCliBackend:
                                '(SELECT 1 FROM sessions WHERE sessions.scope=anchor_receipts.scope '
                                'AND sessions.session=anchor_receipts.session)')
                 prior = db.execute('SELECT reply FROM requests WHERE identity=?', (identity,)).fetchone()
+                if prior is None and legacy_identity is not None:
+                    legacy = db.execute('SELECT reply FROM requests WHERE identity=?', (legacy_identity,)).fetchone()
+                    # Older receipts did not record effort. Preserve uncertain
+                    # submissions and replay completed receipts only for their model.
+                    if legacy is not None and (legacy[0] is None or json.loads(legacy[0]).get('model') == data['model']):
+                        prior = legacy
+                    elif db.execute('SELECT 1 FROM request_operations WHERE operation=? AND pending=1',
+                                    (legacy_identity,)).fetchone():
+                        prior = (None,)
                 if prior is not None:
                     if prior[0] is None:
                         if (scope and not self.config.get('desktopQuestions') and
@@ -3481,6 +3537,8 @@ class CloudCliBackend:
                 # cause an automatic second dispatch of this scoped task.
                 db.execute('DELETE FROM question_receipts WHERE scope=? OR created<?', (namespace, now-30*86400))
                 db.execute('INSERT INTO requests VALUES (?, ?, NULL, ?)', (identity, namespace, now))
+                if legacy_identity is not None:
+                    db.execute('INSERT INTO request_operations VALUES (?, ?, 1)', (identity, legacy_identity))
             with manager.lock:
                 manager.started += 1
             progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model, tool_approvals,
@@ -3502,13 +3560,13 @@ class CloudCliBackend:
                 raise
             except Exception as error:
                 events.close()
-                if not progress.dispatched or isinstance(error, CloudCliEditRefused):
+                rejected = isinstance(error, CloudCliRejected)
+                if not progress.dispatched or rejected:
                     with closing(sqlite3.connect(self.path)) as db, db:
                         db.execute('DELETE FROM requests WHERE identity=? AND reply IS NULL', (identity,))
-                recovered = (isinstance(error, (CloudCliError, ConnectionAbortedError))
-                             and not isinstance(error, CloudCliEditRefused)
-                             and self.save_interrupted_turn(messages, namespace, progress, before, project, workspace))
-                if not recovered and not isinstance(error, CloudCliEditRefused):
+                        db.execute('DELETE FROM request_operations WHERE identity=?', (identity,))
+                elif not (isinstance(error, (CloudCliError, ConnectionAbortedError))
+                          and self.save_interrupted_turn(messages, namespace, progress, before, project, workspace)):
                     self.invalidate_edit(namespace, payload.get('sessionId'), progress)
                 raise
 
@@ -4185,7 +4243,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get('Transfer-Encoding'):raise GatewayError('Content-Length required', 400)
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_MESSAGES_REQUEST:
-                raise GatewayError('Messages request exceeds 16 MiB or is empty', 413)
+                raise GatewayError('Messages request exceeds 64 MiB or is empty', 413)
             self.connection.settimeout(30)
             diagnostic(requestBytes=length)
             data = json.loads(self.rfile.read(length))

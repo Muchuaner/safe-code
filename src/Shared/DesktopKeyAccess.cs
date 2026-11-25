@@ -30,7 +30,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     Func<byte[],byte[]> unprotect, string? profileDirectory=null,ClientServices? diagnostics=null,
     string? windowsPolicyPath=null) : IDisposable
 {
-    private const int MaxMessagesRequest = 16 * 1024 * 1024;
+    private const int MaxMessagesRequest = 64 * 1024 * 1024;
     private const string DeviceAlreadyBoundMessage="该 Key 已绑定设备。请在原设备停用接入，或联系网关管理员检查绑定状态。";
     private const string UnbindPendingMessage="本机接入已停用，网关尚未确认解绑。请点击「重试解绑」查看结果。";
 
@@ -272,11 +272,19 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         using var req=new HttpRequestMessage(new HttpMethod(ctx.Request.Method),"/v1/cloudcli"+path[3..]+ctx.Request.QueryString.Value);
         if(ctx.Request.Method=="POST")
         {
-            // The remote Messages endpoint requires Content-Length, including for a chunked local request.
-            using var body=new MemoryStream();
-            await ctx.Request.Body.CopyToAsync(body,ctx.RequestAborted);
-            if(body.Length>MaxMessagesRequest){ctx.Response.StatusCode=413;return;}
-            req.Content=new ByteArrayContent(body.ToArray());
+            var length=ctx.Request.ContentLength;
+            if(length>MaxMessagesRequest){ctx.Response.StatusCode=413;return;}
+            if(length==null)
+            {
+                // The gateway requires a length. Spill a chunked request to
+                // disk when it includes sizable conversation history.
+                ctx.Request.EnableBuffering(bufferThreshold:64*1024);
+                await ctx.Request.Body.CopyToAsync(Stream.Null,ctx.RequestAborted);
+                length=ctx.Request.Body.Length;
+                ctx.Request.Body.Position=0;
+            }
+            req.Content=new StreamContent(ctx.Request.Body);
+            req.Content.Headers.ContentLength=length;
             req.Content.Headers.ContentType=new MediaTypeHeaderValue("application/json");
         }
         foreach(var h in new[]{"anthropic-version","anthropic-beta","x-claude-code-session-id"})

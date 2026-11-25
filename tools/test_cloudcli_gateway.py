@@ -1022,12 +1022,59 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
 
     def test_upstream_error_is_not_treated_as_assistant_text(self):
-        self.cloud.reply = (200, cloud_turn('API Error: 400 private provider detail'))
+        events = cloud_turn('API Error: 400 private provider detail')
+        next(event for event in events if event.get('role') == 'assistant')['isApiErrorMessage'] = True
+        self.cloud.reply = (200, events)
         status, response = self.request(conversation('Return the answer'))
         self.assertEqual(status, 400)
         self.assertNotIn('private provider detail', json.dumps(response))
         self.assertEqual(len(self.cloud.requests), 1)
         self.assertNoNativeFallback()
+
+    def test_successful_display_text_can_start_with_an_error_heading(self):
+        text = 'API Error: 503 is the heading of the requested example.'
+        self.cloud.reply = (200, cloud_turn(text))
+        for stream in (False, True):
+            status, reply = self.request(conversation('Print the example.', stream=stream), session=str(uuid.uuid4()))
+            self.assertEqual(status, 200, reply)
+            self.assertIn(text, json.dumps(reply))
+
+    def test_rejected_agent_request_can_be_retried(self):
+        payload = conversation('Write a greeting.')
+        self.cloud.reply = (429, {'message': 'No native task started.'})
+        self.assertEqual(self.request(payload)[0], 429)
+        self.cloud.reply = (200, cloud_turn('Retry succeeded.'))
+        status, reply = self.request(payload)
+        self.assertEqual(status, 200, reply)
+        self.assertIn('Retry succeeded.', reply['content'][0]['text'])
+        self.assertEqual(self.request(payload), (200, reply))
+        self.assertEqual(len(self.cloud.requests), 2)
+
+    def test_model_or_effort_change_does_not_replay_a_different_answer(self):
+        opus = 'claude-opus-5-5'
+        self.config['models'].append(opus)
+        self.save_config()
+        self.start_gateway()
+        history = 'Write one short fixture line.'
+        for model, effort in ((MODEL, 'medium'), (opus, 'medium'), (opus, 'high')):
+            self.cloud.reply = (200, cloud_turn(f'Used {model} with {effort}.'))
+            payload = conversation(history, model=model, output_config={'effort': effort})
+            status, reply = self.request(payload)
+            self.assertEqual(status, 200, reply)
+            self.assertEqual(reply['model'], model)
+            self.assertIn(f'Used {model} with {effort}.', reply['content'][0]['text'])
+        self.assertEqual([(entry[2]['model'], entry[2]['effort']) for entry in self.cloud.requests],
+                         [(MODEL, 'medium'), (opus, 'medium'), (opus, 'high')])
+
+    def test_unknown_outcome_blocks_duplicate_even_with_new_effort_after_restart(self):
+        payload = conversation('Run the fixture once.')
+        self.cloud.reply = (502, {'message': 'The native execution state is unknown.'})
+        self.assertEqual(self.request(payload)[0], 502)
+        self.start_gateway()
+        self.cloud.reply = (200, cloud_turn('A duplicate would have run.'))
+        changed = {**payload, 'output_config': {'effort': 'high'}}
+        self.assertEqual(self.request(changed)[0], 409)
+        self.assertEqual(len(self.cloud.requests), 1)
 
     def test_private_config_is_required_before_starting(self):
         self.config_path.chmod(0o644)
@@ -1630,10 +1677,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
             verdict('outside_project')
             self.assertEqual(request(conversation('隔壁项目在干什么'))[0], 403)
             verdict('allow')
-            self.assertEqual(request(conversation(original))[0], 503)
+            fallback = '请检查当前项目的单元测试。'
+            self.assertEqual(request(conversation(fallback))[0], 200)
+            self.assertTrue(self.cloud.requests[-1][2]['message'].startswith(fallback))
             upstream.read.return_value = b'{"choices":[]}'
             self.assertEqual(request(conversation('查看项目状态'))[0], 503)
-            self.assertEqual(len(self.cloud.requests), dispatched)
+            self.assertEqual(len(self.cloud.requests), dispatched + 1)
             connect.reset_mock()
             saved = public.manage({**settings, 'enabled': False})
             self.assertTrue(saved['has_deepseek_key'])
@@ -2078,6 +2127,55 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 413)
         self.assertEqual(len(self.cloud.uploads), 2)
 
+    def test_small_follow_up_with_large_historical_attachments(self):
+        old_document = {'type': 'document', 'source': {'type': 'base64', 'media_type': 'text/plain',
+                        'data': base64.b64encode(b'a' * (7 * 1024 * 1024)).decode()}}
+        history = [{'role': 'user', 'content': [old_document]}, {'role': 'assistant', 'content': 'First.'},
+                   {'role': 'user', 'content': [old_document]}, {'role': 'assistant', 'content': 'Second.'}]
+        backend = self.manager.cloudcli
+        namespace = f'{backend.identity}:{self.session}'
+        prefix = gateway.history_signature(history, 'cloudcli')
+        with closing(sqlite3.connect(backend.path)) as db, db:
+            backend.save_session(db, namespace, '', CLOUD_SESSION, str(self.project), None, [prefix])
+        payload = conversation('unused', messages=[*history, {'role': 'user', 'content': 'Thank you.'}])
+        self.assertGreater(len(json.dumps(payload).encode()), 16 * 1024 * 1024)
+        status, reply = self.request(payload)
+        self.assertEqual(status, 200, reply)
+        forwarded = self.cloud.requests[-1][2]
+        self.assertEqual(forwarded['sessionId'], CLOUD_SESSION)
+        self.assertEqual(forwarded['message'].partition('\n\n')[0], 'Thank you.')
+        self.assertNotIn('attachments', forwarded)
+
+    def test_native_session_binding_survives_a_month_inactive(self):
+        first = conversation('Remember the number seven.')
+        status, reply = self.request(first)
+        self.assertEqual(status, 200, reply)
+        with closing(sqlite3.connect(self.manager.cloudcli.path)) as db, db:
+            past = time.time() - 31 * 86400
+            db.execute('UPDATE requests SET created=?', (past,))
+            db.execute('UPDATE sessions SET created=?', (past,))
+            db.execute('UPDATE session_state SET updated=?', (past,))
+        messages = [*first['messages'], {'role': 'assistant', 'content': reply['content']},
+                    {'role': 'user', 'content': 'What number did I mention?'}]
+        self.assertEqual(self.request(conversation('unused', messages=messages))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
+    def test_native_history_anchor_scan_can_use_the_older_pages(self):
+        self.enable_cloudcli_web_fixture()
+        old = cloud_user('A message sent long ago.')
+        self.cloud.history = [old, *(cloud_user(str(i)) for i in range(1024))]
+        history, prompt = self.manager.cloudcli.history_before_edit(CLOUD_SESSION, old['transcriptAnchorId'], 12)
+        self.assertEqual(prompt, old['content'])
+        self.assertEqual(history, [])
+
+    def test_history_page_size_shrinks_for_large_transcript_rows(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.history = [cloud_user(str(i) + 'x' * 80) for i in range(80)]
+        with patch.object(gateway, 'CLOUDCLI_HISTORY_LIMIT', 4000):
+            pages = list(self.manager.cloudcli.history_pages(CLOUD_SESSION, 12))
+        self.assertLess(len(pages[0][0]), 64)
+        self.assertEqual([row for rows, _ in reversed(pages) for row in rows], self.cloud.history)
+
     def test_desktop_native_text_attachment_preview_does_not_block_first_turn(self):
         self.enable_cloudcli_web_fixture()
         self.manager.cloudcli.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
@@ -2252,30 +2350,27 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(self.request(conversation('unused', messages=marked))[0], 200)
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
 
-    def test_disconnect_stops_only_the_owned_run_and_preserves_continuation(self):
-        self.check_disconnect_stops_owned_run(stream=True)
+    def test_web_authorized_stream_recovers_after_disconnect(self):
+        self.check_web_authorized_run_recovers_after_disconnect(stream=True)
 
-    def test_json_disconnect_stops_only_the_owned_run_and_preserves_continuation(self):
-        self.check_disconnect_stops_owned_run(stream=False)
+    def test_web_authorized_json_recovers_after_disconnect(self):
+        self.check_web_authorized_run_recovers_after_disconnect(stream=False)
 
-    def check_disconnect_stops_owned_run(self, stream):
+    def check_web_authorized_run_recovers_after_disconnect(self, stream):
         self.enable_cloudcli_web_fixture()
         self.cloud.track_running = True
         self.cloud.pause_after_frame = 0
         self.cloud.release_stream = threading.Event()
         self.addCleanup(self.cloud.release_stream.set)
-        self.cloud.reply = (200, [{'type': 'session-id', 'sessionId': CLOUD_SESSION},
-                                  {'kind': 'complete', 'exitCode': 0, 'aborted': True}])
+        self.cloud.reply = (200, cloud_turn('The original task finished.')[1:])
         stop_requests = []
-
-        def stop(action):
-            stop_requests.append(action)
-            self.cloud.release_stream.set()
+        backend = self.manager.cloudcli
+        namespace = f'{backend.identity}:{self.session}'
 
         headers = {'Authorization': f'Bearer {DESKTOP_TOKEN}', 'x-claude-code-session-id': self.session}
-        original = conversation('Wait for an explicit stop.', stream=stream)
+        original = conversation('Wait through a network interruption.', stream=stream)
         with patch.object(gateway, 'cloudcli_websocket', return_value=(
-                lambda *a, **kw: ChatSocketFixture(stop), OSError)):
+                lambda *a, **kw: ChatSocketFixture(stop_requests.append), OSError)):
             with closing(http.client.HTTPConnection(*self.desktop.server_address, timeout=3)) as conn:
                 conn.request('POST', '/v1/messages', json.dumps(original), headers)
                 if stream:
@@ -2287,29 +2382,23 @@ class CloudCLIGatewayTests(unittest.TestCase):
                     while not self.cloud.requests and time.monotonic() < deadline:
                         time.sleep(.01)
                     self.assertTrue(self.cloud.requests)
-            self.assertTrue(self.cloud.release_stream.wait(3))
-            deadline = time.monotonic()+2
-            with closing(sqlite3.connect(self.manager.cloudcli.path)) as db:
-                while not db.execute('SELECT 1 FROM sessions WHERE session=?', (CLOUD_SESSION,)).fetchone():
-                    if time.monotonic() >= deadline:
-                        self.fail('Stopped conversation checkpoint was not retained')
-                    time.sleep(.02)
-            self.assertEqual(stop_requests, [{'type': 'chat.abort', 'sessionId': CLOUD_SESSION}])
+            self.assertTrue(backend.active_conversations[namespace].client_detached.wait(2))
+            self.assertFalse(stop_requests)
+            self.cloud.release_stream.set()
+            self.assertTrue(backend.active_conversations[namespace].finished.wait(2))
+            status, reply = self.request({**original, 'stream': False})
+            self.assertEqual(status, 200, reply)
+            self.assertIn('The original task finished.', reply['content'][-1]['text'])
+            self.assertFalse(stop_requests)
         self.assertEqual(len(self.cloud.requests), 1)
         self.cloud.pause_after_frame = None
-        self.cloud.reply = (200, cloud_turn('Continuation after stopping.'))
-        following = [{'role':'user','content':[
-            {'type':'text','text':original['messages'][0]['content']+'\n'},
-            {'type':'text','text':'[Request interrupted by user]\n'},
-            {'type':'text','text':'An earlier rejected local attempt.\n'},
-            {'type':'text','text':'[Request interrupted by user]\n'},
-            {'type':'text','text':'Continue after stopping.'},
-        ]}]
+        self.cloud.reply = (200, cloud_turn('Continuation after reconnection.'))
+        following = [*original['messages'], {'role':'assistant','content':reply['content']},
+                     {'role':'user','content':'Continue after reconnection.'}]
         self.assertEqual(self.request(conversation('unused', messages=following))[0], 200)
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
         task = self.cloud.requests[-1][2]['message']
-        self.assertTrue(task.startswith('Continue after stopping.'))
-        self.assertNotIn('An earlier rejected local attempt',task)
+        self.assertTrue(task.startswith('Continue after reconnection.'))
 
     def test_marked_followup_stops_the_matching_turn_while_its_stream_stays_open(self):
         self.enable_cloudcli_web_fixture()
