@@ -4,7 +4,7 @@ import Security
 import UserNotifications
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "0.4.7"
+private let safeCodeVersion = "0.4.8"
 private enum AppError: LocalizedError {
     case message(String)
     case keychainCancelled

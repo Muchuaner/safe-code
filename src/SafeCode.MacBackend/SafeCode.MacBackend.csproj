@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><Version>0.4.7</Version><InformationalVersion>0.4.7</InformationalVersion><IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion></PropertyGroup>
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><Version>0.4.8</Version><InformationalVersion>0.4.8</InformationalVersion><IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion></PropertyGroup>
   <ItemGroup><ProjectReference Include="../SafeCode.Core/SafeCode.Core.csproj" /></ItemGroup>
   <ItemGroup>
     <Compile Include="../SafeCode.Desktop/ClientServices.cs" Link="ClientServices.cs" />
