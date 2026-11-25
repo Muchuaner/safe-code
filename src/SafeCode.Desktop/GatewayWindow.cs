@@ -3,6 +3,7 @@ using Microsoft.Web.WebView2.Wpf;
 using SafeCode.Core;
 using System.IO;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Windows;
 
 namespace SafeCode.Desktop;
@@ -14,6 +15,9 @@ internal sealed class GatewayWindow : Window
     private readonly WebView2 browser = new();
     private readonly Func<JsonElement, Task<JsonElement>> manage;
     private bool closed;
+    private static bool GatewayPage(string uri) => uri == Page ||
+        (uri.StartsWith(Page+"#", StringComparison.Ordinal) &&
+         Regex.IsMatch(uri.AsSpan(Page.Length+1), "\\A(?:gateways|gateway=[a-f0-9]{32})\\z"));
     public bool Busy { get; private set; }
 
     public GatewayWindow(CoreWebView2Environment environment, Func<JsonElement, Task<JsonElement>> manage)
@@ -49,7 +53,7 @@ internal sealed class GatewayWindow : Window
             view.Settings.IsGeneralAutofillEnabled = false;
             view.NavigationStarting += (_, e) =>
             {
-                if (e.Uri == Page) return;
+                if (GatewayPage(e.Uri)) return;
                 e.Cancel = true;
                 if (e.IsUserInitiated && e.Uri == CreatorChannel)
                 {
@@ -71,7 +75,7 @@ internal sealed class GatewayWindow : Window
 
     private async void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (closed || e.Source != Page) return;
+        if (closed || !GatewayPage(e.Source)) return;
         string id = "";
         object? result = null;
         string? error = null;
@@ -86,7 +90,7 @@ internal sealed class GatewayWindow : Window
             {
                 case "safeCodeApi.manage":
                     if (Busy) throw new InvalidOperationException("请等待当前网关操作完成。");
-                    mutate = args.GetProperty("action").GetString() is "issue" or "update" or "unbind" or "revoke" or "delete" or "set_port" or "set_origin" or "set_concurrency" or "set_prompt_review" or "set_key_queue" or "refresh_ticket";
+                    mutate = args.GetProperty("action").GetString() is "issue" or "update" or "unbind" or "revoke" or "delete" or "set_port" or "set_origin" or "set_concurrency" or "set_prompt_review" or "set_key_queue" or "refresh_ticket" or "multi.activate" or "multi.create" or "multi.claim" or "multi.remove";
                     Busy = mutate;
                     result = await manage(args);
                     break;

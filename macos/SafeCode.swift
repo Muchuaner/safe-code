@@ -4,7 +4,7 @@ import Security
 import UserNotifications
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "0.4.15"
+private let safeCodeVersion = "0.4.16"
 private enum AppError: LocalizedError {
     case message(String)
     case keychainCancelled
@@ -64,6 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var trayWeb: WKWebView!
+    private var gatewayWeb: WKWebView?
+    private var gatewayPage: URL { resources.appendingPathComponent("Web/web/gateway.html") }
     private var capturingTray = false
     private var trayReady = false
     private var trayState: [String:Any] = ["apiMode":false]
@@ -305,6 +307,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         if message.webView === trayWeb {
             if message.name == "tray", message.frameInfo.isMainFrame, message.frameInfo.request.url?.standardizedFileURL == trayPage.standardizedFileURL,
                let args = message.body as? [String:Any] { trayAction(args) }
+            return
+        }
+        if let view=message.webView,view===gatewayWeb {
+            guard message.frameInfo.isMainFrame,let url=message.frameInfo.request.url,isGatewayPage(url),
+                  let body=message.body as? [String:Any],let id=body["id"] as? String,
+                  let op=body["op"] as? String,let args=body["args"] as? [String:Any] else{return}
+            if op=="copy",let value=args["text"] as? String {
+                NSPasteboard.general.clearContents()
+                answer(id,NSPasteboard.general.setString(value,forType:.string),in:view)
+            } else if op=="safeCodeApi.manage",let action=args["action"] as? String {
+                manageGateway(action,args){[weak self,weak view] result in
+                    guard let self,let view,view===self.gatewayWeb else{return}
+                    switch result {
+                    case .success(let value):self.answer(id,value,in:view)
+                    case .failure(let error):self.answer(id,error:error.localizedDescription,in:view)
+                    }
+                }
+            }
             return
         }
         guard message.frameInfo.isMainFrame,let source=message.frameInfo.request.url,isAppPage(source),let body=message.body as? [String:Any] else{return}
@@ -619,7 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         panel.contentMinSize=NSSize(width:min(805,size.width),height:min(400,size.height))
         panel.isReleasedWhenClosed=false
         panel.delegate=self
-        let content=GatewayPanel { [weak self] action,args,reply in
+        let content=GatewayPanel(openDirectory:{[weak self] in self?.showGatewayDirectory()}) { [weak self] action,args,reply in
             guard let self else {return}
             self.manageGateway(action,args,reply:reply)
         }
@@ -631,6 +651,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(nil)
         content.start()
+    }
+    private func isGatewayPage(_ url:URL) -> Bool {
+        guard url.isFileURL,url.standardizedFileURL.path==gatewayPage.standardizedFileURL.path,url.query==nil else{return false}
+        guard let fragment=url.fragment else{return true}
+        return fragment=="directory" || fragment=="gateways" || fragment.range(of:"^gateway=[a-f0-9]{32}$",options:.regularExpression) != nil
+    }
+    private func showGatewayDirectory() {
+        guard let panel=gatewayWindow,!gatewayMutationPending else{return}
+        let view=WKWebView(frame:.zero,configuration:configuration())
+        view.navigationDelegate=self
+        gatewayPanel?.stop()
+        gatewayPanel=nil
+        gatewayWeb=view
+        panel.contentViewController=nil
+        panel.contentView=view
+        var address=URLComponents(url:gatewayPage,resolvingAgainstBaseURL:false)!
+        address.fragment="directory"
+        view.loadFileURL(address.url!,allowingReadAccessTo:gatewayPage.deletingLastPathComponent())
     }
     private func manageGateway(_ action:String,_ args:[String:Any],reply:@escaping GatewayPanel.Reply) {
         if smokeOutput != nil {
@@ -664,7 +702,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
         guard let context=gatewayContext else{reply(.failure(AppError.message("SSH 会话已变更，请重新打开网关管理。")));return}
         guard !gatewayMutationPending else{reply(.failure(AppError.message("请等待当前网关操作完成。")));return}
-        let modifies=["issue","update","unbind","revoke","delete","set_port","set_origin","set_concurrency","set_prompt_review","refresh_ticket"].contains(action)
+        let modifies=["issue","update","unbind","revoke","delete","set_port","set_origin","set_concurrency","set_prompt_review","set_key_queue","refresh_ticket","multi.activate","multi.create","multi.claim","multi.remove"].contains(action)
         if modifies {gatewayMutationPending=true}
         var options=args
         options["action"]=action
@@ -763,6 +801,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         guard let panel=notification.object as? NSWindow,panel===gatewayWindow else{return}
         gatewayPanel?.stop()
         gatewayPanel=nil
+        gatewayWeb?.configuration.userContentController.removeScriptMessageHandler(forName:"native")
+        gatewayWeb=nil
         gatewayWindow=nil
         gatewayContext=nil
     }
@@ -802,6 +842,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func fail(_ message:String){if let smoke=smokeOutput {try? Data(json(["success":false,"error":message]).utf8).write(to:smoke);return};let alert=NSAlert();alert.messageText="Safe Code";alert.informativeText=message;alert.alertStyle = .warning;alert.runModal()}
     func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         guard let url=action.request.url else{decisionHandler(.cancel);return}
+        if webView===gatewayWeb {decisionHandler(isGatewayPage(url) ? .allow:.cancel);return}
         if webView === trayWeb {
             decisionHandler(url.standardizedFileURL == trayPage.standardizedFileURL ? .allow:.cancel)
             return

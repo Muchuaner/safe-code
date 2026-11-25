@@ -138,6 +138,16 @@ public sealed partial class SshSession
         request.Remove("background", out var background);
         string? action = request.GetValueOrDefault("action").ValueKind == JsonValueKind.String
             ? request["action"].GetString() : null;
+        if (request.ContainsKey("gateway_target"))
+        {
+            var remote = await RequestGatewayAsync(request, ct);
+            if (action != "issue") return remote;
+            return JsonSerializer.SerializeToElement(new
+            {
+                id = remote.GetProperty("id"), ticket = remote.GetProperty("ticket"),
+                origin = PublicGatewayTicket.Parse(remote.GetProperty("ticket").GetString()!).Url
+            });
+        }
         if (action == "refresh_subscription") return await RefreshPublicGatewaySubscriptionAsync(ct);
         if (action is not ("issue" or "refresh_ticket"))
         {

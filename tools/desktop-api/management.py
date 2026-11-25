@@ -481,13 +481,13 @@ def read_admin_line(stream):
     return value
 
 
-def send_admin(root, request):
+def send_admin(root, request, *, socket_name='admin.sock'):
     if len(request)>8192:
         raise ValueError('管理请求过长。')
     try:
         with socket.socket(socket.AF_UNIX) as connection:
             connection.settimeout(25)
-            connection.connect(str(Path(root)/'admin.sock'))
+            connection.connect(str(Path(root)/socket_name))
             connection.sendall(request.rstrip(b'\n')+b'\n')
             with connection.makefile('rb') as stream:
                 response=stream.readline(6*1024*1024)

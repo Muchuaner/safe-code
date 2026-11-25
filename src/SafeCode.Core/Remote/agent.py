@@ -1120,13 +1120,15 @@ API_DIRECTORY=Path('/opt/safe-code/desktop-api')
 API_UNIT=Path('/etc/systemd/system/safe-code-desktop-api.service')
 CLOUD_UNIT=Path('/etc/systemd/system/safe-code-cloudcli.service')
 API_FILES={'install.sh','desktop_gateway.py','server.py','management.py','claude_usage.py',
-           'pricing.py','configure_cloudcli.py','host_control_mcp.py','device_bridge.py','device_service.py','prompt_review.py','codex_bridge.zip'}
+           'pricing.py','gateway_directory.py','configure_cloudcli.py','host_control_mcp.py','device_bridge.py','device_service.py','prompt_review.py','codex_bridge.zip'}
 API_STATE='.local/state/safe-code-desktop-api'
 
 def safe_code_api(options):
     action=options.get('action')
+    multi = action in ('multi.activate', 'multi.list', 'multi.inspect', 'multi.create', 'multi.claim', 'multi.remove')
+    remote = 'gateway_target' in options
     if action not in ('list','usage','issue','update','unbind','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
-                      'ticket_endpoint','key_host_reuse','bind_ssh_device','model_catalog','set_prompt_review','set_key_queue','repair'):
+                      'ticket_endpoint','key_host_reuse','bind_ssh_device','model_catalog','set_prompt_review','set_key_queue','repair') and not multi:
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
@@ -1135,6 +1137,13 @@ def safe_code_api(options):
     work_python=['runuser','-u',entry.pw_name,'--','env','-i','HOME='+entry.pw_dir,'PATH=/usr/bin:/bin',
                  'LANG=C.UTF-8','/usr/bin/python3']
     command=[*work_python,'-B',str(script),'--state',str(directory)]
+    if multi or remote:
+        if remote and action not in ('list','usage','model_catalog','refresh_subscription','issue','update',
+                                     'revoke','delete','set_concurrency','set_key_queue','set_prompt_review'):
+            raise RuntimeError('不支持此远程网关操作。')
+        if not script.is_file():
+            raise RuntimeError('当前 VPS 尚未安装 Safe Code API 管理服务。')
+        return safe_code_api_admin(command, options, timeout=27)
     if action=='install':
         return install_safe_code_api(entry, command, options, work_python)
     if action=='repair':
@@ -1230,6 +1239,8 @@ def gateway_install_files(options, folder):
         (folder/name).write_bytes(base64.b64decode(data,validate=True))
     if hashlib.sha256((folder/'codex_bridge.zip').read_bytes()).hexdigest()!=CODEX_BRIDGE_SOURCE_HASH:
         raise ValueError('Safe Code API 安装组件校验失败。')
+    if run(['/usr/bin/python3', '-I', '-c', 'from cryptography.hazmat.primitives.ciphers.aead import AESGCM'], check=False).returncode:
+        apt(['python3-cryptography'])
 
 def managed_service(unit, directory, user, start_arguments):
     # Refuse another installer, distro unit, or drop-in that redirects execution elsewhere.

@@ -65,6 +65,28 @@ class SafeCodeApiTest(unittest.TestCase):
             (self.root/'keys'/key).touch()
         self.registry = KeyRegistry(self.root)
 
+    def test_multi_gateway_routes_only_explicit_admin_actions(self):
+        gateway = object.__new__(server.PublicServer)
+        gateway.root = self.root
+        target = 'a' * 32
+        gateway.directory = server.GatewayDirectory(self.root, gateway.manage, lambda: True)
+        with patch.object(server, 'installed_directory', return_value=None):
+            self.assertEqual(gateway.manage_bound_gateway({'action':'multi.list'}, 'multi.list')['status'], 401)
+        for request in ({'action':'multi.create', 'gateway_target':target},
+                        {'action':'issue', 'gateway_target':'https://example.test'},
+                        {'action':'set_origin', 'gateway_target':target}):
+            with self.assertRaises(ValueError):
+                gateway.manage_bound_gateway(request, request['action'])
+        request = {'action':'list', 'gateway_target':target, 'details':True}
+        reply = {'value':{'keys':[]}}
+        with patch.object(Path, 'is_socket', return_value=True), patch.object(server, 'send_admin', return_value=reply) as call:
+            self.assertEqual(gateway.manage_bound_gateway(request, 'list'), reply['value'])
+            self.assertEqual(json.loads(call.call_args.args[1]), request)
+            self.assertEqual(call.call_args.kwargs['socket_name'], 'multi-gateway.sock')
+            call.return_value = {'error':'Remote binding is not authorized.', 'status':403}
+            with self.assertRaisesRegex(ValueError, 'Remote binding is not authorized'):
+                gateway.manage_bound_gateway(request, 'list')
+
     def test_turn_footer_uses_key_ledger_and_cached_windows_only(self):
         gateway = object.__new__(server.PublicServer)
         gateway.registry = self.registry

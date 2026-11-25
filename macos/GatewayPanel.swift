@@ -8,6 +8,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     private let manage: Manage
     private let versionLabel = GatewayStyle.label("网关版本 —", color: GatewayStyle.muted, size: SafeCodeType.small)
     private let updateDot = NSView()
+    private let openDirectory: () -> Void
     private let table = NSTableView()
     private let scroller = NSScrollView()
     private let notice = NSTextField(wrappingLabelWithString: "正在读取网关…")
@@ -57,7 +58,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     private var currentColumns: [String] = []
     var ready: Bool { !snapshot.isEmpty && quotaAvailable }
 
-    init(manage: @escaping Manage) {
+    init(openDirectory: @escaping () -> Void = {}, manage: @escaping Manage) {
+        self.openDirectory = openDirectory
         self.manage = manage
         super.init(nibName: nil, bundle: nil)
     }
@@ -121,7 +123,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         title.orientation = .vertical
         title.alignment = .leading
         title.spacing = 1
-        let toolbar = row([title, NSView(), refresh, reviewButton, slots, quotaButton, update, create])
+        let directory = button("多网关", #selector(showDirectory))
+        let toolbar = row([title, directory, NSView(), refresh, reviewButton, slots, quotaButton, update, create])
         append(toolbar, to: root)
         root.setCustomSpacing(19, after: toolbar)
 
@@ -271,6 +274,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             }
         }
     }
+
+    @objc private func showDirectory() { if !busy { openDirectory() } }
 
     func stop() {
         timer?.invalidate()

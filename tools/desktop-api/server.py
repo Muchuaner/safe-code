@@ -29,13 +29,14 @@ from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_P
 from device_bridge import (DeviceAlreadyBound, DeviceError, DeviceOffline, Devices, OwnerHosts, SSH_DEVICE,
                            paired_device, pairing_lock, read_json, device_service_problem)
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
+from gateway_directory import DIRECTORY, REMOTE_FIELDS, DirectoryError, GatewayDirectory, installed_directory
 from pricing import usage_price
 from prompt_review import PromptReviewer
 
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 28
+GATEWAY_REVISION = 29
 PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
@@ -546,6 +547,12 @@ class PublicServer(ThreadingHTTPServer):
         self.tls.minimum_version = ssl.TLSVersion.TLSv1_2
         self.tls.load_cert_chain(root/'cert.pem', root/'key.pem')
         super().__init__((config['bind'], config['port']), PublicHandler)
+        self.directory = GatewayDirectory(root, self.manage, lambda: self.public_enabled)
+
+    def server_close(self):
+        if hasattr(self, 'directory'):
+            self.directory.stop.set()
+        super().server_close()
 
     def process_request(self, request, address):
         if not self.workers.acquire(blocking=False):
@@ -668,6 +675,32 @@ class PublicServer(ThreadingHTTPServer):
         quota = ' · '.join(values) if windows else '暂无记录'
         return (f'Key 余额 {amount}', f'账户额度（上次查询） · {quota}')
 
+    def manage_bound_gateway(self, request, operation):
+        target = request.get('gateway_target')
+        directory = operation in DIRECTORY
+        if directory and 'gateway_target' in request:
+            raise ValueError('绑定管理必须在本机网关操作。')
+        if not directory and (operation not in REMOTE_FIELDS or not isinstance(target, str)
+                              or not re.fullmatch(r'[a-f0-9]{32}', target)):
+            raise ValueError('不支持此远程网关操作。')
+        connector = 'multi-gateway.sock'
+        try:
+            if (self.root/connector).is_socket():
+                response = send_admin(self.root, json.dumps(request, ensure_ascii=False).encode(), socket_name=connector)
+            else:
+                response = installed_directory(self.root, request)
+                if response is None:
+                    response = self.directory.request(request)
+        except DirectoryError as error:
+            response = {'error': str(error), 'status': error.status}
+        except (ImportError, subprocess.TimeoutExpired, OSError, ValueError) as error:
+            response = {'error': '多网关服务暂不可用，请检查网关更新和授权连接。', 'status': 503}
+        if directory:
+            return response
+        if 'error' in response:
+            raise ValueError(response['error'])
+        return response['value']
+
     def manage(self, request):
         operation = request.get('action')
         if operation == 'public_status':
@@ -688,6 +721,8 @@ class PublicServer(ThreadingHTTPServer):
             return {'enabled': self.public_enabled, 'backend': 'cloudcli', 'gatewayRevision': GATEWAY_REVISION}
         if not self.public_enabled:
             raise ValueError(PUBLIC_DISABLED_MESSAGE)
+        if operation in DIRECTORY or 'gateway_target' in request:
+            return self.manage_bound_gateway(request, operation)
         if operation == 'set_key_queue':
             enabled = request.get('enabled')
             if type(enabled) is not bool:

@@ -50,7 +50,10 @@ function rpc(op, args = {}) {
     }
   });
 }
-const manage = (action, options = {}) => rpc('safeCodeApi.manage', {action, ...options});
+const gatewayTarget = /^#gateway=([a-f0-9]{32})$/.exec(location.hash)?.[1];
+const manage = (action, options = {}) => rpc('safeCodeApi.manage', {
+  action, ...options, ...(gatewayTarget && {gateway_target: gatewayTarget}),
+});
 const quotaCard = byId('gateway-claude-limits');
 let subscriptionQueried = false;
 let queriedSubscription;
@@ -231,7 +234,7 @@ function renderKeys() {
       const actions = element('div', null, 'row-actions');
       actions.append(action('用量详情', () => showUsage(key)));
       if (key.bound_device) {
-        actions.append(action('解绑', () => showKeyRemoval(key, 'unbind')));
+        if (!gatewayTarget) actions.append(action('解绑', () => showKeyRemoval(key, 'unbind')));
       }
       if (key.enabled) {
         actions.append(action('编辑', () => showEditor(key)), action('撤销', () => showKeyRemoval(key, 'revoke'), 'revoke-link'));
@@ -482,6 +485,7 @@ function refresh(showProgress = true) {
   return refreshTask;
 }
 async function loadSnapshot(showProgress) {
+  if (location.hash === '#gateways') return true;
   byId('refresh').disabled = true;
   if (showProgress) notice('status', '正在读取网关…');
   try {
@@ -963,4 +967,5 @@ document.addEventListener('visibilitychange', () => {
 });
 
 window.safeCodeNativeReady = true;
+if (gatewayTarget) byId('refresh-ticket').hidden = true;
 void refresh().then(success => scheduleAutoRefresh(success ? refreshIntervalMs : retryIntervalMs));

@@ -5,11 +5,11 @@ dir=$(cd "$(dirname "$0")" && pwd)
 
 stage_program() {
     local target=$1
-    for file in desktop_gateway.py server.py management.py claude_usage.py pricing.py configure_cloudcli.py host_control_mcp.py device_bridge.py device_service.py prompt_review.py codex_bridge.zip; do
+    for file in desktop_gateway.py server.py management.py gateway_directory.py claude_usage.py pricing.py configure_cloudcli.py host_control_mcp.py device_bridge.py device_service.py prompt_review.py codex_bridge.zip; do
         [[ -f "$dir/$file" ]] || { printf 'Missing SafeCode gateway component: %s\n' "$file" >&2; exit 1; }
     done
     install -d -m 755 "$target"
-    install -m 644 "$dir"/{desktop_gateway,server,management,claude_usage,pricing,prompt_review}.py "$target/"
+    install -m 644 "$dir"/{desktop_gateway,server,management,gateway_directory,claude_usage,pricing,prompt_review}.py "$target/"
     install -m 644 "$dir"/{configure_cloudcli,host_control_mcp,device_bridge,device_service}.py "$target/"
     python3 - "$dir/codex_bridge.zip" "$target" <<'PY'
 import hashlib,sys,zipfile
