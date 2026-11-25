@@ -235,11 +235,14 @@ class Devices:
             flag.touch(mode=0o600,exist_ok=True)
         else:
             flag.unlink(missing_ok=True)
-            with closing(self.connect()) as db, db:
-                db.execute('BEGIN IMMEDIATE')
-                for row in db.execute('SELECT id FROM devices WHERE owner=?',(owner,)):
-                    self.remove_identity(row['id'])
-                db.execute('DELETE FROM devices WHERE owner=?',(owner,))
+            self.clear_pairings(owner)
+
+    def clear_pairings(self, owner):
+        with closing(self.connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            for row in db.execute('SELECT id FROM devices WHERE owner=?',(owner,)):
+                self.remove_identity(row['id'])
+            db.execute('DELETE FROM devices WHERE owner=?',(owner,))
 
     def required(self, owner):
         return bool(KEY_ID.fullmatch(owner) and (self.state/'device-required'/owner).is_file())

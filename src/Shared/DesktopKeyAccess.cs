@@ -32,7 +32,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
 {
     private const int MaxMessagesRequest = 16 * 1024 * 1024;
     private const string DeviceAlreadyBoundMessage="该 Key 已绑定设备。请在原设备停用接入，或联系网关管理员检查绑定状态。";
-    private const string UnbindPendingMessage="本机接入已停用，网关尚未确认解绑。请在网络恢复后点击「重试解绑」。";
+    private const string UnbindPendingMessage="本机接入已停用，网关尚未确认解绑。请点击「重试解绑」查看结果。";
 
     internal sealed record DeviceBinding(string DeviceId,string DeviceProof,string Alias,int Port,string PublicKey);
     internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing,SshSession? HostSession=null,bool Switching=false);
@@ -1209,12 +1209,12 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                             new{action="revoke",binding.DeviceId,binding.DeviceProof},ct);
                         if(response.ValueKind!=JsonValueKind.Object||
                            !response.TryGetProperty("revoked",out var revoked)||revoked.ValueKind!=JsonValueKind.True)
-                            return Status();
+                            return Status("网关返回的解绑确认无效，请核对网关版本后重试。");
                     }
                     catch(Exception error) when(error is IOException or HttpRequestException or InvalidOperationException
                                                 or OperationCanceledException or JsonException)
                     {
-                        return Status();
+                        return Status("解绑未确认："+error.Message);
                     }
                 }
                 var lib=Library(s);

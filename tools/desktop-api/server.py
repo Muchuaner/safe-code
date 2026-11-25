@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 from claude_usage import read_subscription
 from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_MESSAGES_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config
 from device_bridge import (DeviceAlreadyBound, DeviceError, DeviceOffline, Devices, OwnerHosts, SSH_DEVICE,
-                           paired_device, read_json, device_service_problem)
+                           paired_device, pairing_lock, read_json, device_service_problem)
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
 from pricing import usage_price
 from prompt_review import PromptReviewer
@@ -35,7 +35,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 20
+GATEWAY_REVISION = 21
 PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
@@ -167,12 +167,17 @@ class PublicHandler(Handler):
     def manager(self):
         return self.server.account(self.digest, self.platform, self.device)
 
-    def authorized(self):
+    def credential_digest(self):
         value = self.headers.get('Authorization', '')
         token = value[7:] if value.startswith('Bearer ') else self.headers.get('x-api-key', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+            return None
+        return hashlib.sha256(token.encode()).hexdigest()
+
+    def authorized(self):
+        digest = self.credential_digest()
+        if digest is None:
             return False
-        digest = hashlib.sha256(token.encode()).hexdigest()
         if not self.server.registry.enabled(digest):
             return False
         platform = self.headers.get('X-SafeCode-Platform', 'windows')
@@ -308,6 +313,7 @@ class PublicHandler(Handler):
     def requires_device(self):
         return (self.headers.get('X-SafeCode-Client') == 'safecode-desktop'
                 or (self.server.root/'device-required'/self.digest).is_file()
+                or (self.server.root/'pairing-enforced'/self.digest).is_file()
                 or paired_device(self.server.root, self.digest) is not None)
 
     def verify_admitted_device(self):
@@ -353,10 +359,17 @@ class PublicHandler(Handler):
         return self.reply(status, {'type': 'error', 'error': error})
 
     def device_control(self):
-        if not self.authorized():
+        authorized = self.authorized()
+        if not authorized and self.credential_digest() is None:
             return self.device_error(401, 'SafeCode Key required')
         try:
             request = read_json(self)
+            if not authorized:
+                digest = self.credential_digest()
+                if request.get('action') == 'revoke' and digest and not self.server.registry.has_marker(digest):
+                    # No active credential exists. Acknowledge only local teardown, including retries after deletion.
+                    return self.reply(200, {'revoked': True})
+                return self.device_error(401, 'SafeCode Key required')
             action = request.get('action')
             device = request.get('deviceId')
             if action == 'revoke' and isinstance(device, str) and SSH_DEVICE.fullmatch(device):
@@ -737,6 +750,7 @@ class PublicServer(ThreadingHTTPServer):
                 key['active_count'] = active.get(key['id'], 0)
                 key['active'] = bool(key['active_count'])
                 key['waiting'] = waiters.get(key['id'],0)
+                key['bound_device'] = paired_device(self.root, key['id'])
                 key['device_access'] = (self.root/'device-access'/key['id']).is_file()
             result = {'keys':keys,'origin':self.public_origin,
                       'activation_required':any(key['enabled'] for key in keys),
@@ -809,6 +823,27 @@ class PublicServer(ThreadingHTTPServer):
                     self.devices.set_access(key_id,device_access)
                 elif device_access is False:
                     (self.root/'device-access'/key_id).unlink(missing_ok=True)
+        elif operation == 'unbind':
+            expected = request.get('deviceId')
+            if not isinstance(expected, str) or not expected:
+                raise ValueError('请刷新列表后选择要解绑的设备。')
+            with pairing_lock(self.root, key_id):
+                current = paired_device(self.root, key_id)
+                if current is not None and current != expected:
+                    raise ValueError('设备绑定已变更，请刷新列表后重试。')
+                if current is not None:
+                    # Continue to require device proof while the administrator changes devices.
+                    policy = self.root/'pairing-enforced'
+                    policy.mkdir(mode=0o700, exist_ok=True)
+                    (policy/key_id).touch(mode=0o600, exist_ok=True)
+                    devices = self.devices
+                    if devices is None and (self.root/'device-bridge.sqlite3').exists():
+                        devices = Devices(self.root)
+                    if devices is not None:
+                        devices.clear_pairings(key_id)
+                    for path in (self.root/'ssh-devices').glob(key_id+'-ssh-*'):
+                        if SSH_DEVICE.fullmatch(path.name[len(key_id)+1:]):
+                            path.unlink(missing_ok=True)
         elif operation=='revoke':
             self.registry.revoke(key_id)
             if (self.root/'device-access'/key_id).is_file():

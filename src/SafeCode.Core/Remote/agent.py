@@ -1022,7 +1022,7 @@ API_STATE='.local/state/safe-code-desktop-api'
 
 def safe_code_api(options):
     action=options.get('action')
-    if action not in ('list','usage','issue','update','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
+    if action not in ('list','usage','issue','update','unbind','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
                       'ticket_endpoint','key_host_reuse','bind_ssh_device','model_catalog','set_prompt_review','set_key_queue','repair'):
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])

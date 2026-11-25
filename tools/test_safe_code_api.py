@@ -803,7 +803,21 @@ if sys.stdin.buffer.read(1) == b'\r':
                 self.assertNotIn('analytics', manage('list', details=True, analytics=['1h']))
                 self.assertIn('请先撤销', admin_request('delete', id=created['id'])['error'])
                 self.assertEqual(manage('usage', id=created['id']), details)
-                manage('revoke',id=created['id'])
+                owner = created['id']
+                ssh_devices = self.root/'ssh-devices'
+                ssh_devices.mkdir(exist_ok=True)
+                device_id = 'ssh-'+'a'*20
+                (ssh_devices/(owner+'-'+device_id)).touch()
+                self.assertIn('error', admin_request('unbind', id=owner, deviceId='ssh-'+'b'*20))
+                self.assertEqual(manage('unbind', id=owner, deviceId=device_id), {'id':owner})
+                self.assertEqual(manage('unbind', id=owner, deviceId=device_id), {'id':owner})
+                self.assertFalse((ssh_devices/(owner+'-'+device_id)).exists())
+                self.assertEqual(post('/v1/messages',key)[0],403)
+                self.assertEqual(request('GET','/v1/key/balance',key)[0],200)
+                manage('revoke',id=owner)
+                status, response = request('POST','/v1/device-control',key,json.dumps({'action':'revoke'}))
+                self.assertEqual((status,json.loads(response)),(200,{'revoked':True}))
+                self.assertEqual(request('POST','/v1/device-control',key,json.dumps({'action':'prepare'}))[0],401)
                 self.assertEqual(manage('usage', id=created['id']), details)
                 self.assertEqual(manage('delete', id=created['id']), {'id': created['id']})
                 self.assertEqual(manage('delete', id=created['id']), {'id': created['id']})

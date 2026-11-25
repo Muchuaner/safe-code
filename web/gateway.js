@@ -219,10 +219,13 @@ function renderKeys() {
       cell(row, timestamp(key.last_used));
       const actions = element('div', null, 'row-actions');
       actions.append(action('用量详情', () => showUsage(key)));
+      if (key.bound_device) {
+        actions.append(action('解绑', () => showKeyRemoval(key, 'unbind')));
+      }
       if (key.enabled) {
-        actions.append(action('编辑', () => showEditor(key)), action('撤销', () => showKeyRemoval(key, false), 'revoke-link'));
+        actions.append(action('编辑', () => showEditor(key)), action('撤销', () => showKeyRemoval(key, 'revoke'), 'revoke-link'));
       } else if (snapshot.can_delete_revoked_keys) {
-        actions.append(action('彻底删除', () => showKeyRemoval(key, true), 'revoke-link'));
+        actions.append(action('彻底删除', () => showKeyRemoval(key, 'delete'), 'revoke-link'));
       }
       cell(row, actions);
       if (focused?.dataset.keyId === key.id && focusIndex >= 0) {
@@ -613,14 +616,18 @@ function showEditor(key) {
   renderPolicyFields();
   byId('note').focus();
 }
-function showKeyRemoval(key, permanent) {
-  keyRemoval = {key, permanent};
-  const label = permanent ? '彻底删除' : '撤销密钥';
+function showKeyRemoval(key, operation) {
+  keyRemoval = {key, operation};
+  const permanent = operation === 'delete';
+  const label = {delete: '彻底删除', unbind: '解绑设备', revoke: '撤销密钥'}[operation];
   byId('revoke-title').textContent = label;
   byId('revoke-key').textContent = label;
   byId('revoke-message').textContent = permanent
     ? '将永久删除「' + keyName(key) + '」及其用量和请求记录。此操作无法撤销。'
     : '撤销「' + keyName(key) + '」后，使用这把密钥的设备将无法发起新请求。';
+  if (operation === 'unbind') {
+    byId('revoke-message').textContent = '解除「' + keyName(key) + '」的设备绑定？该 Key 的余额和用量记录将保留。';
+  }
   notice('revoke-status', '');
   byId('revoke-dialog').showModal();
   if (permanent) byId('revoke-dialog').querySelector('footer [data-close]').focus();
@@ -908,9 +915,11 @@ byId('copy-key').onclick = async () => {
   }
 };
 byId('revoke-key').onclick = () => changeKey(async () => {
-  const {key, permanent} = keyRemoval;
-  await manage(permanent ? 'delete' : 'revoke', {id: key.id});
-  if (permanent) {
+  const {key, operation} = keyRemoval;
+  const args = {id: key.id};
+  if (operation === 'unbind') args.deviceId = key.bound_device;
+  await manage(operation, args);
+  if (operation === 'delete') {
     if (keyHistory?.key.id === key.id) keyHistory = undefined;
     if (usageKey?.id === key.id) usageKey = undefined;
     loadedAnalyticsPeriod = analyticsData = undefined;

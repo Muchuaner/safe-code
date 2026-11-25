@@ -109,7 +109,7 @@ internal sealed class MacBackend : IDisposable
         {
             try{await KeyAccess().DisableAsync(ct);}
             finally{await StopKeyDeviceAsync();}
-            if(KeyAccess().Configured)throw new InvalidOperationException("原网关尚未确认解绑，请恢复网络后重试。");
+            if(KeyAccess().Configured)throw new InvalidOperationException("原网关尚未确认解绑，请先点击「重试解绑」查看结果。");
             setup=setup with {Switching=false};
             pendingKeyDevice=setup;
         }

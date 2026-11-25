@@ -664,7 +664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
         guard let context=gatewayContext else{reply(.failure(AppError.message("SSH 会话已变更，请重新打开网关管理。")));return}
         guard !gatewayMutationPending else{reply(.failure(AppError.message("请等待当前网关操作完成。")));return}
-        let modifies=["issue","update","revoke","delete","set_port","set_origin","set_concurrency","set_prompt_review","refresh_ticket"].contains(action)
+        let modifies=["issue","update","unbind","revoke","delete","set_port","set_origin","set_concurrency","set_prompt_review","refresh_ticket"].contains(action)
         if modifies {gatewayMutationPending=true}
         var options=args
         options["action"]=action

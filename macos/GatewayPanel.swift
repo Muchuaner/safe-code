@@ -443,7 +443,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         }
         if section == 0 {
             columns([("note","备注 / 密钥 ID",121),("status","状态",66),("policy","模型 / 失效时间",129),("rpm","限频",66),("requests","请求",56),
-                     ("tokens","Token",86),("cost","已用 / 余额",92),("last","最近使用",104),("actions","操作",161)])
+                     ("tokens","Token",86),("cost","已用 / 余额",92),("last","最近使用",104),("actions","操作",205)])
             let keyword = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             var matching = keys.filter { key in
                 let statusMatches = filter.indexOfSelectedItem == 0 || keyState(key) == filter.titleOfSelectedItem
@@ -585,6 +585,9 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     private func actions(for key: [String: Any]) -> NSView {
         let detail = rowAction("用量详情", #selector(keyDetails(_:)), key: key)
         var buttons: [NSView] = [detail]
+        if key["bound_device"] is String {
+            buttons.append(rowAction("解绑", #selector(unbindRowKey(_:)), key: key))
+        }
         if key["enabled"] as? Bool == true {
             buttons += [rowAction("编辑", #selector(editRowKey(_:)), key: key),
                         rowAction("撤销", #selector(removeRowKey(_:)), key: key, danger: true)]
@@ -611,6 +614,14 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
 
     @objc private func editRowKey(_ sender: NSButton) {
         if !busy, let key = key(for: sender) { editKey(key) }
+    }
+
+    @objc private func unbindRowKey(_ sender: NSButton) {
+        guard !busy, let key = key(for: sender), let id = key["id"] as? String,
+              let device = key["bound_device"] as? String else { return }
+        confirm("解绑设备", "解除「" + keyName(key) + "」的设备绑定？该 Key 的余额和用量记录将保留。") {
+            self.mutate("unbind", ["id":id, "deviceId":device])
+        }
     }
 
     @objc private func removeRowKey(_ sender: NSButton) {
