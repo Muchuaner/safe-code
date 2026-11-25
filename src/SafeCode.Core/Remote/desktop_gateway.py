@@ -3407,8 +3407,9 @@ class CloudCliBackend:
                 prior = db.execute('SELECT reply FROM requests WHERE identity=?', (identity,)).fetchone()
                 if prior is not None:
                     if prior[0] is None:
-                        if scope and db.execute('SELECT 1 FROM sessions WHERE scope=? AND history=?',
-                                                (namespace, history_signature(messages, 'cloudcli'))).fetchone():
+                        if (scope and not self.config.get('desktopQuestions') and
+                                db.execute('SELECT 1 FROM sessions WHERE scope=? AND history=?',
+                                           (namespace, history_signature(messages, 'cloudcli'))).fetchone()):
                             raise CloudCliError('本轮已中断。请在原对话发送下一条消息。', 400)
                         raise CloudCliError('上一轮已提交，尚无已确认的结果。请先在 CloudCLI 核对执行状态。', 409)
                     return json.loads(prior[0])

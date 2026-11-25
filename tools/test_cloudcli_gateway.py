@@ -2148,7 +2148,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertFalse(self.cloud.requests)
 
     def test_api_key_only_reconnects_to_owned_result_after_disconnect(self):
-        self.cloud.pause_after_frame = 0
+        self.cloud.pause_after_frame = 1
         self.cloud.release_stream = threading.Event()
         self.addCleanup(self.cloud.release_stream.set)
         original = conversation('Keep this turn.', stream=True)
