@@ -306,9 +306,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 }
             }
             int epoch=connection.Generation;
-            // A JSON turn may queue for ten minutes, then run for thirty before it sends headers.
+            // A non-streaming turn sends headers only after the provider finishes.
             using var headerWait=CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
-            headerWait.CancelAfter(TimeSpan.FromMinutes(path=="/v1/messages"?41:11));
+            if(path!="/v1/messages")headerWait.CancelAfter(TimeSpan.FromMinutes(11));
             using var res=await client.SendAsync(req,HttpCompletionOption.ResponseHeadersRead,headerWait.Token);
             if(gateway!=null)
             {
@@ -385,7 +385,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(k=>{k.Limits.MaxRequestBodySize=MaxMessagesRequest;k.Limits.MaxConcurrentConnections=32;k.Listen(IPAddress.Loopback,port);});
         var app=builder.Build();var client=Remote(t);
-        client.Timeout=Timeout.InfiniteTimeSpan; // Forward bounds the header wait for each endpoint.
+        client.Timeout=Timeout.InfiniteTimeSpan; // Messages follows the client cancellation and provider lifecycle.
         if(device!=null)
         {
             client.DefaultRequestHeaders.Add("X-SafeCode-Device",device.DeviceId);

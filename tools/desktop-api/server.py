@@ -35,7 +35,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 23
+GATEWAY_REVISION = 24
 PUBLIC_KEY_QUEUE = 'public-key-queue'
 PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
 # A shared promotional code, checked only at the gateway.
@@ -760,7 +760,7 @@ class PublicServer(ThreadingHTTPServer):
                                   'unpriced_tokens': sum(key['unpriced_tokens'] for key in keys)},
                       'active':bool(active),'active_count':sum(active.values()),'waiting':sum(waiters.values()),
                       'concurrency':concurrency,'concurrency_text':str(concurrency),'queue_limit':self.queue.max_queue,
-                      'wait_limit':max(self.queue.max_wait, self.queue.key_wait_seconds) if self.queue.key_mode else self.queue.max_wait,
+                      'wait_limit':self.queue.max_wait,
                       'key_queue':self.queue.key_status(), 'prompt_review':self.review_prompt.status()}
             if request.get('details') is True:
                 result.update(self.registry.overview(), recent=self.registry.recent_requests())

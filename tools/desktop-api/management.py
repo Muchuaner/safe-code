@@ -338,9 +338,8 @@ class Capacity:
 class RequestQueue:
     """Shared Messages capacity, FIFO waiters, per-key and global queue bounds."""
     key_idle_seconds = 60
-    key_wait_seconds = 600
 
-    def __init__(self, registry, max_wait=45, max_queue=12, per_key=2, concurrency=1, key_mode=False):
+    def __init__(self, registry, max_wait=None, max_queue=12, per_key=2, concurrency=1, key_mode=False):
         self.registry = registry
         self.max_wait, self.max_queue, self.per_key = max_wait, max_queue, per_key
         self.changed = threading.Condition()
@@ -415,12 +414,12 @@ class RequestQueue:
             while True:
                 with self.changed:
                     now = time.monotonic()
-                    deadline = queued + (max(self.max_wait, self.key_wait_seconds) if self.key_mode else self.max_wait)
+                    deadline = queued + self.max_wait if self.max_wait is not None else None
                     if not self.registry.enabled(key):
                         raise GatewayError('API Key has expired or been revoked', 401)
                     if disconnected():
                         raise ConnectionAbortedError()
-                    if now>=deadline:
+                    if deadline is not None and now >= deadline:
                         raise GatewayError('Safe Code API queue wait timed out; retry later', 429)
                     if self.eligible(ticket, now):
                         if self.registry.balance_exhausted(key):
@@ -439,8 +438,8 @@ class RequestQueue:
                             self.key_release = None
                         self.active[ticket] = key
                         break
-                    self.changed.wait(min(0.5, deadline-now))
-                if on_wait is not None and self.key_mode:
+                    self.changed.wait(min(0.5, deadline-now) if deadline is not None else 0.5)
+                if on_wait is not None:
                     on_wait()
         finally:
             with self.changed:

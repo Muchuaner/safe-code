@@ -231,41 +231,38 @@ class CloudCLIStreamTests(unittest.TestCase):
             stream.ping_if_idle(finished)
             handler.send_sse.assert_not_called()
 
-    def test_active_stream_can_pass_old_limit(self):
-        frames = [(0, {'type': 'session-id', 'sessionId': CLOUD_SESSION})]
-        frames.extend((second, {'kind': 'stream_delta', 'content': 'x'}) for second in range(60, 660, 60))
-        frames.extend([(625, {'kind': 'complete', 'exitCode': 0}), (626, {'type': 'done'})])
-        with self.assertRaises(StopIteration) as completed:
-            self.consume(frames)
-        self.assertEqual(completed.exception.value[:2], (CLOUD_SESSION, [{'type': 'text', 'text': 'x' * 10}]))
-
-    def test_heartbeats_do_not_renew_progress_and_active_stream_has_a_cap(self):
-        for frames, message in (
-            ([(60, None), (119, {'type': 'status', 'message': 'keepalive'}), (121, None)], 'report progress'),
-            ([(second, {'kind': 'stream_delta', 'content': 'x'}) for second in range(60, 1801, 60)],
-             'active runtime limit'),
-        ):
-            with self.subTest(message=message), self.assertRaises(gateway.CloudCliError) as failed:
-                self.consume(frames)
-            self.assertEqual(failed.exception.status, 504)
-            self.assertIn(message, str(failed.exception))
-
-    def test_wait_for_all_outstanding_tools_within_the_turn_limit(self):
+    def test_silent_active_session_can_pass_idle_and_turn_limits(self):
         frames = [(0, {'type': 'session-id', 'sessionId': CLOUD_SESSION}),
                   (1, {'kind': 'tool_use', 'toolId': 'one', 'toolName': 'Read', 'toolInput': {}}),
-                  (2, {'kind': 'tool_use', 'toolId': 'two', 'toolName': 'Read', 'toolInput': {}}),
-                  (155, {'kind': 'tool_result', 'toolId': 'one', 'content': 'First result'}),
-                  (310, {'kind': 'tool_result', 'toolId': 'two', 'content': 'Second result'})]
+                  (1900, {'kind': 'tool_result', 'toolId': 'one', 'content': 'First result'}),
+                  (4000, {'kind': 'text', 'role': 'assistant', 'content': 'Finished.'}),
+                  (4001, {'kind': 'complete', 'exitCode': 0}), (4002, {'type': 'done'})]
         with self.assertRaises(StopIteration) as completed:
-            self.consume([*frames, (312, {'kind': 'text', 'role': 'assistant', 'content': 'Finished.'}),
-                          (313, {'kind': 'complete', 'exitCode': 0}), (314, {'type': 'done'})])
+            self.consume(frames)
         self.assertEqual(completed.exception.value[0], CLOUD_SESSION)
-        for stalled, error in (([*frames, (431, None)], 'report progress'),
-                               ([*frames[:2], (1801, None)], 'active runtime limit')):
-            with self.subTest(error=error), self.assertRaisesRegex(gateway.CloudCliError, error):
-                self.consume(stalled)
+        self.assertTrue(any('Finished.' in part.get('text', '') for part in completed.exception.value[1]))
 
-    def test_websocket_ping_does_not_keep_an_idle_stream_alive(self):
+    def test_unacknowledged_dispatch_still_has_a_startup_timeout(self):
+        frames = [(60, None), (119, {'type': 'status', 'message': 'keepalive'}), (121, None)]
+        with self.assertRaisesRegex(gateway.CloudCliError, 'did not confirm a session') as failed:
+            self.consume(frames)
+        self.assertEqual(failed.exception.status, 504)
+
+    def test_unretained_events_do_not_exhaust_the_reply_budget(self):
+        frames = [(0, {'type': 'session-id', 'sessionId': CLOUD_SESSION})]
+        frames.extend((1, None) for _ in range(50001))
+        frames.extend([
+            (2000, {'kind': 'tool_result', 'toolId': 'large', 'content': 'x' * 4096}),
+            (2500, {'kind': 'text', 'role': 'assistant', 'content': 'ok'}),
+            (2501, {'kind': 'complete', 'exitCode': 0}), (2502, {'type': 'done'}),
+        ])
+        with patch.object(gateway, 'MAX_CLOUDCLI_REPLY', 1024), self.assertRaises(StopIteration):
+            self.consume(frames)
+        with patch.object(gateway, 'MAX_CLOUDCLI_REPLY', 1), self.assertRaisesRegex(
+                gateway.CloudCliError, 'response size limit'):
+            gateway.CloudCliProgress(None, None).write('ok')
+
+    def test_websocket_heartbeats_do_not_confirm_a_new_session(self):
         from websocket import ABNF
         clock = 0
 
@@ -283,9 +280,53 @@ class CloudCLIStreamTests(unittest.TestCase):
             with self.assertRaises(gateway.CloudCliError) as failed:
                 next(gateway.cloudcli_events(response, progress))
         self.assertEqual(failed.exception.status, 504)
-        self.assertIn('report progress', str(failed.exception))
+        self.assertIn('did not confirm a session', str(failed.exception))
         self.assertTrue(socket.assert_control_frames)
         self.assertEqual(clock, 120)
+
+    def test_websocket_active_session_and_review_have_separate_lifetimes(self):
+        clock = 0
+
+        class Socket(ChatSocketFixture):
+            def settimeout(self, timeout):
+                self.timeout = timeout
+
+            def recv_data(self, *, control_frame):
+                nonlocal clock
+                if not self.timeout:
+                    clock += 2000
+                return super().recv_data(control_frame=control_frame)
+
+        frames = [
+            {'kind': 'text', 'role': 'assistant', 'content': 'hello', 'sessionId': CLOUD_SESSION},
+            {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION},
+        ]
+        with patch.object(gateway.time, 'monotonic', side_effect=lambda: clock):
+            stream = gateway.CloudCliSocketEvents(Socket(None, frames), CLOUD_SESSION)
+            with self.assertRaises(StopIteration) as completed:
+                next(gateway.cloudcli_events(stream, gateway.CloudCliProgress(None, None)))
+            self.assertEqual(completed.exception.value[0], CLOUD_SESSION)
+            self.assertGreater(clock, 1800)
+            review = gateway.CloudCliSocketEvents(Socket(None, frames), CLOUD_SESSION, clock - 1)
+            with self.assertRaisesRegex(gateway.CloudCliError, 'prompt review timed out'):
+                next(gateway.cloudcli_events(review, gateway.CloudCliProgress(None, None)))
+
+    def test_paused_question_is_only_cleaned_up_after_native_close(self):
+        from unittest.mock import Mock
+        backend = Mock()
+        turn = Mock()
+        backend.active_lock = threading.Lock()
+        backend.paused_turns = {'fixture': turn}
+        for outcome in (None, gateway.CloudCliError('temporarily unavailable', 503)):
+            backend.question_action.side_effect = outcome
+            gateway.CloudCliBackend.check_paused_question(backend, 'fixture', turn)
+            self.assertIs(backend.paused_turns['fixture'], turn)
+        self.assertEqual(backend.schedule_question_check.call_count, 2)
+        backend.question_action.side_effect = gateway.CloudCliError('native closed', 409)
+        gateway.CloudCliBackend.check_paused_question(backend, 'fixture', turn)
+        self.assertEqual(backend.paused_turns, {})
+        turn.events.close.assert_called_once()
+        backend.abandon_question.assert_not_called()
 
     def consume(self, frames):
         clock = 0
@@ -2023,17 +2064,19 @@ class CloudCLIGatewayTests(unittest.TestCase):
         events = [{'kind': 'text', 'role': 'assistant', 'content': 'Files received.', 'sessionId': CLOUD_SESSION},
                   {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION}]
         inline = {'type': 'document', 'source': {'type': 'text', 'data': 'Inline text without a MIME field.'}}
-        raw = b'a' * (4 * 1024 * 1024)
+        raw = b'a' * (10 * 1024 * 1024)
         source = {'type': 'base64', 'media_type': 'text/plain', 'data': base64.b64encode(raw).decode()}
-        content = [inline, {'type': 'document', 'title': 'one.txt', 'source': source},
-                   {'type': 'document', 'title': 'two.txt', 'source': source}]
+        content = [inline, {'type': 'document', 'title': 'large.txt', 'source': source}]
         payload = conversation('unused', messages=[{'role': 'user', 'content': content}])
         with patch.object(gateway, 'cloudcli_websocket', return_value=(
                 lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
             self.assertEqual(self.request(payload)[0], 200)
         command, = actions
         self.assertTrue(command['content'].startswith('请查看本轮附加的文件。'))
-        self.assertEqual([len(data) for _, _, data in self.cloud.uploads], [len(inline['source']['data']), len(raw), len(raw)])
+        self.assertEqual([len(data) for _, _, data in self.cloud.uploads], [len(inline['source']['data']), len(raw)])
+        source['data'] = base64.b64encode(raw + b'a').decode()
+        self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 413)
+        self.assertEqual(len(self.cloud.uploads), 2)
 
     def test_desktop_native_text_attachment_preview_does_not_block_first_turn(self):
         self.enable_cloudcli_web_fixture()

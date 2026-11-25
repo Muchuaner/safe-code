@@ -220,6 +220,29 @@ class SafeCodeApiTest(unittest.TestCase):
             with queue.slot(second,lambda:True):pass
         self.assertEqual(queue.snapshot(), ({}, {}, 1))
 
+    def test_default_queue_has_no_automatic_wait_deadline(self):
+        first, second, _ = self.digests
+        queue = RequestQueue(self.registry)
+        admitted = threading.Event()
+        waiting = threading.Event()
+        clock = 1000
+
+        def wait_slot():
+            with queue.slot(second, on_wait=waiting.set):
+                admitted.set()
+
+        with patch('management.time.monotonic', side_effect=lambda: clock):
+            with queue.slot(first):
+                thread = threading.Thread(target=wait_slot)
+                thread.start()
+                self.assertTrue(waiting.wait(2))
+                clock += 3600
+                queue.wake()
+                self.assertFalse(admitted.wait(.1))
+            thread.join(2)
+        self.assertTrue(admitted.is_set())
+        self.assertEqual(queue.snapshot(), ({}, {}, 1))
+
     def test_resize_admits_queued_requests_and_drains_active_requests(self):
         first, second, _ = self.digests
         queue = RequestQueue(self.registry, max_wait=3)

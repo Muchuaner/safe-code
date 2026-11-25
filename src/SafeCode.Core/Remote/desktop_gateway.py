@@ -41,11 +41,11 @@ from urllib.parse import urlsplit
 
 MAX_REQUEST = 8 * 1024 * 1024
 MAX_MESSAGES_REQUEST = 16 * 1024 * 1024
-MAX_CLOUDCLI_STREAM = 32 * 1024 * 1024
+MAX_CLOUDCLI_REPLY = 32 * 1024 * 1024
+MAX_CLOUDCLI_ATTACHMENT = 10 * 1024 * 1024  # CloudCLI /api/assets/files per-file limit
 CLOUDCLI_SSE_PING_INTERVAL = 15
 API_ONLY_TURN_RUNNING = '上一轮仍在 CloudCLI 中执行。请等待完成后在本对话重试；如需立即停止，请在 CloudCLI 中停止上一轮。'
-CLOUDCLI_PROGRESS_TIMEOUT = 120
-CLOUDCLI_TURN_LIMIT = 30 * 60
+CLOUDCLI_START_TIMEOUT = 120
 CLOUDCLI_HISTORY_LIMIT = 4 * 1024 * 1024
 MESSAGES_PATH = '/v1/messages'
 COUNT_TOKENS_PATH = MESSAGES_PATH + '/count_tokens'
@@ -1011,8 +1011,8 @@ def cloudcli_attachment(block, number):
         raise CloudCliError('Desktop sent invalid attachment data', 400) from None
     if not data:
         raise CloudCliError('Desktop sent an empty attachment', 400)
-    if len(data) > 5*1024*1024:
-        raise CloudCliError('Desktop attachment exceeds 5 MiB', 413)
+    if len(data) > MAX_CLOUDCLI_ATTACHMENT:
+        raise CloudCliError('Desktop attachment exceeds 10 MiB', 413)
     name = block.get('title')
     name = re.sub(r'[^\w.-]+', '_', name).strip('._')[:100] if isinstance(name, str) else ''
     if not name:
@@ -1258,6 +1258,7 @@ class CloudCliProgress:
         self.edit_anchor = None
         self.session = None
         self.parts = []
+        self.reply_bytes = 0
         self.pending = ''
         self.sent = 0
         self.has_assistant_text = False
@@ -1284,6 +1285,9 @@ class CloudCliProgress:
     def write(self, text, kind='text'):
         if not text or self.output_closed:
             return
+        self.reply_bytes += len(text.encode('utf-8'))
+        if self.reply_bytes > MAX_CLOUDCLI_REPLY:
+            raise CloudCliError('CloudCLI reply exceeds the gateway response size limit')
         if self.stream is not None and not self.client_detached.is_set():
             try:
                 if kind == 'thinking':
@@ -1527,6 +1531,8 @@ class CloudCliProgress:
                 return
             if parent:
                 return
+            if len(self.pending) + len(delta) > MAX_CLOUDCLI_REPLY:
+                raise CloudCliError('CloudCLI reply exceeds the gateway response size limit')
             self.pending += delta
             # A provider can surface an error as text before it identifies the error.
             prefixes = ('API Error:', 'Not logged in')
@@ -1601,6 +1607,7 @@ class CloudCliProgress:
 
     def take_content(self):
         content, self.parts = self.parts, []
+        self.reply_bytes = 0
         return content
 
     def show_plan(self, approval):
@@ -1624,17 +1631,14 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
     lines = total = 0
     usage = dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0)
     complete = False
-    started = time.monotonic()
-    pending_tools = set()
-    idle_deadline = started + CLOUDCLI_PROGRESS_TIMEOUT
-    turn_deadline = started + CLOUDCLI_TURN_LIMIT
+    # Bound an unacknowledged dispatch. After a session is confirmed, the
+    # provider's completion, cancellation or transport failure ends the turn.
+    deadline = time.monotonic() + CLOUDCLI_START_TIMEOUT
+    startup_error = 'CloudCLI did not confirm a session before the gateway timed out'
     while True:
-        deadline = min(idle_deadline, turn_deadline)
-        timeout = ('CloudCLI turn reached the active runtime limit' if turn_deadline <= idle_deadline
-                   else 'CloudCLI did not report progress before the gateway timed out')
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise CloudCliError(timeout, 504)
+        remaining = deadline - time.monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            raise CloudCliError(startup_error, 504)
         try:
             if isinstance(response, CloudCliSocketEvents):
                 line = response.readline(MAX_REQUEST + 1, deadline)
@@ -1643,15 +1647,17 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                     transport_socket.settimeout(remaining)
                 line = response.readline(MAX_REQUEST + 1)
         except TimeoutError:
-            raise CloudCliError(timeout, 504) from None
-        if time.monotonic() >= deadline:
-            raise CloudCliError(timeout, 504)
+            if deadline is None:
+                raise CloudCliError('CloudCLI transport timed out while reading an active session', 504) from None
+            raise CloudCliError(startup_error, 504) from None
+        if deadline is not None and time.monotonic() >= deadline:
+            raise CloudCliError(startup_error, 504)
         lines += 1
         total += len(line)
         diagnostic(streamLines=lines, receivedBytes=total)
         if not line:
             break
-        if len(line) > MAX_REQUEST or total > MAX_CLOUDCLI_STREAM or lines > 50000:
+        if len(line) > MAX_REQUEST:
             raise CloudCliError('CloudCLI response exceeds the gateway limit')
         if not line.startswith(b'data:'):
             continue
@@ -1662,20 +1668,6 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
         if not isinstance(event, dict):
             raise CloudCliError('CloudCLI returned an invalid event')
         kind, event_type = event.get('kind'), event.get('type')
-        tool_id = event.get('toolId')
-        if isinstance(tool_id, str) and tool_id:
-            if kind == 'tool_use':
-                pending_tools.add(tool_id)
-            elif kind == 'tool_result':
-                pending_tools.discard(tool_id)
-        if ((kind in ('stream_delta', 'thinking') or kind == 'text' and event.get('role') == 'assistant')
-                and isinstance(event.get('content'), str) and event['content']
-                or kind in ('tool_use', 'tool_result') and isinstance(event.get('toolId'), str)
-                or kind in ('task_status', 'task_notification') and isinstance(event.get('taskId'), str)
-                or kind == 'permission_resolved' and progress.awaiting_decision
-                and event.get('requestId') == progress.awaiting_decision
-                or kind == 'complete'):
-            idle_deadline = turn_deadline if pending_tools else time.monotonic() + CLOUDCLI_PROGRESS_TIMEOUT
         if kind == 'error' or event_type == 'error' or (kind != 'tool_result' and event.get('is_error') is True):
             raise cloudcli_failure(event, progress)
         if event_type == 'status' and event.get('message') not in ('Session started', 'Repository cloned and session started'):
@@ -1690,6 +1682,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                 raise CloudCliError('CloudCLI changed the run session identifier')
             opened = progress.session is None
             progress.session = candidate
+            deadline = None
             if opened:
                 if progress.on_session:
                     progress.on_session(candidate)
@@ -1742,12 +1735,8 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                     progress.show_tool_approval(question)
                 if progress.output_closed:
                     continue
-                paused = time.monotonic()
                 with response.keepalive() if isinstance(response, CloudCliSocketEvents) else nullcontext():
                     yield question
-                resumed = time.monotonic()
-                turn_deadline += resumed - paused
-                idle_deadline = resumed + CLOUDCLI_PROGRESS_TIMEOUT
                 continue
         progress.feed(event)
     raise progress.incomplete('CloudCLI ended without a confirmed assistant reply')
@@ -1804,21 +1793,19 @@ class CloudCliSocketEvents:
 
     def read_event(self, limit, deadline):
         from websocket import ABNF, WebSocketTimeoutException
-        for _ in range(50000):
-            remaining = deadline - time.monotonic()
-            if self.review_deadline is not None:
-                review_remaining = self.review_deadline - time.monotonic()
-                if review_remaining <= 0:
-                    raise CloudCliError('CloudCLI prompt review timed out', 504)
-                remaining = min(remaining, review_remaining)
-            if remaining <= 0:
-                raise TimeoutError()
-            self.connection.settimeout(remaining)
+        effective_deadline = deadline
+        if self.review_deadline is not None and (deadline is None or self.review_deadline <= deadline):
+            effective_deadline = self.review_deadline
+        while True:
+            remaining = effective_deadline - time.monotonic() if effective_deadline is not None else None
             try:
-                # Surface ping/pong so they cannot reset the socket timeout unnoticed.
+                if remaining is not None and remaining <= 0:
+                    raise WebSocketTimeoutException()
+                self.connection.settimeout(remaining)
+                # Control traffic is not a confirmation of a new turn.
                 opcode, line = self.connection.recv_data(control_frame=True)
             except WebSocketTimeoutException:
-                if self.review_deadline is not None and self.review_deadline <= deadline:
+                if self.review_deadline is not None and effective_deadline == self.review_deadline:
                     raise CloudCliError('CloudCLI prompt review timed out', 504) from None
                 raise TimeoutError() from None
             if opcode == ABNF.OPCODE_CLOSE:
@@ -1849,7 +1836,6 @@ class CloudCliSocketEvents:
                                                         'scheduled_messages_changed', 'loading_progress'):
                 self.complete = kind == 'complete'
                 return b'data: '+(line.encode() if isinstance(line, str) else line)
-        raise CloudCliError('CloudCLI chat returned too many unrelated events')
 
 
 class CloudCliStopWatch:
@@ -2674,7 +2660,7 @@ class CloudCliBackend:
                 self.approval_expires = time.monotonic() + 86400
             return self.approval_token
 
-    def question_action(self, question, action):
+    def question_action(self, question, action=None):
         connect, websocket_error = cloudcli_websocket()
         try:
             with closing(self.web_socket(connect)) as socket:
@@ -2692,7 +2678,8 @@ class CloudCliBackend:
                         request.get('requestId') == question.request_id and request.get('toolName') == question.tool_name
                         and request.get('input') == question.original for request in pending if isinstance(request, dict)
                     ):
-                        socket.send(json.dumps(action, ensure_ascii=False))
+                        if action is not None:
+                            socket.send(json.dumps(action, ensure_ascii=False))
                         return
                     raise CloudCliError('This CloudCLI question has already closed', 409)
         except (OSError, ValueError, AttributeError, TypeError, websocket_error):
@@ -2713,6 +2700,30 @@ class CloudCliBackend:
             del self.paused_turns[namespace]
         self.abandon_question(turn)
         self.invalidate_edit(namespace, turn.question.session, turn.progress)
+
+    def schedule_question_check(self, namespace, turn):
+        turn.timer = threading.Timer(60, self.check_paused_question, args=(namespace, turn))
+        turn.timer.daemon = True
+        turn.timer.start()
+
+    def check_paused_question(self, namespace, turn):
+        with self.active_lock:
+            if self.paused_turns.get(namespace) is not turn:
+                return
+        try:
+            self.question_action(turn.question)
+        except CloudCliError as error:
+            if error.status == 409:
+                with self.active_lock:
+                    if self.paused_turns.get(namespace) is not turn:
+                        return
+                    del self.paused_turns[namespace]
+                turn.events.close()
+                self.invalidate_edit(namespace, turn.question.session, turn.progress)
+                return
+        with self.active_lock:
+            if self.paused_turns.get(namespace) is turn:
+                self.schedule_question_check(namespace, turn)
 
     def close(self):
         with self.active_lock:
@@ -2824,11 +2835,9 @@ class CloudCliBackend:
                 db.execute('INSERT OR REPLACE INTO question_receipts VALUES (?,?,?,?,?,?,?,?)',
                            (namespace, expected, question.block['id'], question.session, progress.model,
                             project, workspace, time.time()))
-            turn.timer = threading.Timer(300, self.expire_question, args=(namespace, turn))
-            turn.timer.daemon = True
             with self.active_lock:
                 self.paused_turns[namespace] = turn
-                turn.timer.start()
+                self.schedule_question_check(namespace, turn)
             return result
         confirmed = history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli')
         anchor = self.turn_anchor(progress, session) if namespace.rpartition(':')[2] else None
