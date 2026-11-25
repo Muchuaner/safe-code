@@ -250,6 +250,21 @@ class CloudCLIStreamTests(unittest.TestCase):
             self.assertEqual(failed.exception.status, 504)
             self.assertIn(message, str(failed.exception))
 
+    def test_wait_for_all_outstanding_tools_within_the_turn_limit(self):
+        frames = [(0, {'type': 'session-id', 'sessionId': CLOUD_SESSION}),
+                  (1, {'kind': 'tool_use', 'toolId': 'one', 'toolName': 'Read', 'toolInput': {}}),
+                  (2, {'kind': 'tool_use', 'toolId': 'two', 'toolName': 'Read', 'toolInput': {}}),
+                  (155, {'kind': 'tool_result', 'toolId': 'one', 'content': 'First result'}),
+                  (310, {'kind': 'tool_result', 'toolId': 'two', 'content': 'Second result'})]
+        with self.assertRaises(StopIteration) as completed:
+            self.consume([*frames, (312, {'kind': 'text', 'role': 'assistant', 'content': 'Finished.'}),
+                          (313, {'kind': 'complete', 'exitCode': 0}), (314, {'type': 'done'})])
+        self.assertEqual(completed.exception.value[0], CLOUD_SESSION)
+        for stalled, error in (([*frames, (431, None)], 'report progress'),
+                               ([*frames[:2], (1801, None)], 'active runtime limit')):
+            with self.subTest(error=error), self.assertRaisesRegex(gateway.CloudCliError, error):
+                self.consume(stalled)
+
     def test_websocket_ping_does_not_keep_an_idle_stream_alive(self):
         from websocket import ABNF
         clock = 0
