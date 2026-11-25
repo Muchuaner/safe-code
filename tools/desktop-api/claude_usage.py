@@ -28,6 +28,8 @@ PROMPT = re.compile(r'(?m)^\s*[❯›]\s*(?:Try [^\n]*|Ask [^\n]*|Type [^\n]*)?$
 USAGE_COMMAND = re.compile(r'(?im)^[ \t]*(?:[❯›][ \t]*)?/usage[ \t]+(?:[–-][ \t]*)?(?:show|display|view|check)\b')
 TRUST_YES = re.compile(r'(?im)^[ \t]*[❯›][ \t]*(?:1\.[ \t]*)?Yes,[ \t]+I trust this folder[ \t]*$')
 TRUST_NO = re.compile(r'(?im)^[ \t]*[❯›][ \t]*(?:2\.[ \t]*)?No,[ \t]+exit[ \t]*\n[ \t]*Yes,[ \t]+I trust this folder[ \t]*$')
+TRUST_OPTION = re.compile(r'(?:[❯›]\s*)?(?:[12]\.\s*)?(?:No,\s+exit|Yes,\s+I trust this folder)', re.IGNORECASE)
+
 
 
 class UsageUnavailable(ValueError):
@@ -118,6 +120,7 @@ def query_usage(terminal, deadline, workspace):
     output = b''
     trust_confirmations = 0
     selecting_trust = False
+    workspace_line = re.compile(r'(?m)^[ \t]*' + re.escape(workspace) + r'[ \t]*$')
     with selectors.DefaultSelector() as selector:
         selector.register(terminal, selectors.EVENT_READ)
         while time.monotonic() < deadline and selector.select(max(0, deadline - time.monotonic())):
@@ -134,14 +137,19 @@ def query_usage(terminal, deadline, workspace):
             output = (output + chunk)[-128*1024:]
             text = terminal_text(output.decode('utf-8', errors='replace'))
             if phase == 'startup':
-                if trust_confirmations < 2 and (selecting_trust or workspace in text) and TRUST_YES.search(text):
+                # After selecting the private temporary folder the CLI can repaint only
+                # the menu. A different path or any unrelated text requires fresh verification.
+                redraw = (selecting_trust or trust_confirmations > 0) and all(
+                    TRUST_OPTION.fullmatch(line.strip()) for line in text.splitlines() if line.strip())
+                verified = trust_confirmations < 2 and (workspace_line.search(text.rsplit('Accessing workspace:', 1)[-1]) or redraw)
+                if verified and TRUST_YES.search(text):
                     # The CLI is in the fresh empty directory created only for this query.
                     if selecting_trust:
                         time.sleep(0.12)
                     os.write(terminal, b'\r')
                     trust_confirmations += 1
                     selecting_trust, output = False, b''
-                elif trust_confirmations < 2 and not selecting_trust and workspace in text and TRUST_NO.search(text):
+                elif verified and not selecting_trust and TRUST_NO.search(text):
                     os.write(terminal, b'\x1b[B')
                     selecting_trust, output = True, b''
                 elif PROMPT.search(text):

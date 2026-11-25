@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'tools/desktop-api'), str(ROOT/'src/SafeCode.Core/Remote')]
-from claude_usage import UsageUnavailable, read_subscription
+from claude_usage import UsageUnavailable, query_usage, read_subscription
 from desktop_gateway import GatewayError
 from management import KeyRegistry, RequestQueue, send_admin
 from pricing import estimate
@@ -379,6 +379,48 @@ class SafeCodeApiTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 server.open_public_server(self.root, saved)
             listen.assert_called_once()
+
+    def test_usage_trust_prompt_redraw_stays_with_the_probe_workspace(self):
+        workspace = str(self.root)
+        menu = '❯ No, exit\n  Yes, I trust this folder\n'
+        yes = '❯ Yes, I trust this folder\n'
+        header = 'Accessing workspace:\n' + workspace + '\n'
+        for case in ('redraw', 'no-path', 'different-folder', 'unexpected-dialog', 'third-confirmation'):
+            probe, screen = socket.socketpair()
+            with self.subTest(case=case), probe, screen:
+                screen.settimeout(2)
+                with ThreadPoolExecutor(1) as pool:
+                    result = pool.submit(query_usage, probe.fileno(), time.monotonic() + 4, workspace)
+
+                    def frame(text, expected):
+                        screen.sendall(text.encode())
+                        self.assertEqual(screen.recv(len(expected), socket.MSG_WAITALL), expected)
+
+                    try:
+                        if case != 'no-path':
+                            frame(header + menu, b'\x1b[B')
+                            frame(yes, b'\r')
+                        if case in ('redraw', 'third-confirmation'):
+                            frame(menu, b'\x1b[B')
+                            frame(yes, b'\r')
+                        if case == 'redraw':
+                            frame('❯ Try asking a question\n', b'/usage')
+                            frame('/usage  Show plan usage and limits\n', b'\r')
+                            screen.sendall(b'Current session\n42% used\nCurrent week\n81% remaining\n')
+                            self.assertEqual(result.result(), {'five_hour': {'used': 42}, 'seven_day': {'used': 19}})
+                        else:
+                            second = {'no-path': menu, 'third-confirmation': menu,
+                                      'different-folder': 'Accessing workspace:\n' + workspace + '-other\n' + menu,
+                                      'unexpected-dialog': 'Confirm another operation\n' + yes}[case]
+                            screen.sendall(second.encode())
+                            screen.shutdown(socket.SHUT_WR)
+                            with self.assertRaises(UsageUnavailable):
+                                result.result()
+                            screen.setblocking(False)
+                            with self.assertRaises(BlockingIOError):
+                                screen.recv(1)
+                    finally:
+                        screen.shutdown(socket.SHUT_WR)
 
     def test_claude_usage_reads_interactive_slash_command_only(self):
         cli = self.root/'.local/bin/claude'
