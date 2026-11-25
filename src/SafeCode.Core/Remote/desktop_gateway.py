@@ -43,6 +43,7 @@ MAX_REQUEST = 8 * 1024 * 1024
 MAX_MESSAGES_REQUEST = 16 * 1024 * 1024
 MAX_CLOUDCLI_STREAM = 32 * 1024 * 1024
 CLOUDCLI_SSE_PING_INTERVAL = 15
+API_ONLY_TURN_RUNNING = '上一轮仍在 CloudCLI 中执行。请等待完成后在本对话重试；如需立即停止，请在 CloudCLI 中停止上一轮。'
 CLOUDCLI_PROGRESS_TIMEOUT = 120
 CLOUDCLI_TURN_LIMIT = 30 * 60
 CLOUDCLI_HISTORY_LIMIT = 4 * 1024 * 1024
@@ -3201,7 +3202,7 @@ class CloudCliBackend:
                 self.active_conversations[conversation] = turn
             elif not self.config.get('desktopQuestions') and (active.client_detached.is_set()
                                                               or active.history in stopped_requests):
-                raise CloudCliError('上一轮仍在 CloudCLI 中执行。请等待完成后在本对话重试；如需立即停止，请在 CloudCLI 中停止上一轮。', 400)
+                raise CloudCliError(API_ONLY_TURN_RUNNING, 400)
             elif active.history not in stopped_requests:
                 raise CloudCliError('Another turn is already running in this CloudCLI conversation', 409)
         if active is not None:
@@ -3250,11 +3251,15 @@ class CloudCliBackend:
             return
         visible = without_desktop_model_commands([item for item in messages if item['role'] != 'system'])
         _, _, _, stopped = split_desktop_interruptions(visible)
-        if not stopped or not self.config.get('desktopQuestions'):
-            return
         with self.active_lock:
             active = self.active_conversations.get(self.identity+':'+scope)
-            if active is not None and active.history in stopped:
+            if active is None:
+                return
+            marked = active.history in stopped
+            if not self.config.get('desktopQuestions'):
+                if marked or active.client_detached.is_set():
+                    raise CloudCliError(API_ONLY_TURN_RUNNING, 400)
+            elif marked:
                 active.stop_requested.set()
 
     def run(self, manager, data, context_1m, session_header, stream=None, *, check_model=None):
