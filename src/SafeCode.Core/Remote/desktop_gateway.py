@@ -872,12 +872,19 @@ def desktop_compaction_request(system, task):
     instruction = 'You are a helpful AI assistant tasked with summarizing conversations.'
     if isinstance(system, str):
         system = [{'type': 'text', 'text': system}]
-    return (isinstance(system, list)
+    if not isinstance(system, list):
+        return False
+    system_text = [part['text'] for part in system if isinstance(part, dict)
+                   and part.get('type') == 'text' and isinstance(part.get('text'), str)]
+    # The native client may reuse the main agent system prompt for compaction.
+    # In that form require both the client header and its closing instructions.
+    native_prompt = (any(text.startswith('x-anthropic-billing-header: cc_version=') for text in system_text)
+                     and 'REMINDER: Do NOT call any tools. Respond with plain text only' in task
+                     and 'Tool calls will be rejected and you will fail the task.' in task)
+    return ((instruction in system_text or native_prompt)
             and task.startswith('CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.')
             and 'Your task is to create a detailed summary of the conversation so far' in task
-            and '<summary>' in task
-            and any(isinstance(part, dict) and part.get('type') == 'text' and part.get('text') == instruction
-                    for part in system))
+            and '<summary>' in task)
 
 
 def desktop_compact_context(messages):
@@ -888,6 +895,9 @@ def desktop_compact_context(messages):
         if not content or any(item.get('type') != 'text' for item in content):
             return None
         text = ''.join(item['text'] for item in content)
+        text = text.lstrip()
+        while (reminder := SYSTEM_REMINDER.match(text)):
+            text = text[reminder.end():].lstrip()
         if text.startswith(DESKTOP_COMPACT_PREFIX+'\n'):
             _, marker, body = text.partition('\nSummary:\n')
             if marker:
@@ -902,9 +912,16 @@ def split_compact_followup(messages):
     first = messages[0]
     content = first.get('content')
     if first['role'] == 'user' and isinstance(content, list) and len(content) > 1:
-        wrapper = {**first, 'content': content[:1]}
-        if desktop_compact_context([wrapper]):
-            return [wrapper, {**first, 'content': content[1:]}, *messages[1:]]
+        for index, item in enumerate(content[:-1]):
+            if item.get('type') != 'text':
+                break
+            text = item.get('text', '')
+            if not SYSTEM_REMINDER.sub('', text).strip():
+                continue
+            wrapper = {**first, 'content': content[:index+1]}
+            if desktop_compact_context([wrapper]):
+                return [wrapper, {**first, 'content': content[index+1:]}, *messages[1:]]
+            break
     return messages
 
 
@@ -3247,7 +3264,10 @@ class CloudCliBackend:
         if len(summaries) != 1:
             return False
         summary = summaries[0].strip()
-        return bool(summary) and (context.strip() == summary or context.startswith(summary+'\n'))
+        # The native compact renderer collapses runs of blank lines before
+        # inserting the summary into the next request. Match either rendering.
+        return any(value and (context.strip() == value or context.startswith(value+'\n'))
+                   for value in (summary, re.sub(r'\n{3,}', '\n\n', summary)))
 
     def stopped_edit_anchor(self, db, namespace, prefix, session):
         # Older gateways saved interrupted history hashes without the edit

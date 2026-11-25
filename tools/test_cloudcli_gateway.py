@@ -1005,6 +1005,40 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(self.cloud.requests[-1][2]['message'], 'Which notebook?')
         self.assertEqual(self.request({**follow, 'messages':[wrapper, {'role':'user', 'content':'Stale?'}]})[0], 409)
 
+    def test_native_agent_compaction_and_prefixed_followup(self):
+        first = conversation('Remember the current project phase.')
+        status, reply = self.request(first)
+        self.assertEqual(status, 200)
+        history = [*first['messages'], {'role': 'assistant', 'content': reply['content']}]
+        prompt = ('CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n'
+                  'Your task is to create a detailed summary of the conversation so far.\n'
+                  'REMINDER: Do NOT call any tools. Respond with plain text only — an <analysis> block '
+                  'followed by a <summary> block. Tool calls will be rejected and you will fail the task.')
+        compact = conversation('unused', messages=[*history, {'role':'user', 'content':prompt}])
+        compact['system'] = [{'type':'text', 'text':'x-anthropic-billing-header: cc_version=1.0;'},
+                             {'type':'text', 'text':'Main agent instructions'}]
+        status, result = self.request(compact)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.cloud.requests), 1)
+        receipt = result['content'][0]['text'].removeprefix('<summary>').removesuffix('</summary>')
+        self.assertIn('SafeCode checkpoint', receipt)
+        follow = [{'role':'user', 'content':[
+            {'type':'text', 'text':'<system-reminder>Current date</system-reminder>'},
+            {'type':'text', 'text':gateway.DESKTOP_COMPACT_PREFIX+'\n\nSummary:\n'+receipt},
+            {'type':'text', 'text':'Which phase?'}]}]
+        self.assertEqual(self.request(conversation('unused', messages=follow))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], 'Which phase?')
+
+    def test_resume_existing_summary_after_native_blank_line_normalization(self):
+        self.cloud.reply = (200, cloud_turn('<summary>Current phase: review.\n\n\n\nNext: release.</summary>'))
+        self.assertEqual(self.request(conversation('Summarize our progress.'))[0], 200)
+        wrapper = gateway.DESKTOP_COMPACT_PREFIX+'\n\nSummary:\nCurrent phase: review.\n\nNext: release.'
+        follow = conversation('unused', messages=[{'role':'user', 'content':wrapper},
+                                                  {'role':'user', 'content':'Which phase?'}])
+        self.assertEqual(self.request(follow)[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
     def test_existing_confirmed_summary_resumes_without_web_account(self):
         self.cloud.reply = (200, cloud_turn('<summary>The notebook is green.</summary>'))
         status, _ = self.request(conversation('Summarize the notebook.'))
