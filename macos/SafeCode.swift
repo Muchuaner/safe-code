@@ -888,7 +888,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             do {try data.write(to:target);self.answer(replyID,true)}
             catch {self.answer(replyID,error:error.localizedDescription)}
         }
-        if name.hasPrefix("status") {
+        if name == "gateway-binding", let view=gatewayWeb {
+            view.takeSnapshot(with:nil) { image,_ in
+                save(image?.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            }
+        } else if name.hasPrefix("status") {
             if !popover.isShown { toggleStatus() }
             capturingTray = true
             let fixture=output.deletingLastPathComponent().appendingPathComponent(name+".json")
