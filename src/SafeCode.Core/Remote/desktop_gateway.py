@@ -868,6 +868,18 @@ def split_desktop_interruptions(messages):
     return result, prefixes, partial_history, stopped_requests
 
 
+def desktop_compaction_request(system, task):
+    instruction = 'You are a helpful AI assistant tasked with summarizing conversations.'
+    if isinstance(system, str):
+        system = [{'type': 'text', 'text': system}]
+    return (isinstance(system, list)
+            and task.startswith('CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.')
+            and 'Your task is to create a detailed summary of the conversation so far' in task
+            and '<summary>' in task
+            and any(isinstance(part, dict) and part.get('type') == 'text' and part.get('text') == instruction
+                    for part in system))
+
+
 def desktop_compact_context(messages):
     for message in messages:
         if message['role'] != 'user':
@@ -883,6 +895,17 @@ def desktop_compact_context(messages):
         if SYSTEM_REMINDER.sub('', text).strip():
             return None
     return None
+
+
+def split_compact_followup(messages):
+    # The Messages API allows adjacent user turns to be combined into blocks.
+    first = messages[0]
+    content = first.get('content')
+    if first['role'] == 'user' and isinstance(content, list) and len(content) > 1:
+        wrapper = {**first, 'content': content[:1]}
+        if desktop_compact_context([wrapper]):
+            return [wrapper, {**first, 'content': content[1:]}, *messages[1:]]
+    return messages
 
 
 class DesktopHistory:
@@ -2013,6 +2036,8 @@ class CloudCliBackend:
                        'project TEXT NOT NULL, workspace TEXT, updated REAL NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS requests (identity TEXT PRIMARY KEY, scope TEXT NOT NULL, '
                        'reply TEXT, created REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS compact_receipts (scope TEXT PRIMARY KEY, history TEXT NOT NULL, '
+                       'session TEXT NOT NULL, marker TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS request_operations (identity TEXT PRIMARY KEY, '
                        'operation TEXT NOT NULL, pending INTEGER NOT NULL)')
             db.execute('CREATE INDEX IF NOT EXISTS request_operations_pending ON request_operations(operation) WHERE pending=1')
@@ -3006,13 +3031,15 @@ class CloudCliBackend:
                     current = db.execute(fields+' AND history=?', (namespace, confirmed)).fetchone()
                     if current is not None:
                         return current, None
-        if namespace.rpartition(':')[2] and self.config.get('desktopQuestions'):
-            bindings = db.execute(fields+' LIMIT 2', (namespace,)).fetchall()
+        has_scope = bool(namespace.rpartition(':')[2])
+        bindings = (db.execute(fields+' LIMIT 2', (namespace,)).fetchall()
+                    if has_scope and (compact_context or self.config.get('desktopQuestions')) else [])
+        if compact_context and len(bindings) == 1 and self.verified_compact_context(db, namespace, compact_context):
+            return bindings[0], None
+        if has_scope and self.config.get('desktopQuestions'):
             if bindings:
                 if len(bindings) == 1:
                     binding = bindings[0]
-                    if compact_context and self.verified_compact_context(db, namespace, compact_context):
-                        return binding, None
                     target = db.execute('SELECT anchor FROM edit_turns WHERE scope=? AND session=? AND prefix=? '
                                         'AND position=?', (namespace, binding[0], prefix, position)).fetchone()
                     if target:
@@ -3183,10 +3210,31 @@ class CloudCliBackend:
                 raise CloudCliError('CloudCLI did not preserve the verified Desktop prefix',409)
         return (fork,project,workspace,model,fork_anchor), (fork_anchor,fork_anchor) if anchor else None
 
+    def compact_checkpoint(self, db, namespace, history, model):
+        # Desktop trims its local history. CloudCLI already owns the native
+        # conversation and will compact its own context when necessary.
+        bindings = db.execute('SELECT DISTINCT session FROM sessions WHERE scope=? LIMIT 2', (namespace,)).fetchall()
+        if len(bindings) != 1 or not db.execute('SELECT 1 FROM sessions WHERE scope=? AND history=?',
+                                                (namespace, history)).fetchone():
+            raise CloudCliError('Cannot verify the conversation history for Desktop compaction', 409)
+        session = bindings[0][0]
+        row = db.execute('SELECT marker FROM compact_receipts WHERE scope=? AND history=? AND session=?',
+                         (namespace, history, session)).fetchone()
+        if row:
+            marker = row[0]
+        else:
+            marker = 'Continue the existing CloudCLI conversation. SafeCode checkpoint '+uuid.uuid4().hex+'.'
+            db.execute('INSERT OR REPLACE INTO compact_receipts VALUES (?, ?, ?, ?)', (namespace, history, session, marker))
+        return self.local_reply(model, '<summary>'+marker+'</summary>')
+
     @staticmethod
     def verified_compact_context(db, namespace, context):
         # The local CLI replaces its history after a compaction request. Only
         # accept a replacement anchored in this scope's latest confirmed reply.
+        marker = db.execute('SELECT marker FROM compact_receipts JOIN sessions USING (scope, session, history) '
+                            'WHERE scope=?', (namespace,)).fetchone()
+        if marker and (context.strip() == marker[0] or context.startswith(marker[0]+'\n')):
+            return True
         row = db.execute('SELECT reply FROM requests WHERE scope=? ORDER BY created DESC LIMIT 1',
                          (namespace,)).fetchone()
         if not row or row[0] is None:
@@ -3338,7 +3386,7 @@ class CloudCliBackend:
         stopped_requests = ()
         legacy_prefix = None
         if scope:
-            visible = without_desktop_model_commands(messages)
+            visible = without_desktop_model_commands(split_compact_followup(messages))
             if visible is not messages:
                 legacy_prefix = history_signature(messages[:-1], 'cloudcli')
             messages, interrupted_prefixes, partial_history, stopped_requests = split_desktop_interruptions(visible)
@@ -3395,6 +3443,13 @@ class CloudCliBackend:
             return self.local_reply(data['model'], '')
         if not chat_mode and webfetch_summary_request({**data, 'messages': messages}):
             raise CloudCliError('Desktop WebFetch helper has no matching CloudCLI tool', 400)
+        if scope and len(messages) > 1 and not chat_mode and desktop_compaction_request(data.get('system', ''), task):
+            before = history_signature(messages[:-1], 'cloudcli')
+            with (self.conversation_slot(namespace), self.configuration_lock(),
+                  closing(sqlite3.connect(self.path)) as db, db):
+                if namespace in self.paused_turns:
+                    raise CloudCliError('This CloudCLI conversation is waiting for a Desktop answer', 409)
+                return self.compact_checkpoint(db, namespace, before, data['model'])
         forwarded_task = (manager.review_prompt(dispatch_task)
                           if dispatch_task and manager.review_prompt is not None else dispatch_task)
         payload = {'provider': 'claude', 'message': forwarded_task or '请查看本轮附加的文件。',

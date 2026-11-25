@@ -969,6 +969,51 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual((action['type'], action['sessionId'], action['anchorId']),
                          ('chat.edit-send', CLOUD_SESSION, anchor))
 
+    def test_desktop_compaction_checkpoint_without_web_account(self):
+        first = conversation('Remember the green notebook.')
+        status, reply = self.request(first)
+        self.assertEqual(status, 200)
+        history = [*first['messages'], {'role': 'assistant', 'content': reply['content']}]
+        prompt = ('CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n'
+                  'Your task is to create a detailed summary of the conversation so far.\n'
+                  'Return a <summary> block.')
+        compact = conversation('unused', messages=[*history, {'role': 'user', 'content': prompt}])
+        compact['system'] = [{'type': 'text', 'text': 'You are a helpful AI assistant tasked with summarizing conversations.'}]
+        status, receipt = self.request(compact)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.cloud.requests), 1)
+        summary = receipt['content'][0]['text'].removeprefix('<summary>').removesuffix('</summary>')
+        self.assertNotEqual(summary, receipt['content'][0]['text'])
+        status, events = self.request({**compact, 'stream': True})
+        self.assertEqual(status, 200)
+        replay = gateway.StreamMessage()
+        for event in events:
+            replay.feed(event)
+        self.assertEqual(replay.partial(), receipt['content'])
+        self.assertEqual(len(self.cloud.requests), 1)
+        wrapper = {'role': 'user', 'content': gateway.DESKTOP_COMPACT_PREFIX+'\n\nSummary:\n'+summary}
+        follow = conversation('unused', messages=[wrapper, {'role':'user', 'content':'Which notebook?'}])
+        self.assertEqual(self.request(follow, session=str(uuid.uuid4()))[0], 409)
+        forged = [{**wrapper, 'content':wrapper['content']+' altered'}, follow['messages'][1]]
+        self.assertEqual(self.request({**follow, 'messages':forged})[0], 409)
+        merged = [{'role':'user', 'content':[{'type':'text', 'text':wrapper['content']},
+                                             {'type':'text', 'text':'Which notebook?'}]}]
+        status, _ = self.request({**follow, 'messages':merged})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.cloud.requests), 2)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], 'Which notebook?')
+        self.assertEqual(self.request({**follow, 'messages':[wrapper, {'role':'user', 'content':'Stale?'}]})[0], 409)
+
+    def test_existing_confirmed_summary_resumes_without_web_account(self):
+        self.cloud.reply = (200, cloud_turn('<summary>The notebook is green.</summary>'))
+        status, _ = self.request(conversation('Summarize the notebook.'))
+        self.assertEqual(status, 200)
+        wrapper = {'role':'user', 'content':gateway.DESKTOP_COMPACT_PREFIX+'\n\nSummary:\nThe notebook is green.'}
+        status, _ = self.request(conversation('unused', messages=[wrapper, {'role':'user', 'content':'Continue.'}]))
+        self.assertEqual(status, 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+
     def test_desktop_compaction_resumes_only_the_same_session_with_its_confirmed_summary(self):
         self.enable_cloudcli_web_fixture()
         self.cloud.track_history = True
