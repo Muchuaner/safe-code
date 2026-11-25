@@ -11,6 +11,7 @@
   gap: 4px;
   text-align: start;
 }
+.mg-choices button:focus-visible { outline-offset: -2px; }
 .mg-choices small { color: var(--muted); font-weight: 400; }
 .mg-terms {
   margin: 0;
