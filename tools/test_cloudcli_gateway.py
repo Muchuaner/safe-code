@@ -2187,7 +2187,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
     def test_api_key_only_attachment_and_plan_fail_without_dispatch(self):
         image = {'type':'image', 'source':{'type':'base64', 'media_type':'image/png',
                                            'data':base64.b64encode(b'fixture').decode()}}
-        for content in ([image], '<system-reminder>Plan mode is active</system-reminder>Plan a visit.'):
+        for content in ([image], '<system-reminder>Plan mode is active. The user indicated that they do not want you to execute yet.</system-reminder>Plan a visit.'):
             with self.subTest(content=content):
                 status, problem = self.request(conversation('unused', messages=[{'role':'user','content':content}]))
                 self.assertEqual(status, 400, problem)
