@@ -673,6 +673,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func manageGateway(_ action:String,_ args:[String:Any],reply:@escaping GatewayPanel.Reply) {
         if smokeOutput != nil {
             switch action {
+            case "multi.list":
+                reply(.success(["value":["self":["id":String(repeating:"a",count:32),"address":"192.0.2.1"],"children":[]]]))
             case "list":
                 let key: [String: Any] = ["id":String(repeating:"a",count:64),"note":"工作笔记本","enabled":true,"rpm":0,
                     "requests":42,"tokens":243810,"cost_nanos":104_300_000,"last_used":1795225500]
@@ -713,8 +715,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
     }
     private func inspectGatewayWindow(_ id:String,args:[String:Any]) {
-        guard let panel=gatewayWindow,let content=gatewayPanel else{answer(id,["visible":false]);return}
+        guard let panel=gatewayWindow else{answer(id,["visible":false]);return}
         if args["close"] as? Bool == true {panel.performClose(nil);answer(id,gatewayWindow==nil);return}
+        if args["directory"] as? Bool == true {showGatewayDirectory();answer(id,true);return}
+        if args["bindingChoices"] as? Bool == true, let view=gatewayWeb {
+            let check = "document.querySelector('dialog.mg-dialog[open] [data-step=home]:not([hidden])')?.querySelectorAll('[data-next]').length === 2"
+            view.evaluateJavaScript(check) { [weak self] value,_ in self?.answer(id,value as? Bool ?? false) }
+            return
+        }
+        guard let content=gatewayPanel else{answer(id,["visible":panel.isVisible]);return}
         if args["createKey"] as? Bool == true {content.createKey()}
         if args["cancelKey"] as? Bool == true,let sheet=panel.attachedSheet {panel.endSheet(sheet,returnCode:.alertSecondButtonReturn)}
         let previous=dialogHost.frame
@@ -866,7 +875,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         DispatchQueue.main.asyncAfter(deadline:.now()+0.5){[weak self] in self?.runSmoke()}
     }
     private func saveSmokeScreenshot(_ name: String, replyID: String) {
-        let views=["notice","login","deployment","maintenance","homepage","desktop-access","gateway","gateway-analysis","gateway-requests","status","status-key"]
+        let views=["notice","login","deployment","maintenance","homepage","desktop-access","gateway","gateway-analysis","gateway-requests","gateway-binding","status","status-key"]
         guard let output=smokeOutput, views.contains(name) ||
             (name.hasPrefix("dialog-") && name.count <= 48 && name.utf8.allSatisfy { $0 == 45 || (97...122).contains($0) }) else {
             answer(replyID,error:"Invalid smoke screenshot name");return
@@ -1069,6 +1078,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
         const gateway=await rpc('window.smoke.gateway',{move:true});
         if(!gateway.native||!gateway.landscape||!gateway.moved||!gateway.parentUnmoved)throw Error('Gateway window is not independently movable');
+        await rpc('window.smoke.gateway',{directory:true});
+        await waitFor(()=>rpc('window.smoke.gateway',{bindingChoices:true}),'both gateway binding actions');
+        if(capture)await rpc('window.smoke.screenshot',{name:'gateway-binding'});
         if(!await rpc('window.smoke.gateway',{close:true}))throw Error('Gateway window did not close');
         await waitPanel('claude-desktop-dialog',1);
         await rpc('window.smoke.closeDialog');
