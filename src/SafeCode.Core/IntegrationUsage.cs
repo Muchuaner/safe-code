@@ -2,14 +2,14 @@ using System.Text.Json;
 
 namespace SafeCode.Core;
 
-/// <summary>本次接入会话的用量。来源必须是真实 usage；不可用时不要用 0 冒充。</summary>
+/// <summary>本次接入會話的用量。來源必須是真實 usage；不可用時不要用 0 冒充。</summary>
 public sealed record IntegrationUsage(bool Available,long Input,long Output,long CacheRead,long CacheWrite,long Total,string? Note=null)
 {
     public static IntegrationUsage Unavailable(string note)=>new(false,0,0,0,0,0,note);
-    // OpenAI/Codex 的 input 已包含 cached，总 token 只加 input+output。
+    // OpenAI/Codex 的 input 已包含 cached，總 token 只加 input+output。
     public static IntegrationUsage FromCodex(long input,long cachedInput,long output,string? note=null)
         =>new(true,input,output,Math.Max(0,cachedInput),0,Math.Max(0,input)+Math.Max(0,output),note);
-    // Anthropic 的 input、cache read/write、output 分别计费，总 token 四者相加。
+    // Anthropic 的 input、cache read/write、output 分別計費，總 token 四者相加。
     public static IntegrationUsage FromAnthropic(long input,long output,long cacheRead,long cacheWrite,string? note=null)
         =>new(true,input,output,cacheRead,cacheWrite,Math.Max(0,input)+Math.Max(0,output)+Math.Max(0,cacheRead)+Math.Max(0,cacheWrite),note);
 }
@@ -35,7 +35,7 @@ public sealed class UsagePart
     public bool SameAs(UsagePart other)=>Input==other.Input&&Output==other.Output&&CacheRead==other.CacheRead&&CacheWrite==other.CacheWrite;
 }
 
-/// <summary>Anthropic JSONL：同一 message.id 的流式快照只按各字段最大值计一次。</summary>
+/// <summary>Anthropic JSONL：同一 message.id 的流式快照只按各欄位最大值計一次。</summary>
 public sealed class AnthropicUsageLedger
 {
     private readonly Dictionary<string,UsagePart> messages;
@@ -69,8 +69,8 @@ public sealed class AnthropicUsageLedger
 }
 
 /// <summary>
-/// Codex 会话 JSONL 的 token_count 是会话累计快照。按会话记录上次累计值，只累加增量；
-/// cached 已含在 input 中，仅作展示，不计入 total。
+/// Codex 會話 JSONL 的 token_count 是會話累計快照。按會話記錄上次累計值，只累加增量；
+/// cached 已含在 input 中，僅作展示，不計入 total。
 /// </summary>
 public sealed class CodexUsageLedger
 {
@@ -91,7 +91,7 @@ public sealed class CodexUsageLedger
     {
         if(string.IsNullOrWhiteSpace(sessionId))return;
         if(!sessions.TryGetValue(sessionId,out var previous)){previous=new UsagePart();sessions[sessionId]=previous;}
-        // 累计快照偶尔会乱序；只接受增长，避免把重复/回退快照再加一遍。
+        // 累計快照偶爾會亂序；只接受增長，避免把重複/回退快照再加一遍。
         input=Math.Max(input,0);output=Math.Max(output,0);cachedInput=Math.Max(cachedInput,0);
         if(input>previous.Input){counted.Input+=input-previous.Input;previous.Input=input;}
         if(output>previous.Output){counted.Output+=output-previous.Output;previous.Output=output;}
@@ -109,7 +109,7 @@ public sealed record PolicyValue(PolicyValueKind Kind,string? Text=null,int? Num
     public static PolicyValue FromDWord(int value)=>new(PolicyValueKind.DWord,Number:value);
 }
 
-/// <summary>Claude Desktop 官方 3P 策略字段；停止时只回滚本工具写过且未被后续修改的字段。</summary>
+/// <summary>Claude Desktop 官方 3P 策略欄位；停止時只回滾本工具寫過且未被後續修改的欄位。</summary>
 public static class ClaudeDesktopPolicy
 {
     public const string RegistryPath=@"SOFTWARE\Policies\Claude";
@@ -129,7 +129,7 @@ public static class ClaudeDesktopPolicy
         foreach(var field in ManagedFields)
         {
             if(!written.TryGetValue(field,out var ours))continue;
-            if(!current.TryGetValue(field,out var now)||!Same(now,ours))continue; // 后续被用户/其他工具改过，保留。
+            if(!current.TryGetValue(field,out var now)||!Same(now,ours))continue; // 後續被用戶/其他工具改過，保留。
             result[field]=original.TryGetValue(field,out var before)?before:null;
         }
         return result;
@@ -190,6 +190,6 @@ public static class ClaudeDesktopPolicy
         =>configured&&sameEndpoint&&sameModel&&sameDisplay&&string.IsNullOrEmpty(apiKey);
     public static string StopNote(bool takeover,bool originalGateway)
         =>takeover||originalGateway
-            ?"已停止 Safe Code 的管理/统计并恢复原配置；原网关配置仍有效，Claude 仍可能继续使用它。"
-            :"已停止 Safe Code 的管理/统计并移除本工具写入的网关字段；已运行的客户端可能直到重启才重新加载策略。";
+            ?"已停止 Safe Code 的管理/統計並恢復原配置；原網關配置仍有效，Claude 仍可能繼續使用它。"
+            :"已停止 Safe Code 的管理/統計並移除本工具寫入的網關欄位；已執行的客戶端可能直到重新啟動才重新載入策略。";
 }

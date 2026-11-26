@@ -12,9 +12,9 @@ internal sealed partial class RdpDesktop : F.Form
     private readonly RdpControl control = new();
     private readonly F.Panel viewport = new() { Dock = F.DockStyle.Fill, BackColor = Color.Black };
     private readonly F.ToolStrip toolbar = new() { GripStyle = F.ToolStripGripStyle.Hidden, Dock = F.DockStyle.Top };
-    private readonly F.ToolStripButton fullscreenButton = new("全屏") { ToolTipText = "全屏 / 退出全屏（Ctrl+Alt+Enter）" };
-    private readonly F.ToolStripDropDownButton resizeMenu = new("显示模式");
-    private readonly F.ToolStripLabel displayStatus = new("正在连接…");
+    private readonly F.ToolStripButton fullscreenButton = new("全螢幕") { ToolTipText = "全螢幕 / 退出全螢幕（Ctrl+Alt+Enter）" };
+    private readonly F.ToolStripDropDownButton resizeMenu = new("顯示模式");
+    private readonly F.ToolStripLabel displayStatus = new("正在連線…");
     private readonly F.Timer displayTimer = new() { Interval = 250 };
     private dynamic? client;
     private DesktopResolution currentResolution;
@@ -40,21 +40,21 @@ internal sealed partial class RdpDesktop : F.Form
         this.displayOperationCompleted = displayOperationCompleted;
         resizeMode = resizePreferences?.Read() ?? RdpResizeMode.Original;
         currentResolution = presetResolution = resolution ?? new();
-        Text = "Safe Code · 远程桌面";
+        Text = "Safe Code · 遠端桌面";
         AutoScaleMode = F.AutoScaleMode.None;
         StartPosition = F.FormStartPosition.Manual;
         MinimumSize = new Size(480, 320);
         KeyPreview = true;
         var minimize = new F.ToolStripButton("最小化");
-        var disconnect = new F.ToolStripButton("断开");
+        var disconnect = new F.ToolStripButton("斷開");
         fullscreenButton.Click += (_, _) => ApplyDisplayChange(ToggleFullscreen);
         minimize.Click += (_, _) => WindowState = F.FormWindowState.Minimized;
         disconnect.Click += (_, _) => Close();
         foreach (var (mode, label) in new[]
         {
-            (RdpResizeMode.Original, "固定分辨率 · 原始大小"),
-            (RdpResizeMode.Scale, "固定分辨率 · 等比缩放"),
-            (RdpResizeMode.Dynamic, "动态分辨率 · 随窗口变化")
+            (RdpResizeMode.Original, "固定解像度 · 原始大小"),
+            (RdpResizeMode.Scale, "固定解像度 · 等比縮放"),
+            (RdpResizeMode.Dynamic, "動態解像度 · 隨視窗變化")
         })
         {
             var item = new F.ToolStripMenuItem(label) { Tag = mode };
@@ -120,7 +120,7 @@ internal sealed partial class RdpDesktop : F.Form
         catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException)
         {
             displayOperationCompleted?.Invoke(error);
-            F.MessageBox.Show(this, "无法保存显示模式，请检查本机应用数据目录。", Text);
+            F.MessageBox.Show(this, "無法儲存顯示模式，請檢查本機應用數據目錄。", Text);
             return;
         }
         ApplyDisplayChange(() =>
@@ -147,7 +147,7 @@ internal sealed partial class RdpDesktop : F.Form
     private void ShowResolution()
     {
         displayStatus.Text = resizeMode == RdpResizeMode.Scale && connectionConfigured && !zoomSupported
-            ? "当前组件仅支持缩小" : $"{currentResolution.Width} × {currentResolution.Height}";
+            ? "當前組件僅支援縮小" : $"{currentResolution.Width} × {currentResolution.Height}";
     }
 
     private void UpdateResizeMenu()
@@ -214,8 +214,8 @@ internal sealed partial class RdpDesktop : F.Form
             ShowResolution();
             return true;
         }
-        catch (COMException) { displayStatus.Text = "分辨率调整未完成"; }
-        catch (Microsoft.CSharp.RuntimeBinder.RuntimeBinderException) { displayStatus.Text = "服务器不支持自动调整"; }
+        catch (COMException) { displayStatus.Text = "解像度調整未完成"; }
+        catch (Microsoft.CSharp.RuntimeBinder.RuntimeBinderException) { displayStatus.Text = "伺服器不支援自動調整"; }
         return false;
     }
 
@@ -236,7 +236,7 @@ internal sealed partial class RdpDesktop : F.Form
             toolbar.Size = new Size(Math.Min(screen.Width, Math.Max(440, toolbar.PreferredSize.Width)), toolbar.PreferredSize.Height);
             Bounds = screen;
             toolbar.Location = new Point((ClientSize.Width - toolbar.Width) / 2, 0);
-            fullscreenButton.Text = "退出全屏";
+            fullscreenButton.Text = "退出全螢幕";
             toolbarVisibleUntil = DateTime.UtcNow.AddSeconds(3);
             toolbar.Visible = true;
             TopMost = true;
@@ -258,7 +258,7 @@ internal sealed partial class RdpDesktop : F.Form
         toolbar.Visible = true;
         // Docked controls are laid out in reverse z-order. Undo the overlay's BringToFront.
         toolbar.SendToBack();
-        fullscreenButton.Text = "全屏";
+        fullscreenButton.Text = "全螢幕";
         Bounds = windowedBounds;
         WindowState = windowedState;
         ResumeLayout(true);
@@ -340,6 +340,6 @@ internal sealed partial class RdpDesktop : F.Form
     private sealed class RdpControl : F.AxHost
     {
         public RdpControl() : base("A0C63C30-F08D-4AB4-907C-34905D770C7D") { }
-        public object Client => GetOcx() ?? throw new InvalidOperationException("无法创建 Windows 远程桌面组件。");
+        public object Client => GetOcx() ?? throw new InvalidOperationException("無法建立 Windows 遠端桌面組件。");
     }
 }

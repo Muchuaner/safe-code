@@ -91,7 +91,7 @@ function createGatewayLineChart(container) {
   function inspect(index) {
     selected = index;
     readout.textContent = index == null
-      ? '悬停或用方向键查看时段详情'
+      ? '懸停或用方向鍵查看時段詳情'
       : labels[index].full + ' · ' + series.map(line => line.label + ' ' + exactNumber.format(line.values[index])).join(' · ');
     draw();
   }

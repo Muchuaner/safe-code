@@ -1,4 +1,4 @@
-﻿; 本地构建单个离线安装文件；不发布任何内容。
+﻿; 本地構建單個離線安裝檔案；不發佈任何內容。
 #define AppVersion "0.4.9"
 #ifndef AppSource
   #define AppSource "..\dist\SafeCode-0.4.9-win-x64"
@@ -48,7 +48,7 @@ Name: "{userdesktop}\Safe Code"; Filename: "{app}\SafeCode.exe"; IconFilename: "
 Name: "{userprograms}\Safe Code"; Filename: "{app}\SafeCode.exe"; IconFilename: "{app}\Icons\safe-code-shortcut.ico"; IconIndex: 0
 [Run]
 Filename: "{tmp}\WebView2-offline.exe"; Parameters: "/silent /install"; Flags: waituntilterminated; Check: NeedsWebView
-Filename: "{app}\SafeCode.exe"; Description: "启动 Safe Code"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\SafeCode.exe"; Description: "啟動 Safe Code"; Flags: nowait postinstall skipifsilent
 [Code]
 function NeedsWebView: Boolean;
 var Version: String;

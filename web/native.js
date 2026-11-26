@@ -1,11 +1,11 @@
-/* Windows 客户端桥接。普通浏览器继续使用概念稿；桌面模式不执行模拟部署。 */
+/* Windows 客戶端橋接。普通瀏覽器繼續使用概念稿；桌面模式不執行模擬部署。 */
 if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__safeCodePlatform === 'macos' && location.protocol === 'file:'))) {
   (() => {
     const isMac=window.__safeCodePlatform==='macos';
     const servicesWindow=isMac&&window.__safeCodeServicesWindow;
     const pending = new Map();
     const native = (op,args={},deadline) => new Promise((resolve,reject) => {
-      if(developerPreview&&!/^(window\.|services\.|diagnostics\.|notice\.|updates\.|feedback\.|copy$|mount\.status\.open$|preview\.|acceptance\.|claudeDesktop\.open$|desktopKey\.|codex\.open$)/.test(op))return reject(new Error('开发预览未连接服务器，此操作仅在真实连接后可用。'));
+      if(developerPreview&&!/^(window\.|services\.|diagnostics\.|notice\.|updates\.|feedback\.|copy$|mount\.status\.open$|preview\.|acceptance\.|claudeDesktop\.open$|desktopKey\.|codex\.open$)/.test(op))return reject(new Error('開發預覽未連接伺服器，此操作僅在真實連線後可用。'));
       const id=crypto.randomUUID();
       const timer=deadline&&setTimeout(()=>{
         if(pending.delete(id))reject(new Error(deadline.message));
@@ -24,9 +24,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     function showPreferences(p){
       servicePreferences=p;
       for(const id of consentIds)document.getElementById(id).checked=id.includes('diagnostics')?!!p.diagnosticsEnabled:!!p.enabled;
-      $('#usage-recipient').textContent=p.serviceAvailable?'接收方：'+p.recipient+'。服务数据库不保存来源 IP；网络连接会向接收服务器展示来源 IP。':'反馈与统计服务尚未启用，目前不会上传。';
+      $('#usage-recipient').textContent=p.serviceAvailable?'接收方：'+p.recipient+'。服務資料庫不儲存來源 IP；網絡連線會向接收伺服器展示來源 IP。':'回饋與統計服務尚未啟用，目前不會上載。';
       $('#feedback-send').disabled=!p.serviceAvailable;
-      $('#feedback-status').textContent=p.issueId?'本次反馈将关联最近失败的问题编号：'+p.issueId:'提交你填写的文字及软件版本，当前没有可关联的失败诊断。';
+      $('#feedback-status').textContent=p.issueId?'本次回饋將關聯最近失敗的問題編號：'+p.issueId:'提交你填寫的文字及軟件版本，當前沒有可關聯的失敗診斷。';
     }
     async function refreshPreferences(){
       try{showPreferences(await native('services.preferences'));}
@@ -57,22 +57,22 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     };
     function displayUpdate(info){
       update=info;
-      $('#update-status').textContent='当前版本 '+info.currentVersion+' · '+info.status;
+      $('#update-status').textContent='當前版本 '+info.currentVersion+' · '+info.status;
       $('#release-page').hidden=!info.page;$('#download-update').hidden=!info.canInstall;
       showUpdateNotice(info);
     }
     function showUpdateNotice(info){
       const available=!!info.version;
-      $('#services-entry').textContent=available?'发现新版本':'更新与反馈';$('#services-entry').classList.toggle('has-update',available);
-      const notice=$('#title-update-notice');notice.hidden=!available;notice.title=available?'发现新版本 '+info.version+'，点击查看更新':'打开更新与反馈';notice.setAttribute('aria-label',notice.title);
+      $('#services-entry').textContent=available?'發現新版本':'更新與回饋';$('#services-entry').classList.toggle('has-update',available);
+      const notice=$('#title-update-notice');notice.hidden=!available;notice.title=available?'發現新版本 '+info.version+'，點擊查看更新':'開啟更新與回饋';notice.setAttribute('aria-label',notice.title);
     }
-    async function checkUpdate(force=false){$('#check-update').disabled=true;$('#update-status').textContent='正在检查 GitHub…';try{displayUpdate(await native('updates.check',{force}));}catch(e){$('#update-status').textContent='检查失败：'+e.message;}finally{$('#check-update').disabled=false;}}
+    async function checkUpdate(force=false){$('#check-update').disabled=true;$('#update-status').textContent='正在檢查 GitHub…';try{displayUpdate(await native('updates.check',{force}));}catch(e){$('#update-status').textContent='檢查失敗：'+e.message;}finally{$('#check-update').disabled=false;}}
     $('#check-update').onclick=()=>checkUpdate(true);
     $('#release-page').onclick=()=>{if(update?.page)window.open(update.page,'_blank');};
-    window.safeCodeUpdateProgress=(done,total)=>{$('#update-status').textContent='正在下载 '+Math.round(done/total*100)+'%';};
-    $('#download-update').onclick=async()=>{$('#download-update').disabled=true;try{await native('updates.download');$('#update-status').textContent='下载完成，SHA256 校验通过。'+(isMac?'请先安全卸载目录，再打开镜像替换应用。':'安装时会关闭当前客户端。');$('#download-update').hidden=true;$('#install-update').hidden=false;}catch(e){$('#update-status').textContent=e.message;}finally{$('#download-update').disabled=false;}};
-    $('#install-update').onclick=()=>{if(busy){$('#update-status').textContent='请等待当前操作完成后安装更新。';return;}native('updates.install').catch(e=>{$('#update-status').textContent=e.message;});};
-    $('#feedback-form').onsubmit=async e=>{e.preventDefault();$('#feedback-send').disabled=true;try{await native('feedback.send',{message:$('#feedback-message').value});$('#feedback-message').value='';$('#feedback-status').textContent='已提交，谢谢你的反馈。';}catch(e){$('#feedback-status').textContent=e.message;}finally{$('#feedback-send').disabled=!servicePreferences?.serviceAvailable;}};
+    window.safeCodeUpdateProgress=(done,total)=>{$('#update-status').textContent='正在下載 '+Math.round(done/total*100)+'%';};
+    $('#download-update').onclick=async()=>{$('#download-update').disabled=true;try{await native('updates.download');$('#update-status').textContent='下載完成，SHA256 校驗通過。'+(isMac?'請先安全卸載目錄，再開啟鏡像替換應用。':'安裝時會關閉當前客戶端。');$('#download-update').hidden=true;$('#install-update').hidden=false;}catch(e){$('#update-status').textContent=e.message;}finally{$('#download-update').disabled=false;}};
+    $('#install-update').onclick=()=>{if(busy){$('#update-status').textContent='請等待當前操作完成後安裝更新。';return;}native('updates.install').catch(e=>{$('#update-status').textContent=e.message;});};
+    $('#feedback-form').onsubmit=async e=>{e.preventDefault();$('#feedback-send').disabled=true;try{await native('feedback.send',{message:$('#feedback-message').value});$('#feedback-message').value='';$('#feedback-status').textContent='已提交，謝謝你的回饋。';}catch(e){$('#feedback-status').textContent=e.message;}finally{$('#feedback-send').disabled=!servicePreferences?.serviceAvailable;}};
 
     if(servicesWindow){
       document.documentElement.classList.add('macos-services-window');
@@ -190,16 +190,16 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     const advanced=$('#advanced-connect');
     advanced.onclick=()=>{$('#ssh-port').value=String(sshPort);$('#advanced-dialog').showModal();$('#ssh-port').focus();};
     $('#ssh-port').addEventListener('input',()=>$('#ssh-port').setCustomValidity(''));
-    $('#advanced-form').onsubmit=e=>{e.preventDefault();const input=$('#ssh-port');const port=Number(input.value);input.setCustomValidity(Number.isInteger(port)&&port>=1&&port<=65535?'':'SSH 端口必须在 1 到 65535 之间。');if(!$('#advanced-form').reportValidity())return;sshPort=port;$('#advanced-dialog').close();};
+    $('#advanced-form').onsubmit=e=>{e.preventDefault();const input=$('#ssh-port');const port=Number(input.value);input.setCustomValidity(Number.isInteger(port)&&port>=1&&port<=65535?'':'SSH 連接埠必須在 1 到 65535 之間。');if(!$('#advanced-form').reportValidity())return;sshPort=port;$('#advanced-dialog').close();};
     async function beginPreview(){
       await native('preview.begin');
       developerPreview=true;connectionAttempt++;clearInterval(metricsTimer);clearInterval(resourceTimer);clearInterval(environmentTimer);connectionReady=false;connectionInFlight=false;nativeServer=null;
       resetHostControl();
       $('#advanced-dialog').close();enterDeveloperPreview();lockWorkspace(false);$('#connection-progress').hidden=true;
       setMetrics(null);for(const value of $$('.network-top strong'))value.textContent='—';
-      setResources(null,'预览模式未连接服务器，不显示模拟的监控数值。');
-      setEnvironmentAssessment(null,'未连接');
-      $('.server-metadata').textContent='界面预览 / 未连接服务器';
+      setResources(null,'預覽模式未連接伺服器，不顯示模擬的監控數值。');
+      setEnvironmentAssessment(null,'未連線');
+      $('.server-metadata').textContent='介面預覽 / 未連接伺服器';
     }
     $('#enter-preview').onclick=async()=>{try{await beginPreview();}catch(error){await showAppMessage(error.message);}};
     $('#login-help').onclick=async()=>{if(!window.__safeCodeNativeDialogs)await native('window.resize',{wide:true});$('#login-help-dialog').showModal();};
@@ -209,39 +209,39 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       nativeServer=server;$('#update-login-password').hidden=false;$('#host-manage').disabled=!server.statuses?.account;states=ids.map(id=>server.statuses?.[id]?'done':'pending');
       if(currentTask>=0&&states[currentTask]!=='done')states[currentTask]='running';
       const desired=currentLocale();if(desired&&(server.timezone!==desired.timezone||server.systemLocale!==desired.locale))states[1]='pending';
-      if(server.ipPolicy){ipPolicy=server.ipPolicy;$('#ip-policy-state').textContent=server.ipPolicyHealthy?(ipPolicy.lockIngress&&ipPolicy.lockEgress?'已锁定':ipPolicy.lockIngress||ipPolicy.lockEgress?'部分锁定':'未锁定'):'待检查';}
+      if(server.ipPolicy){ipPolicy=server.ipPolicy;$('#ip-policy-state').textContent=server.ipPolicyHealthy?(ipPolicy.lockIngress&&ipPolicy.lockEgress?'已鎖定':ipPolicy.lockIngress||ipPolicy.lockEgress?'部分鎖定':'未鎖定'):'待檢查';}
       else{ipPolicy={lockIngress:false,lockEgress:false};$('#ip-policy-state').textContent='未配置';}
       const assigned=(server.assignedIps||[]).filter(isPublicIpv4);setDetectedIpOptions(assigned);
       if(server.observedEgressIp){serverConnection.egressIp=server.observedEgressIp;$('#server-address').textContent=server.observedEgressIp;}
       if(server.ipPolicy)serverConnection.ingressIp=server.ipPolicy.ingressIp;
-      $('#ip-policy-summary').textContent=server.ipPolicy?.lockEgress?'住宅出口已固定；外部检测：'+(server.observedEgressIp||'待确认'):'未固定出口，当前实际出口：'+(server.observedEgressIp||'待确认');
+      $('#ip-policy-summary').textContent=server.ipPolicy?.lockEgress?'住宅出口已固定；外部檢測：'+(server.observedEgressIp||'待確認'):'未固定出口，當前實際出口：'+(server.observedEgressIp||'待確認');
       updateSocksCard(server.socksEgress);
       $('#server-user').textContent=$('#username').value.trim();
       const meta=$('.server-metadata');const user=$('#server-user');meta.replaceChildren(user,document.createTextNode(' / Ubuntu '+server.osVersion+' / SSH'));
-      $('#mount-state').textContent=server.mountReady?'已安装':'未安装';$('#install-mount').disabled=server.mountReady;$('#install-mount').textContent=server.mountReady?'已安装':'安装';
-      $('#cloud-state').textContent=server.cloudReady?'已就绪':'未安装';$('#install-cloud').disabled=server.cloudReady;$('#install-cloud').textContent=server.cloudReady?'已安装':'安装';$('#open-cloud').disabled=!server.cloudReady;if($('#open-cloud-remote'))$('#open-cloud-remote').disabled=!server.cloudReady;
+      $('#mount-state').textContent=server.mountReady?'已安裝':'未安裝';$('#install-mount').disabled=server.mountReady;$('#install-mount').textContent=server.mountReady?'已安裝':'安裝';
+      $('#cloud-state').textContent=server.cloudReady?'已就緒':'未安裝';$('#install-cloud').disabled=server.cloudReady;$('#install-cloud').textContent=server.cloudReady?'已安裝':'安裝';$('#open-cloud').disabled=!server.cloudReady;if($('#open-cloud-remote'))$('#open-cloud-remote').disabled=!server.cloudReady;
       renderTasks();
       if(connectionReady&&!hadAccount&&server.statuses?.account)void refreshPublicGateway();
     }
     function setMetrics(stats){
       const values=$$('.network-top strong');
-      values[0].textContent=stats?(stats.latencyMs===null?'未响应':Math.round(stats.latencyMs)+' ms'):'检测中';
+      values[0].textContent=stats?(stats.latencyMs===null?'未響應':Math.round(stats.latencyMs)+' ms'):'檢測中';
       values[1].textContent=stats?stats.lossPercent+' %':'—';
-      $('.network-top').title='每 5 秒探测一次；丢包率为最近 20 次 ICMP 探测统计。ICMP 未响应不代表 SSH 不可达。';
+      $('.network-top').title='每 5 秒探測一次；丟包率為最近 20 次 ICMP 探測統計。ICMP 未響應不代表 SSH 不可達。';
     }
     function setResources(stats,message){
       const gib=bytes=>(bytes/1024**3).toFixed(1);
       $('#resource-cpu').textContent=stats?stats.cpuPercent.toFixed(1)+' %':'—';
       $('#resource-memory').textContent=stats?gib(stats.memoryUsedBytes)+' / '+gib(stats.memoryTotalBytes)+' G':'— / — G';
       $('#resource-disk').textContent=stats?gib(stats.diskUsedBytes)+' / '+gib(stats.diskTotalBytes)+' G':'— / — G';
-      $('#server-resources').title=message||'服务器实时监控，每5秒更新；内存按已用量显示（扣除可回收缓存），硬盘为根分区；容量按 GiB 显示。';
+      $('#server-resources').title=message||'伺服器實時監控，每5秒更新；記憶體按已用量顯示（扣除可回收快取），硬碟為根分區；容量按 GiB 顯示。';
     }
     function startResourceMonitor(attempt){
       const refresh=async()=>{
         if(resourceBusy||!connectionReady||developerPreview||attempt!==connectionAttempt||document.hidden||$('#workspace-screen').hidden)return;
         resourceBusy=true;
         try{const stats=await native('resources');if(attempt===connectionAttempt&&connectionReady&&!developerPreview)setResources(stats);}
-        catch{if(attempt===connectionAttempt&&connectionReady&&!developerPreview)setResources(null,'资源监控暂不可用，下次自动重试。');}
+        catch{if(attempt===connectionAttempt&&connectionReady&&!developerPreview)setResources(null,'資源監控暫不可用，下次自動重試。');}
         finally{resourceBusy=false;}
       };
       clearInterval(resourceTimer);void refresh();resourceTimer=setInterval(refresh,5000);
@@ -249,32 +249,32 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     function setEnvironmentAssessment(result,message){
       const output=$('#environment-rating-result');
       const complete=Number.isInteger(result?.riskScore)&&result.riskScore>=0&&result.riskScore<=100;
-      output.textContent=complete?result.message+' · '+result.riskScore+'/100':result?.message||message||'暂不可用';
+      output.textContent=complete?result.message+' · '+result.riskScore+'/100':result?.message||message||'暫不可用';
       output.dataset.level=complete?result.level:'unavailable';
-      $('.environment-rating').title='在VPS工作用户的Chrome环境检测，每分钟刷新。风险分越低越好，属于非官方估计。'+(result?.username?'\nVPS用户：'+result.username:'')+(result?.signals?.length?'\n'+result.signals.map(s=>s.label+'：'+s.value+'（+'+s.contribution+'）').join('\n'):'');
+      $('.environment-rating').title='在VPS工作用戶的Chrome環境檢測，每分鐘重新整理。風險分越低越好，屬於非官方估計。'+(result?.username?'\nVPS用戶：'+result.username:'')+(result?.signals?.length?'\n'+result.signals.map(s=>s.label+'：'+s.value+'（+'+s.contribution+'）').join('\n'):'');
     }
     function startEnvironmentMonitor(attempt){
       const refresh=async()=>{
         if(environmentBusy||!connectionReady||developerPreview||attempt!==connectionAttempt||document.hidden||$('#workspace-screen').hidden)return;
         environmentBusy=true;
         try{const result=await native('environment.assess');if(attempt===connectionAttempt&&connectionReady&&!developerPreview)setEnvironmentAssessment(result);}
-        catch{if(attempt===connectionAttempt&&connectionReady&&!developerPreview)setEnvironmentAssessment(null,'暂不可用');}
+        catch{if(attempt===connectionAttempt&&connectionReady&&!developerPreview)setEnvironmentAssessment(null,'暫不可用');}
         finally{environmentBusy=false;}
       };
-      clearInterval(environmentTimer);setEnvironmentAssessment(null,'检测中…');void refresh();environmentTimer=setInterval(refresh,60000);
+      clearInterval(environmentTimer);setEnvironmentAssessment(null,'檢測中…');void refresh();environmentTimer=setInterval(refresh,60000);
     }
     function $$(selector){return [...document.querySelectorAll(selector)];}
     queryIpInfo=async function(ip){
       const attempt=connectionAttempt;
       const current=()=>attempt===connectionAttempt&&ip===serverConnection.egressIp;
-      if(!isPublicIpv4(ip)){$('#ip-location').textContent='暂无归属地';$('#ip-score').textContent='—';$('#score-unit').textContent='';$('#rating-state').textContent='';return;}
-      $('#rating-state').textContent='查询中';$('#ip-location').textContent='正在查询…';$('#ip-score').textContent='—';$('#score-unit').textContent='';
+      if(!isPublicIpv4(ip)){$('#ip-location').textContent='暫無歸屬地';$('#ip-score').textContent='—';$('#score-unit').textContent='';$('#rating-state').textContent='';return;}
+      $('#rating-state').textContent='查詢中';$('#ip-location').textContent='正在查詢…';$('#ip-score').textContent='—';$('#score-unit').textContent='';
       try{
         const info=await native('ip.info',{ip});
         if(!current())return;
-        $('#ip-location').textContent=info.location||'暂无归属地';$('#ip-score').textContent=info.score===null?'—':String(info.score);$('#score-unit').textContent=info.score===null?'':' / 100';$('#rating-state').textContent=info.geoSource;
-        $('#score-source').title='定位：'+info.geoSource+(info.hasGeoConflict?'（部分来源存在分歧）':'')+'；评分为第三方'+(info.isSubnetScore?'网段':'IP')+'评分。';
-      }catch{if(current()){$('#rating-state').textContent='暂不可用';$('#ip-location').textContent='暂无归属地';$('#ip-score').textContent='—';}}
+        $('#ip-location').textContent=info.location||'暫無歸屬地';$('#ip-score').textContent=info.score===null?'—':String(info.score);$('#score-unit').textContent=info.score===null?'':' / 100';$('#rating-state').textContent=info.geoSource;
+        $('#score-source').title='定位：'+info.geoSource+(info.hasGeoConflict?'（部分來源存在分歧）':'')+'；評分為第三方'+(info.isSubnetScore?'網段':'IP')+'評分。';
+      }catch{if(current()){$('#rating-state').textContent='暫不可用';$('#ip-location').textContent='暫無歸屬地';$('#ip-score').textContent='—';}}
     };
     let connectionAttempt=0;let connectionReady=false;let connectionInFlight=false;let lastSettings=null;
     function applyDeploymentSettings(settings){
@@ -282,7 +282,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       localeSelection=Object.hasOwn(localePresets,settings?.localeRegion)?settings.localeRegion:'';
     }
     function lockWorkspace(locked){for(const id of ['deployment-panel','maintenance-panel'])$( '#'+id).inert=locked;$('#workspace-screen').classList.toggle('is-connecting',locked);$('#maintenance-mode').disabled=locked;}
-    function connectionProgress(text,failed=false){$('#connection-progress').hidden=false;$('#connection-progress').classList.toggle('failed',failed);$('#connection-progress-text').textContent=text;$('#cancel-connect').hidden=failed;$('#retry-connect').hidden=!failed;$('#edit-connection').hidden=!failed;if(failed){busy=false;renderTasks();const values=$$('.network-top strong');for(const value of values)value.textContent='—';$('#rating-state').textContent='未连接';$('#ip-location').textContent='等待连接服务器';$('#server-address').textContent='待确认';}}
+    function connectionProgress(text,failed=false){$('#connection-progress').hidden=false;$('#connection-progress').classList.toggle('failed',failed);$('#connection-progress-text').textContent=text;$('#cancel-connect').hidden=failed;$('#retry-connect').hidden=!failed;$('#edit-connection').hidden=!failed;if(failed){busy=false;renderTasks();const values=$$('.network-top strong');for(const value of values)value.textContent='—';$('#rating-state').textContent='未連線';$('#ip-location').textContent='等待連接伺服器';$('#server-address').textContent='待確認';}}
     function prepareWorkspace(settings){
       clearTimeout(publicGatewayTimer);
       publicGatewayEnabled=false;publicGatewayReachable=false;publicGatewayLoading=false;publicGatewayMissing=false;
@@ -294,26 +294,26 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#claude-desktop-dialog').close();
       publicGatewaySubscription=undefined;
       $('#public-gateway-footer').hidden=true;
-      clearInterval(metricsTimer);clearInterval(resourceTimer);clearInterval(environmentTimer);setResources(null,'等待服务器连接完成。');setEnvironmentAssessment(null,'等待连接');$('#update-login-password').hidden=true;nativeServer=null;connectionReady=false;connectionInFlight=true;busy=false;currentTask=-1;accountOptions={};resetDeploymentSettings();ipPolicy={lockIngress:false,lockEgress:false};
+      clearInterval(metricsTimer);clearInterval(resourceTimer);clearInterval(environmentTimer);setResources(null,'等待伺服器連線完成。');setEnvironmentAssessment(null,'等待連線');$('#update-login-password').hidden=true;nativeServer=null;connectionReady=false;connectionInFlight=true;busy=false;currentTask=-1;accountOptions={};resetDeploymentSettings();ipPolicy={lockIngress:false,lockEgress:false};
       resetHostControl();
       $('#account-settings').close();$('#localization-dialog').close();
-      states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('等待连接完成。');selectedTasks.clear();selecting=false;renderTasks();
-      serverConnection={ingressIp:settings.host,egressIp:''};$('#server-ingress').textContent=settings.host;$('#server-address').textContent='正在检查…';$('#server-user').textContent=settings.username;
-      const user=$('#server-user');$('.server-metadata').replaceChildren(user,document.createTextNode(' / 系统待检查 / SSH'));
-      $('#ip-location').textContent='等待连接';$('#ip-score').textContent='—';$('#score-unit').textContent='';$('#rating-state').textContent='待检查';setMetrics(null);
-      switchMode('deployment');lockWorkspace(true);showScreen('workspace');connectionProgress('正在连接服务器…');
+      states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('等待連線完成。');selectedTasks.clear();selecting=false;renderTasks();
+      serverConnection={ingressIp:settings.host,egressIp:''};$('#server-ingress').textContent=settings.host;$('#server-address').textContent='正在檢查…';$('#server-user').textContent=settings.username;
+      const user=$('#server-user');$('.server-metadata').replaceChildren(user,document.createTextNode(' / 系統待檢查 / SSH'));
+      $('#ip-location').textContent='等待連線';$('#ip-score').textContent='—';$('#score-unit').textContent='';$('#rating-state').textContent='待檢查';setMetrics(null);
+      switchMode('deployment');lockWorkspace(true);showScreen('workspace');connectionProgress('正在連接伺服器…');
     }
     function confirmServerIdentity(response){const changed=!!response.key.previousFingerprint;
-      return appDialog(changed?'检测到服务器密钥已经变化。\n您是否重装过这台服务器？\n\n刚刚重装过，可选择“是”重新信任并连接；没有重装请选择“否”并核实服务器。':'首次连接这台服务器。\n请核对服务器身份，确认后建立连接。',{
-            title:changed?'是否重装过系统？':'确认服务器身份',confirm:changed?'是，重新连接':'信任并连接',cancel:changed?'否，取消':'取消',
-            details:'服务器：'+response.key.host+':'+response.key.port+(changed?'\n原指纹：'+response.key.previousFingerprint:'')+'\n新指纹：'+response.key.fingerprint});
+      return appDialog(changed?'檢測到伺服器密鑰已經變化。\n您是否重新安裝過這台伺服器？\n\n剛剛重新安裝過，可選擇“是”重新信任並連線；沒有重新安裝請選擇“否”並核實伺服器。':'首次連接這台伺服器。\n請核對伺服器身份，確認後建立連線。',{
+            title:changed?'是否重新安裝過系統？':'確認伺服器身份',confirm:changed?'是，重新連線':'信任並連線',cancel:changed?'否，取消':'取消',
+            details:'伺服器：'+response.key.host+':'+response.key.port+(changed?'\n原指紋：'+response.key.previousFingerprint:'')+'\n新指紋：'+response.key.fingerprint});
     }
     async function connect(settings, automatic=false, retries=0){
       clearTimeout(startupRetryTimer);
       const attempt=++connectionAttempt;lastSettings=settings;
       if(automatic){$('#ip').value=settings.host;$('#username').value=settings.username;sshPort=settings.port||22;}
       $('#password').type='password';setEye($('#reveal'),false);prepareWorkspace(settings);
-      // 先呈现主界面，再开始 SSH；慢连接、身份确认和评分均留在主界面处理。
+      // 先呈現主介面，再開始 SSH；慢連線、身份確認和評分均留在主介面處理。
       await native('window.resize',{wide:true});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       try{
         let response;
@@ -324,7 +324,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           if(response.retryable&&automatic){
             connectionInFlight=false;
             const delay=Math.min(60, 5 * 2 ** retries);
-            connectionProgress('服务器暂不可达，'+delay+' 秒后自动重连。',true);
+            connectionProgress('伺服器暫不可達，'+delay+' 秒後自動重連。',true);
             $('#cancel-connect').hidden=false;
             startupRetryTimer=setTimeout(()=>{
               if(attempt===connectionAttempt)void connect(settings,true,retries+1);
@@ -332,13 +332,13 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
             return null;
           }
           if(!response.requiresTrust)break;
-          if(automatic)throw new Error('服务器身份需要核对，请点击「重试」确认后连接。');
+          if(automatic)throw new Error('伺服器身份需要核對，請點擊「重試」確認後連線。');
           const changed=!!response.key.previousFingerprint;
-          connectionProgress(changed?'等待确认：服务器密钥已变化。':'等待确认服务器身份。');
+          connectionProgress(changed?'等待確認：伺服器密鑰已變化。':'等待確認伺服器身份。');
           const accepted=await confirmServerIdentity(response);
           if(attempt!==connectionAttempt)return null;
-          if(!accepted){connectionInFlight=false;await native('connection.cancel');connectionProgress('已取消连接，原信任记录未修改。',true);return null;}
-          await native('host.trust',{token:response.token});connectionProgress('正在重新连接服务器…');
+          if(!accepted){connectionInFlight=false;await native('connection.cancel');connectionProgress('已取消連線，原信任記錄未修改。',true);return null;}
+          await native('host.trust',{token:response.token});connectionProgress('正在重新連接伺服器…');
         }
         const result=response.server;
         const [saved,draft]=await Promise.all([
@@ -346,24 +346,24 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         ]);
         if(attempt!==connectionAttempt)return null;
         applyDeploymentSettings(saved);accountOptions=draft||{};accountDraftPending=!!draft;
-        $('#password').value='';serverConnection={ingressIp:result.ipPolicy?.ingressIp||settings.host,egressIp:result.ipPolicy?.egressIp||result.observedEgressIp||''};$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp||'待确认';
+        $('#password').value='';serverConnection={ingressIp:result.ipPolicy?.ingressIp||settings.host,egressIp:result.ipPolicy?.egressIp||result.observedEgressIp||''};$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp||'待確認';
         taskLogs=Array(tasks.length).fill('');busy=false;connectionReady=true;connectionInFlight=false;lockWorkspace(false);applyServer(result);
         $('#connection-progress').hidden=true;
         const measure=async()=>{if(metricsBusy||!connectionReady)return;metricsBusy=true;try{setMetrics(await native('metrics'));}catch{setMetrics({latencyMs:null,lossPercent:100});}finally{metricsBusy=false;}};metricsTask=measure();metricsTimer=setInterval(measure,5000);
         startResourceMonitor(attempt);
         startEnvironmentMonitor(attempt);
-        // 评分不会阻塞连接完成或部署操作。
+        // 評分不會阻塞連線完成或部署操作。
         void queryIpInfo(serverConnection.egressIp);
         await pollClaudeBridge();
-        if(response.gatewayWarnings?.length)void showAppMessage(response.gatewayWarnings.join('\n'),{title:'网关未恢复'});
+        if(response.gatewayWarnings?.length)void showAppMessage(response.gatewayWarnings.join('\n'),{title:'網關未恢復'});
         if(result.activeJobs?.length)resumeJob(result.activeJobs[0]);return result;
       }catch(error){
         if(attempt!==connectionAttempt)return null;
         connectionReady=false;connectionInFlight=false;lockWorkspace(true);connectionProgress(error.message,true);
-        await showAppMessage(error.message,{title:'连接未完成'});return null;
+        await showAppMessage(error.message,{title:'連線未完成'});return null;
       }finally{if(attempt===connectionAttempt)resetLogin();}
     }
-    $('#cancel-connect').onclick=async()=>{clearTimeout(startupRetryTimer);connectionAttempt++;resetHostControl();connectionInFlight=false;connectionProgress('正在取消连接…');await native('connection.cancel');connectionProgress('已取消连接。',true);};
+    $('#cancel-connect').onclick=async()=>{clearTimeout(startupRetryTimer);connectionAttempt++;resetHostControl();connectionInFlight=false;connectionProgress('正在取消連線…');await native('connection.cancel');connectionProgress('已取消連線。',true);};
     $('#edit-connection').onclick=()=>{clearTimeout(startupRetryTimer);connectionAttempt++;resetHostControl();native('connection.cancel');showScreen('login');resetLogin();};
     $('#retry-connect').onclick=()=>{if(lastSettings)void connect(lastSettings);};
     $('#login-form').onsubmit=async e=>{
@@ -375,29 +375,29 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         try{await beginPreview();}catch(error){await showAppMessage(error.message);}return;
       }
       if(!host||!username){
-        $('#connection-message').textContent='请填写 IP 地址和用户名。';
+        $('#connection-message').textContent='請填寫 IP 地址和用戶名。';
         $('#connection-message').className='connection-message error';
         return;
       }
       await connect({host,username,password,port:sshPort});
     };
     async function resumeJob(job){
-      busy=true;const advanced=job.operation==='cloud'||job.operation==='mount_install';if(advanced)beginOperation(job.operation,job.operation==='cloud'?'恢复 CloudCLI 安装进度':'恢复目录挂载安装进度');currentTask=ids.indexOf(job.operation);
-      if(currentTask>=0){states[currentTask]='running';taskLogs[currentTask]='恢复远端部署监控…';}renderTasks();
-      try{applyServer(await native('job.resume',job));if(advanced){appendOperationLog('后台安装任务已完成。');advancedOperation.status='安装完成。';}}
-      catch(e){if(advanced){appendOperationLog('安装未完成：'+e.message);advancedOperation.status='安装未完成，请查看日志后重试。';}else showAppMessage(e.message);}
+      busy=true;const advanced=job.operation==='cloud'||job.operation==='mount_install';if(advanced)beginOperation(job.operation,job.operation==='cloud'?'恢復 CloudCLI 安裝進度':'恢復目錄掛載安裝進度');currentTask=ids.indexOf(job.operation);
+      if(currentTask>=0){states[currentTask]='running';taskLogs[currentTask]='恢復遠端部署監控…';}renderTasks();
+      try{applyServer(await native('job.resume',job));if(advanced){appendOperationLog('背景安裝任務已完成。');advancedOperation.status='安裝完成。';}}
+      catch(e){if(advanced){appendOperationLog('安裝未完成：'+e.message);advancedOperation.status='安裝未完成，請查看日誌後重試。';}else showAppMessage(e.message);}
       finally{if(advanced){advancedOperation.done=true;if(displayedOperation===advancedOperation)$('#operation-log-status').textContent=advancedOperation.status;}currentTask=-1;busy=false;renderTasks();}
     }
     async function runTask(index){
-      if(!connectionReady||!deploymentSettingsReady())throw new Error('请先保存工作用户和本土化设置。');
-      const previousState=states[index];currentTask=index;states[index]='running';taskLogs[index]='正在连接 Ubuntu 部署模块…';renderTasks();
+      if(!connectionReady||!deploymentSettingsReady())throw new Error('請先儲存工作用戶和本土化設定。');
+      const previousState=states[index];currentTask=index;states[index]='running';taskLogs[index]='正在連接 Ubuntu 部署模組…';renderTasks();
       try{
         const preset=currentLocale();
         const locale=preset?{region:preset.name,timezone:preset.timezone,locale:preset.locale,language:preset.language}:null;
         const result=await native('deploy',{step:ids[index],locale,username:accountOptions.username||nativeServer?.username||'workspace',hostname:accountOptions.hostname||'',password:accountOptions.password||''});applyServer(result);
-        if(!result.statuses?.[ids[index]])throw new Error(tasks[index][0]+'验证未通过，请查看日志。');
-        taskLogs[index]='部署完成，已通过实际状态检查。';if(index===0){accountOptions={};accountDraftPending=false;}
-      }catch(error){states[index]=index===0&&previousState==='done'?'done':'pending';taskLogs[index]='失败：'+error.message;throw error;}
+        if(!result.statuses?.[ids[index]])throw new Error(tasks[index][0]+'驗證未通過，請查看日誌。');
+        taskLogs[index]='部署完成，已通過實際狀態檢查。';if(index===0){accountOptions={};accountDraftPending=false;}
+      }catch(error){states[index]=index===0&&previousState==='done'?'done':'pending';taskLogs[index]='失敗：'+error.message;throw error;}
       finally{currentTask=-1;renderTasks();}
     }
     deployOne=async function(index){if(busy||!connectionReady||!deploymentSettingsReady()||!canDeployTask(index))return;selecting=false;selectedTasks.clear();busy=true;try{await runTask(index);}catch(error){showAppMessage(error.message);}finally{busy=false;renderTasks();}};
@@ -410,38 +410,38 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     $('#account-card').onclick=async()=>{
       try{
         const account=await native('account');$('#result-body').replaceChildren();
-        for(const [name,value] of [['用户名',account.username],['密码',account.password]]){
+        for(const [name,value] of [['用戶名',account.username],['密碼',account.password]]){
           const row=document.createElement('div');row.className='credential-row';const label=document.createElement('span');label.textContent=name;
           const group=document.createElement('div');group.className='credential-value';const code=document.createElement('code');code.textContent=value;
-          const copy=document.createElement('button');copy.className='copy-button';copy.setAttribute('aria-label','复制'+name);copy.textContent='⧉';copy.onclick=async()=>{await native('copy',{text:value});copy.title='已复制';setTimeout(()=>copy.title='复制',1200);};group.append(code,copy);row.append(label,group);$('#result-body').append(row);
+          const copy=document.createElement('button');copy.className='copy-button';copy.setAttribute('aria-label','複製'+name);copy.textContent='⧉';copy.onclick=async()=>{await native('copy',{text:value});copy.title='已複製';setTimeout(()=>copy.title='複製',1200);};group.append(code,copy);row.append(label,group);$('#result-body').append(row);
         }
         $('#maintenance-result').showModal();
       }catch(error){showAppMessage(error.message);}
     };
-    async function runMaintenanceCard(selector,action){const card=$(selector);const caption=card.querySelector('span');const text=caption.textContent;card.disabled=true;caption.textContent='正在连接…';try{await action();}catch(e){showAppMessage(e.message);}finally{card.disabled=false;caption.textContent=text;}}
+    async function runMaintenanceCard(selector,action){const card=$(selector);const caption=card.querySelector('span');const text=caption.textContent;card.disabled=true;caption.textContent='正在連線…';try{await action();}catch(e){showAppMessage(e.message);}finally{card.disabled=false;caption.textContent=text;}}
     $('#desktop-card').onclick=()=>runMaintenanceCard('#desktop-card',()=>native('desktop'));
     $('#terminal-card').onclick=()=>runMaintenanceCard('#terminal-card',async()=>{const result=await native('terminal');if(result)applyServer(result);});
     let advancedOperation=null;let displayedOperation=null;const operationHistory=new Map();
     function appendOperationLog(line){
       if(!advancedOperation)return;advancedOperation.lines.push(line);if(advancedOperation.lines.length>300)advancedOperation.lines.shift();
-      const key=advancedOperation.key==='cloud'?'cloud':'mount';$('#'+key+'-live-log').hidden=false;$('#'+key+'-live-log').textContent='查看日志：'+line;
+      const key=advancedOperation.key==='cloud'?'cloud':'mount';$('#'+key+'-live-log').hidden=false;$('#'+key+'-live-log').textContent='查看日誌：'+line;
       if(displayedOperation===advancedOperation){const box=$('#operation-log-output');box.textContent=advancedOperation.lines.join('\n');box.scrollTop=box.scrollHeight;}
     }
-    function beginOperation(key,label){advancedOperation={key,label,lines:[],started:Date.now(),done:false,status:'正在准备…'};operationHistory.set(key,advancedOperation);displayedOperation=advancedOperation;$('#operation-log-title').textContent=label;$('#operation-log-status').textContent='正在准备…';$('#operation-log-output').textContent='';$('#operation-log-dialog').showModal();appendOperationLog('已开始，请等待服务器返回实际进度。');}
+    function beginOperation(key,label){advancedOperation={key,label,lines:[],started:Date.now(),done:false,status:'正在準備…'};operationHistory.set(key,advancedOperation);displayedOperation=advancedOperation;$('#operation-log-title').textContent=label;$('#operation-log-status').textContent='正在準備…';$('#operation-log-output').textContent='';$('#operation-log-dialog').showModal();appendOperationLog('已開始，請等待伺服器返回實際進度。');}
     function syncAdvancedButtons(){
       if(document.querySelector('#bridge-manage'))$('#bridge-manage').disabled=busy||bridgeBusy||(!isMac&&!nativeServer?.statuses?.account);
       if(document.querySelector('#host-manage'))$('#host-manage').disabled=busy||hostBusy||!nativeServer?.statuses?.account;
       renderDesktopAccess();
-      for(const [key,ready] of [['mount',nativeServer?.mountReady],['cloud',nativeServer?.cloudReady]]){const button=$('#install-'+key);button.disabled=!!ready||busy;button.title=busy?'有任务正在执行，请查看进度。':'';button.textContent=advancedOperation&&!advancedOperation.done&&advancedOperation.key===(key==='cloud'?'cloud':'mount_install')?'安装中…':ready?'已安装':'安装';}
+      for(const [key,ready] of [['mount',nativeServer?.mountReady],['cloud',nativeServer?.cloudReady]]){const button=$('#install-'+key);button.disabled=!!ready||busy;button.title=busy?'有任務正在執行，請查看進度。':'';button.textContent=advancedOperation&&!advancedOperation.done&&advancedOperation.key===(key==='cloud'?'cloud':'mount_install')?'安裝中…':ready?'已安裝':'安裝';}
       if($('#open-cloud-remote'))$('#open-cloud-remote').disabled=!nativeServer?.cloudReady||busy;
     }
-    for(const key of ['mount','cloud']){const log=document.createElement('p');log.id=key+'-live-log';log.className='advanced-live-log';log.hidden=true;$('#'+key+'-summary')?.after(log);if(!log.isConnected)$('#install-'+key).closest('.advanced-card').querySelector('.advanced-copy>div').append(log);log.title='点击查看安装日志';log.onclick=()=>{const op=operationHistory.get(key==='cloud'?'cloud':'mount_install');if(op){displayedOperation=op;$('#operation-log-title').textContent=op.label;$('#operation-log-status').textContent=op.status;$('#operation-log-output').textContent=op.lines.join('\n');$('#operation-log-dialog').showModal();}};}
-    setInterval(()=>{if(advancedOperation&&!advancedOperation.done)$('#operation-log-status').textContent='正在安装，已用时 '+Math.floor((Date.now()-advancedOperation.started)/1000)+' 秒。'},1000);
+    for(const key of ['mount','cloud']){const log=document.createElement('p');log.id=key+'-live-log';log.className='advanced-live-log';log.hidden=true;$('#'+key+'-summary')?.after(log);if(!log.isConnected)$('#install-'+key).closest('.advanced-card').querySelector('.advanced-copy>div').append(log);log.title='點擊查看安裝日誌';log.onclick=()=>{const op=operationHistory.get(key==='cloud'?'cloud':'mount_install');if(op){displayedOperation=op;$('#operation-log-title').textContent=op.label;$('#operation-log-status').textContent=op.status;$('#operation-log-output').textContent=op.lines.join('\n');$('#operation-log-dialog').showModal();}};}
+    setInterval(()=>{if(advancedOperation&&!advancedOperation.done)$('#operation-log-status').textContent='正在安裝，已用時 '+Math.floor((Date.now()-advancedOperation.started)/1000)+' 秒。'},1000);
     async function installAdvanced(key){
-      if(busy){if(advancedOperation&&!advancedOperation.done)$('#operation-log-dialog').showModal();else showAppMessage('已有任务正在执行，请等待完成。');return;}
-      busy=true;const id=key==='cloud'?'cloud':'mount_install';beginOperation(id,key==='cloud'?'安装 CloudCLI 网页界面':'安装目录挂载组件');renderTasks();syncAdvancedButtons();
-      try{applyServer(await native(key==='cloud'?'cloud.install':'mount.install'));appendOperationLog('安装完成，已通过服务器状态检查。');advancedOperation.status='安装完成。';if(displayedOperation===advancedOperation)$('#operation-log-status').textContent=advancedOperation.status;}
-      catch(e){appendOperationLog('安装失败：'+e.message);advancedOperation.status='安装未完成，请查看日志后重试。';if(displayedOperation===advancedOperation)$('#operation-log-status').textContent=advancedOperation.status;$('#'+key+'-state').textContent='安装失败';}
+      if(busy){if(advancedOperation&&!advancedOperation.done)$('#operation-log-dialog').showModal();else showAppMessage('已有任務正在執行，請等待完成。');return;}
+      busy=true;const id=key==='cloud'?'cloud':'mount_install';beginOperation(id,key==='cloud'?'安裝 CloudCLI 網頁介面':'安裝目錄掛載組件');renderTasks();syncAdvancedButtons();
+      try{applyServer(await native(key==='cloud'?'cloud.install':'mount.install'));appendOperationLog('安裝完成，已通過伺服器狀態檢查。');advancedOperation.status='安裝完成。';if(displayedOperation===advancedOperation)$('#operation-log-status').textContent=advancedOperation.status;}
+      catch(e){appendOperationLog('安裝失敗：'+e.message);advancedOperation.status='安裝未完成，請查看日誌後重試。';if(displayedOperation===advancedOperation)$('#operation-log-status').textContent=advancedOperation.status;$('#'+key+'-state').textContent='安裝失敗';}
       finally{advancedOperation.done=true;busy=false;renderTasks();syncAdvancedButtons();}
     }
     $('#install-cloud').onclick=()=>installAdvanced('cloud');$('#install-mount').onclick=()=>installAdvanced('mount');
@@ -457,8 +457,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#cloud-remote-warning-view').hidden=true;
       $('#cloud-remote-log-view').hidden=false;
       $('#cloud-remote-success-view').hidden=true;
-      $('#cloud-remote-log-status').textContent='正在配置并开放公网访问…';
-      $('#cloud-remote-log-output').textContent='已确认风险，正在连接服务器执行配置…\n';
+      $('#cloud-remote-log-status').textContent='正在配置並開放公網訪問…';
+      $('#cloud-remote-log-output').textContent='已確認風險，正在連接伺服器執行配置…\n';
       cloudRemoteRunning=true;busy=true;renderTasks();
       try{
         const res=await native('cloud.expose');
@@ -466,8 +466,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         cloudRemoteUrl=url;
         window.showCloudRemoteSuccess?.(url);
       }catch(err){
-        $('#cloud-remote-log-status').textContent='开放公网访问失败：'+err.message;
-        appendCloudRemoteLog('错误：'+err.message);
+        $('#cloud-remote-log-status').textContent='開放公網訪問失敗：'+err.message;
+        appendCloudRemoteLog('錯誤：'+err.message);
       }finally{
         cloudRemoteRunning=false;busy=false;renderTasks();
       }
@@ -479,39 +479,39 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let selectedRemoteField=null;let folderEpoch=0;let lastFolderPath='';let folderTimer;
     function appendFolderLog(line){const box=$('#folder-log');box.textContent=(box.textContent+'\n'+line).trim().split('\n').slice(-20).join('\n');box.scrollTop=box.scrollHeight;}
     async function listRemote(path=''){
-      const epoch=++folderEpoch;lastFolderPath=path;clearInterval(folderTimer);$('#folder-log').textContent='';$('#folder-error').textContent='';$('#folder-list').textContent='正在读取…';$('#folder-confirm').disabled=true;$('#folder-new').disabled=true;$('#folder-up').disabled=true;$('#folder-retry').hidden=true;
-      $('#folder-path').textContent=path||(nativeServer?.homeDirectory?nativeServer.homeDirectory+'/workspace':'工作目录');appendFolderLog('正在通过 SSH 读取工作用户目录…');const started=Date.now();
-      folderTimer=setInterval(()=>appendFolderLog('仍在等待服务器响应，已用时 '+Math.floor((Date.now()-started)/1000)+' 秒。'),3000);
+      const epoch=++folderEpoch;lastFolderPath=path;clearInterval(folderTimer);$('#folder-log').textContent='';$('#folder-error').textContent='';$('#folder-list').textContent='正在讀取…';$('#folder-confirm').disabled=true;$('#folder-new').disabled=true;$('#folder-up').disabled=true;$('#folder-retry').hidden=true;
+      $('#folder-path').textContent=path||(nativeServer?.homeDirectory?nativeServer.homeDirectory+'/workspace':'工作目錄');appendFolderLog('正在透過 SSH 讀取工作用戶目錄…');const started=Date.now();
+      folderTimer=setInterval(()=>appendFolderLog('仍在等待伺服器響應，已用時 '+Math.floor((Date.now()-started)/1000)+' 秒。'),3000);
       try{
         const result=await native('folder.list',{path});if(epoch!==folderEpoch)return;
         lastFolderPath=result.path;$('#folder-path').textContent=result.path;$('#folder-up').disabled=result.path===result.parent;$('#folder-up').onclick=()=>listRemote(result.parent);$('#folder-list').replaceChildren();
         for(const dir of result.directories){const button=document.createElement('button');button.textContent=dir.name;button.onclick=()=>listRemote(dir.path);$('#folder-list').append(button);}
-        if(!result.directories.length)$('#folder-list').textContent='此目录没有下级文件夹。';$('#folder-confirm').disabled=false;$('#folder-new').disabled=false;appendFolderLog('读取完成：'+result.directories.length+' 个目录。'+(result.truncated?'仅显示前 300 个，可手动填写更具体路径。':''));
-      }catch(e){if(epoch!==folderEpoch)return;$('#folder-list').textContent='';$('#folder-error').textContent=e.message;appendFolderLog('读取未完成，可点击重试或返回上一级。');$('#folder-retry').hidden=false;const current=$('#folder-path').textContent;if(current.startsWith('/')&&current!=='/'){const parent=current.slice(0,current.lastIndexOf('/'))||'/';$('#folder-up').disabled=false;$('#folder-up').onclick=()=>listRemote(parent);}}
+        if(!result.directories.length)$('#folder-list').textContent='此目錄沒有下級資料夾。';$('#folder-confirm').disabled=false;$('#folder-new').disabled=false;appendFolderLog('讀取完成：'+result.directories.length+' 個目錄。'+(result.truncated?'僅顯示前 300 個，可手動填寫更具體路徑。':''));
+      }catch(e){if(epoch!==folderEpoch)return;$('#folder-list').textContent='';$('#folder-error').textContent=e.message;appendFolderLog('讀取未完成，可點擊重試或返回上一級。');$('#folder-retry').hidden=false;const current=$('#folder-path').textContent;if(current.startsWith('/')&&current!=='/'){const parent=current.slice(0,current.lastIndexOf('/'))||'/';$('#folder-up').disabled=false;$('#folder-up').onclick=()=>listRemote(parent);}}
       finally{if(epoch===folderEpoch)clearInterval(folderTimer);}
     }
     let creatingFolder=false;
-    $('#folder-new').onclick=()=>{if($('#folder-confirm').disabled)return;$('#create-folder-name').value='';$('#create-folder-error').textContent='';$('#create-folder-parent').textContent='创建位置：'+$('#folder-path').textContent;$('#create-folder-dialog').showModal();$('#create-folder-name').focus();};
+    $('#folder-new').onclick=()=>{if($('#folder-confirm').disabled)return;$('#create-folder-name').value='';$('#create-folder-error').textContent='';$('#create-folder-parent').textContent='建立位置：'+$('#folder-path').textContent;$('#create-folder-dialog').showModal();$('#create-folder-name').focus();};
     $('#create-folder-dialog').addEventListener('cancel',event=>{if(creatingFolder)event.preventDefault();});
     $('#create-folder-form').onsubmit=async event=>{
       event.preventDefault();if(creatingFolder)return;const name=$('#create-folder-name').value.trim();
-      if(!name||name==='.'||name==='..'||/[\\/\x00-\x1f]/.test(name)){$('#create-folder-error').textContent='请输入有效的文件夹名称，不能包含路径分隔符。';return;}
-      creatingFolder=true;const button=$('#create-folder-form [type=submit]');const controls=[...$('#create-folder-dialog').querySelectorAll('button,input')];for(const control of controls)control.disabled=true;button.textContent='正在创建…';
+      if(!name||name==='.'||name==='..'||/[\\/\x00-\x1f]/.test(name)){$('#create-folder-error').textContent='請輸入有效的資料夾名稱，不能包含路徑分隔符。';return;}
+      creatingFolder=true;const button=$('#create-folder-form [type=submit]');const controls=[...$('#create-folder-dialog').querySelectorAll('button,input')];for(const control of controls)control.disabled=true;button.textContent='正在建立…';
       try{const result=await native('folder.create',{path:$('#folder-path').textContent,name});if(selectedRemoteField)selectedRemoteField.value=result.path;$('#create-folder-dialog').close();$('#remote-folder-dialog').close();}
       catch(error){$('#create-folder-error').textContent=error.message;}
-      finally{creatingFolder=false;for(const control of controls)control.disabled=false;button.textContent='创建并选择';}
+      finally{creatingFolder=false;for(const control of controls)control.disabled=false;button.textContent='建立並選擇';}
     };
     window.safeCodeMountStatus=status=>{
-      const button=$('#mount-guard-status');button.textContent=status.count?'挂载 '+status.count+' 个目录 · '+(status.state==='connected'?'守护中':status.state==='attention'?'需要处理':'重连中'):'挂载守护 · 未挂载';button.title=status.message;
+      const button=$('#mount-guard-status');button.textContent=status.count?'掛載 '+status.count+' 個目錄 · '+(status.state==='connected'?'守護中':status.state==='attention'?'需要處理':'重連中'):'掛載守護 · 未掛載';button.title=status.message;
       button.classList.toggle('inactive',!status.count||status.state!=='connected'||status.authenticationRequired);
       if(status.authenticationRequired)$('#update-login-password').classList.add('needs-credentials');else $('#update-login-password').classList.remove('needs-credentials');
-      if(status.count)$('#mount-summary').textContent='已挂载 '+status.count+' 个目录，'+(status.state==='connected'?'断线自动恢复。':status.message+'。');
+      if(status.count)$('#mount-summary').textContent='已掛載 '+status.count+' 個目錄，'+(status.state==='connected'?'斷線自動恢復。':status.message+'。');
     };
     $('#mount-guard-status').onclick=()=>native('mount.status.open').catch(error=>showAppMessage(error.message));
     $('#folder-retry').onclick=()=>listRemote(lastFolderPath);
     $('#remote-folder-dialog').addEventListener('close',()=>{folderEpoch++;clearInterval(folderTimer);native('folder.cancel').catch(()=>{});});
     $('#folder-confirm').onclick=()=>{if(selectedRemoteField)selectedRemoteField.value=$('#folder-path').textContent;$('#remote-folder-dialog').close();};
-    const originalAppendMountPair=appendMountPair;appendMountPair=function(pair){originalAppendMountPair(pair);const row=$('#mount-list').lastElementChild;for(const key of ['local','remote']){const field=row.querySelector('[data-path='+key+']');if(key==='remote'&&nativeServer?.homeDirectory)field.placeholder=nativeServer.homeDirectory+'/workspace/projects';const wrap=document.createElement('span');wrap.className='folder-input';field.replaceWith(wrap);wrap.append(field);const picker=document.createElement('button');picker.type='button';picker.textContent='选择目录';picker.onclick=async()=>{if(key==='local'){try{const selected=await native('pickFolder');if(selected)field.value=selected;}catch(e){showAppMessage(e.message);}}else{selectedRemoteField=field;$('#remote-folder-dialog').showModal();await listRemote();}};wrap.append(picker);}};
+    const originalAppendMountPair=appendMountPair;appendMountPair=function(pair){originalAppendMountPair(pair);const row=$('#mount-list').lastElementChild;for(const key of ['local','remote']){const field=row.querySelector('[data-path='+key+']');if(key==='remote'&&nativeServer?.homeDirectory)field.placeholder=nativeServer.homeDirectory+'/workspace/projects';const wrap=document.createElement('span');wrap.className='folder-input';field.replaceWith(wrap);wrap.append(field);const picker=document.createElement('button');picker.type='button';picker.textContent='選擇目錄';picker.onclick=async()=>{if(key==='local'){try{const selected=await native('pickFolder');if(selected)field.value=selected;}catch(e){showAppMessage(e.message);}}else{selectedRemoteField=field;$('#remote-folder-dialog').showModal();await listRemote();}};wrap.append(picker);}};
     const localeForm=$('#localization-form');
     const localeRegion=$('#locale-region');
     localeForm.onsubmit=async event=>{
@@ -523,7 +523,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       try{
         const saved=await native('deployment.locale.save',{region});
         if(attempt!==connectionAttempt)return;
-        if(saved?.localeRegion!==region)throw new Error('服务器设置未保存，请重试。');
+        if(saved?.localeRegion!==region)throw new Error('伺服器設定未儲存，請重試。');
         applyDeploymentSettings(saved);taskLogs[1]='';selectedTasks.delete(1);applyServer(nativeServer);
         $('#localization-dialog').close();
       }catch(error){if(attempt===connectionAttempt)await showAppMessage(error.message);}
@@ -533,14 +533,14 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const attempt=connectionAttempt;
       try{const draft=await native('account.draft.get',isMac?{interactive:true}:{});if(attempt!==connectionAttempt)return;accountOptions=draft||{};accountDraftPending=!!draft;
         $('#custom-hostname').value=draft?.hostname||nativeServer?.hostname||'safe-workstation';$('#custom-username').value=draft?.username||nativeServer?.username||'workspace';$('#custom-password').type='password';$('#custom-password').value=draft?.password||'';validateWorkPassword();setEye($('#account-settings [data-reveal]'),false);
-        $('#account-custom-hint').textContent='工作密码用于工作用户和远程桌面。保存工作用户和本土化设置后即可部署。更换用户名会创建新环境，保留旧项目，需先注销旧桌面并卸载目录，旧 CloudCLI 将停止。';$('#account-settings').showModal();
+        $('#account-custom-hint').textContent='工作密碼用於工作用戶和遠端桌面。儲存工作用戶和本土化設定後即可部署。更換用戶名會建立新環境，保留舊項目，需先登出舊桌面並卸載目錄，舊 CloudCLI 將停止。';$('#account-settings').showModal();
       }catch(e){showAppMessage(e.message);}
     };
     const workPassword=$('#custom-password');
     function validateWorkPassword(){
       const password=workPassword.value;
       workPassword.setCustomValidity(password && (password.length<12||password.length>256||password.includes('\0'))
-        ? '工作密码须为 12–256 位，不能包含空字符。' : '');
+        ? '工作密碼須為 12–256 位，不能包含空字符。' : '');
     }
     workPassword.addEventListener('input',validateWorkPassword);
     let accountSaving=false;
@@ -552,15 +552,15 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       try{
         const status=await native('account.change.status');
         if(status?.requiresConfirmation){
-          const confirmed=await appDialog('频繁更改工作用户名或密码，可能导致远程桌面、SSH 或正在使用的服务连接失败。请确认你了解更改的影响。\n\n这里修改的是工作用户，不是 root 的服务器登录密码。',{
-            title:'确认更改工作账户',cancel:'我不改了',confirm:currentLocale()?'我知道自己在做什么，更改并应用':'确认并保存参数'});
+          const confirmed=await appDialog('頻繁更改工作用戶名或密碼，可能導致遠端桌面、SSH 或正在使用的服務連線失敗。請確認你瞭解更改的影響。\n\n這裏修改的是工作用戶，不是 root 的伺服器登入密碼。',{
+            title:'確認更改工作帳戶',cancel:'我不改了',confirm:currentLocale()?'我知道自己在做什麼，更改並應用':'確認並儲存參數'});
           if(!confirmed)return;
         }
         if(attempt!==connectionAttempt)return;
         await native('account.draft.save',draft);
         if(attempt!==connectionAttempt)return;
         accountSettingsSaved=true;accountOptions=draft;accountDraftPending=true;$('#custom-password').value='';$('#account-settings').close();
-        taskLogs[0]='参数已保存，等待'+(states[0]==='done'?'更新':'开始部署')+'后应用。';renderTasks();
+        taskLogs[0]='參數已儲存，等待'+(states[0]==='done'?'更新':'開始部署')+'後應用。';renderTasks();
         if(status?.requiresConfirmation&&deploymentSettingsReady())await deployOne(0);
       }catch(e){await showAppMessage(e.message);}
       finally{accountSaving=false;save.disabled=false;}
@@ -568,7 +568,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let credentialSaving=false;
     $('#update-login-password').onclick=async()=>{
       if(busy||credentialSaving)return;
-      try{const info=await native('connection.info');if(!info)throw new Error('请先登录服务器。');
+      try{const info=await native('connection.info');if(!info)throw new Error('請先登入伺服器。');
         $('#credential-target').textContent=info.username+' @ '+info.host+':'+info.port;
         $('#credential-password').value='';$('#credential-password').type='password';setEye($('#credential-form [data-reveal]'),false);$('#credential-error').textContent='';$('#credential-dialog').showModal();$('#credential-password').focus();
       }catch(error){showAppMessage(error.message);}
@@ -580,19 +580,19 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       event.preventDefault();if(credentialSaving||busy||!$('#credential-form').reportValidity())return;
       credentialSaving=true;busy=true;renderTasks();
       const controls=[...$('#credential-form').querySelectorAll('input,button'),$('#close-credential')];for(const control of controls)control.disabled=true;
-      $('#credential-error').textContent='正在验证新密码并恢复连接…';
+      $('#credential-error').textContent='正在驗證新密碼並恢復連線…';
       try{
         const password=$('#credential-password').value;$('#credential-password').value='';
         const result=await native('connection.reauthenticate',{password});if(lastSettings)lastSettings.password=password;
         window.safeCodeMountStatus(result.mount);$('#credential-dialog').close();
         void refreshPublicGateway();
-        await showAppMessage(result.mount.authenticationRequired?'新密码已验证；挂载仍需处理，请查看挂载守护状态。':'新密码已验证，登录信息已更新。'+(result.mount.count?'挂载状态：'+result.mount.message+'。':''),{title:'登录密码已更新'});
-      }catch(error){$('#credential-error').textContent=error.message+' 原挂载和缓存已保留，可重新输入密码。';}
+        await showAppMessage(result.mount.authenticationRequired?'新密碼已驗證；掛載仍需處理，請查看掛載守護狀態。':'新密碼已驗證，登入資料已更新。'+(result.mount.count?'掛載狀態：'+result.mount.message+'。':''),{title:'登入密碼已更新'});
+      }catch(error){$('#credential-error').textContent=error.message+' 原掛載和快取已保留，可重新輸入密碼。';}
       finally{credentialSaving=false;busy=false;for(const control of controls)control.disabled=false;renderTasks();}
     };
     if(isMac){
       $('#mac-rdp-options').hidden=false;
-      $('#rdp-display-hint').textContent='下次打开桌面时生效。使用 SDL FreeRDP 可免重复输入工作用户密码；其他客户端按其自身设置连接。';
+      $('#rdp-display-hint').textContent='下次開啟桌面時生效。使用 SDL FreeRDP 可免重複輸入工作用戶密碼；其他客戶端按其自身設定連線。';
     }
     $('#desktop-resolution').onclick=async()=>{
       try{
@@ -613,7 +613,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       try{
         const result=await native('desktop.resolution.save',settings);
         $('#resolution-dialog').close();
-        if(result.deferred>0)showAppMessage(isMac?'已保存，下次打开远程桌面时生效。':'窗口大小已调整。当前服务器未接受在线分辨率切换，新像素分辨率将在下次打开桌面时使用。');
+        if(result.deferred>0)showAppMessage(isMac?'已儲存，下次開啟遠端桌面時生效。':'視窗大小已調整。當前伺服器未接受即時解像度切換，新像素解像度將在下次開啟桌面時使用。');
       }catch(error){showAppMessage(error.message);}
     };
     function fillSavedLogin(saved){
@@ -630,14 +630,14 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         }
       }catch{}
       try{restore.hidden=!(await native('login.restoreAvailable'));}catch{}
-      if(!restore.hidden&&isMac)restore.textContent='解锁已保存的登录信息';
+      if(!restore.hidden&&isMac)restore.textContent='解鎖已儲存的登入資料';
     }
     void loadLoginForm();
     restore.onclick=async()=>{
       restore.disabled=true;
       try{
         const login=await native('login.restoreSaved');
-        if(!login)throw new Error('暂时无法读取已保存的登录信息。');
+        if(!login)throw new Error('暫時無法讀取已儲存的登入資料。');
         fillSavedLogin(login);
         restore.hidden=true;
         const saved=await native('gateways.resume-settings');
@@ -652,32 +652,32 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     const mountProgressText=document.createElement('span');const mountElapsed=document.createElement('span');mountProgress.append(mountSpinner,mountProgressText,mountElapsed);$('#mount-form .mount-footer').before(mountProgress);
     $('#mount-dialog').addEventListener('cancel',e=>{if(mountSaving)e.preventDefault();});
     $('#mount-form').onsubmit=async e=>{
-      e.preventDefault();if(mountSaving)return;if(busy){showAppMessage('已有任务正在执行，请等待完成。');return;}if(!$('#mount-form').reportValidity())return;
+      e.preventDefault();if(mountSaving)return;if(busy){showAppMessage('已有任務正在執行，請等待完成。');return;}if(!$('#mount-form').reportValidity())return;
       const mappings=$$('#mount-list .mount-pair').map(row=>({local:row.querySelector('[data-path="local"]').value.trim(),remote:row.querySelector('[data-path="remote"]').value.trim()}));
       mountSaving=true;busy=true;const form=$('#mount-form'),button=form.querySelector('[type="submit"]');const controls=[...form.querySelectorAll('button,input'),$('#close-mount')].map(control=>[control,control.disabled]);
-      for(const [control] of controls)control.disabled=true;form.setAttribute('aria-busy','true');button.textContent='正在挂载…';mountProgress.hidden=false;mountProgressText.textContent=mappings.length?'正在建立文件通道并检查目录…':'正在同步并卸载目录…';mountElapsed.textContent='已用时 0 秒';
-      const started=Date.now();const timer=setInterval(()=>{mountElapsed.textContent='已用时 '+Math.floor((Date.now()-started)/1000)+' 秒';},1000);renderTasks();
-      try{const result=await native('mount.apply',{mappings});mountPairs=mappings;$('#mount-summary').textContent=mappings.length?'已挂载 '+mappings.length+' 组目录。':'已卸载所有目录。';$('#mount-dialog').close();if(result?.cloudWarning)showAppMessage(result.cloudWarning);}catch(error){showAppMessage(error.message);}
-      finally{clearInterval(timer);mountSaving=false;busy=false;mountProgress.hidden=true;form.removeAttribute('aria-busy');for(const [control,disabled] of controls)control.disabled=disabled;button.textContent='保存设置';renderTasks();}
+      for(const [control] of controls)control.disabled=true;form.setAttribute('aria-busy','true');button.textContent='正在掛載…';mountProgress.hidden=false;mountProgressText.textContent=mappings.length?'正在建立檔案通道並檢查目錄…':'正在同步並卸載目錄…';mountElapsed.textContent='已用時 0 秒';
+      const started=Date.now();const timer=setInterval(()=>{mountElapsed.textContent='已用時 '+Math.floor((Date.now()-started)/1000)+' 秒';},1000);renderTasks();
+      try{const result=await native('mount.apply',{mappings});mountPairs=mappings;$('#mount-summary').textContent=mappings.length?'已掛載 '+mappings.length+' 組目錄。':'已卸載所有目錄。';$('#mount-dialog').close();if(result?.cloudWarning)showAppMessage(result.cloudWarning);}catch(error){showAppMessage(error.message);}
+      finally{clearInterval(timer);mountSaving=false;busy=false;mountProgress.hidden=true;form.removeAttribute('aria-busy');for(const [control,disabled] of controls)control.disabled=disabled;button.textContent='儲存設定';renderTasks();}
     };
-    function renderGatewayBadge(id,name,enabled){const badge=$('#'+id);badge.textContent=name+'网关'+(enabled?'已启用':'未启用');badge.classList.toggle('inactive',!enabled);}
+    function renderGatewayBadge(id,name,enabled){const badge=$('#'+id);badge.textContent=name+'網關'+(enabled?'已啟用':'未啟用');badge.classList.toggle('inactive',!enabled);}
     const openingClients=new WeakSet();
-    const codexWarning='第三方功能，非本人创作，未经本人测试。使用请自行承担后果。';
+    const codexWarning='第三方功能，非本人創作，未經本人測試。使用請自行承擔後果。';
     function setLaunchAvailability(id,ready){
       const button=$('#'+id);button.disabled=!ready||openingClients.has(button);
     }
     function renderClaudeBridge(value){
-      if(isMac){$('#bridge-state').textContent='暂不可用';$('#bridge-summary').textContent='当前附件仅有 Windows 适配器，macOS 暂不可用。';$('#bridge-manage').disabled=busy;$('#bridge-start').disabled=true;setLaunchAvailability('codex-launch',false);return;}
+      if(isMac){$('#bridge-state').textContent='暫不可用';$('#bridge-summary').textContent='當前附件僅有 Windows 適配器，macOS 暫不可用。';$('#bridge-manage').disabled=busy;$('#bridge-start').disabled=true;setLaunchAvailability('codex-launch',false);return;}
       if(value)bridgeStatus=value;const running=!!bridgeStatus?.running,ready=running&&!!bridgeStatus?.configuration;
       setLaunchAvailability('codex-launch',running&&!!bridgeStatus?.connected&&!bridgeBusy);
       renderGatewayBadge('codex-gateway-status','Codex',running&&!!bridgeStatus?.connected);
-      $('#bridge-state').textContent=running?(bridgeStatus.connected?'已连接':'连接中'):bridgeStatus?.cleanupPending?'清理待重试':'未启动';
-      $('#bridge-summary').textContent=running?(bridgeStatus.message||'本机适配器运行中'):'习惯 Codex 客户端？在里面连接服务器上的 Claude。';
+      $('#bridge-state').textContent=running?(bridgeStatus.connected?'已連線':'連線中'):bridgeStatus?.cleanupPending?'清理待重試':'未啟動';
+      $('#bridge-summary').textContent=running?(bridgeStatus.message||'本機適配器執行中'):'習慣 Codex 客戶端？在裏面連接伺服器上的 Claude。';
       $('#bridge-manage').disabled=bridgeBusy||busy||!nativeServer?.statuses?.account;$('#bridge-close').disabled=bridgeBusy;
       for(const id of ['bridge-model','bridge-port','bridge-write','bridge-consent'])$('#'+id).disabled=bridgeBusy||running;
       if(running)$('#bridge-consent').checked=true;
-      $('#bridge-start').hidden=running;$('#bridge-start').disabled=bridgeBusy||!$('#bridge-consent').checked;$('#bridge-start').textContent=bridgeBusy?'正在部署…':'部署并启动';
-      $('#bridge-stop').hidden=!running&&!bridgeStatus?.cleanupPending;$('#bridge-stop').disabled=bridgeBusy;$('#bridge-stop').textContent=bridgeStatus?.cleanupPending&&!running?'重试清理':'停止适配器';
+      $('#bridge-start').hidden=running;$('#bridge-start').disabled=bridgeBusy||!$('#bridge-consent').checked;$('#bridge-start').textContent=bridgeBusy?'正在部署…':'部署並啟動';
+      $('#bridge-stop').hidden=!running&&!bridgeStatus?.cleanupPending;$('#bridge-stop').disabled=bridgeBusy;$('#bridge-stop').textContent=bridgeStatus?.cleanupPending&&!running?'重試清理':'停止適配器';
       $('#bridge-config-area').hidden=!ready;$('#bridge-config').value=bridgeStatus?.configuration||'';$('#bridge-url').textContent='http://127.0.0.1:'+(bridgeStatus?.port||18797)+'/v1';
       $('#bridge-copy-config').disabled=!ready||bridgeBusy;$('#bridge-copy-key').disabled=!ready||bridgeBusy;$('#bridge-dialog-state').textContent=$('#bridge-state').textContent;
     }
@@ -685,36 +685,36 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     async function pollClaudeBridge(){if(bridgePolling||bridgeBusy||!nativeServer)return;bridgePolling=true;try{renderClaudeBridge(await native('bridge.status'));}catch{}finally{bridgePolling=false;}}
     $('#bridge-manage').onclick=async()=>{
       if(isMac){
-        await showAppMessage(codexWarning+'\n\n当前适配器仅支持 Windows，macOS 暂不可用。',{title:'第三方功能警告'});
+        await showAppMessage(codexWarning+'\n\n當前適配器僅支援 Windows，macOS 暫不可用。',{title:'第三方功能警告'});
         return;
       }
-      if(!await showAppMessage(codexWarning,{title:'第三方功能警告',confirm:'继续设置',cancel:'取消'}))return;
+      if(!await showAppMessage(codexWarning,{title:'第三方功能警告',confirm:'繼續設定',cancel:'取消'}))return;
       await pollClaudeBridge();$('#bridge-consent').checked=false;$('#bridge-model').value=bridgeStatus?.model||'sonnet';$('#bridge-port').value=bridgeStatus?.port||18797;$('#bridge-write').checked=!!bridgeStatus?.writable;
-      $('#bridge-progress').textContent=bridgeStatus?.running?bridgeStatus.message:'配置与现有供应商分开保存。启动只检查接口和 SSH，不会自动发送模型请求。';renderClaudeBridge();$('#bridge-dialog').showModal();
+      $('#bridge-progress').textContent=bridgeStatus?.running?bridgeStatus.message:'配置與現有供應商分開儲存。啟動只檢查接口和 SSH，不會自動傳送模型請求。';renderClaudeBridge();$('#bridge-dialog').showModal();
     };
     $('#bridge-close').onclick=()=>{if(!bridgeBusy)$('#bridge-dialog').close();};$('#bridge-dialog').addEventListener('cancel',event=>{if(bridgeBusy)event.preventDefault();});$('#bridge-consent').onchange=()=>renderClaudeBridge();
     $('#bridge-form').onsubmit=async event=>{
       event.preventDefault();if(bridgeBusy||!$('#bridge-consent').checked||!$('#bridge-form').reportValidity())return;
-      bridgeBusy=true;renderClaudeBridge();$('#bridge-progress').textContent='正在校验第三方组件、准备专用 SSH 授权并启动本机接口…';
-      try{bridgeStatus=await native('bridge.start',{port:Number($('#bridge-port').value),model:$('#bridge-model').value.trim().toLowerCase(),writable:$('#bridge-write').checked,thirdPartyAccepted:true});$('#bridge-progress').textContent=bridgeStatus.message+'。可复制配置与本机密钥到 CC Switch；模型调用尚未自动测试。';}
+      bridgeBusy=true;renderClaudeBridge();$('#bridge-progress').textContent='正在校驗第三方組件、準備專用 SSH 授權並啟動本機接口…';
+      try{bridgeStatus=await native('bridge.start',{port:Number($('#bridge-port').value),model:$('#bridge-model').value.trim().toLowerCase(),writable:$('#bridge-write').checked,thirdPartyAccepted:true});$('#bridge-progress').textContent=bridgeStatus.message+'。可複製配置與本機密鑰到 CC Switch；模型調用尚未自動測試。';}
       catch(error){$('#bridge-consent').checked=false;$('#bridge-progress').textContent=error.message;}
       finally{bridgeBusy=false;renderClaudeBridge();}
     };
     $('#bridge-stop').onclick=async()=>{
-      if(bridgeBusy)return;bridgeBusy=true;renderClaudeBridge();$('#bridge-progress').textContent='正在关闭本机接口并撤销专用授权，尝试取消本机发起的远端任务…';
-      try{bridgeStatus=await native('bridge.stop');$('#bridge-consent').checked=false;$('#bridge-progress').textContent=bridgeStatus.cleanupPending?'本机接口已停止，远端清理尚未确认，可恢复连接后重试。':'适配器已停止，专用授权已移除。';}
+      if(bridgeBusy)return;bridgeBusy=true;renderClaudeBridge();$('#bridge-progress').textContent='正在關閉本機接口並撤銷專用授權，嘗試取消本機發起的遠端任務…';
+      try{bridgeStatus=await native('bridge.stop');$('#bridge-consent').checked=false;$('#bridge-progress').textContent=bridgeStatus.cleanupPending?'本機接口已停止，遠端清理尚未確認，可恢復連線後重試。':'適配器已停止，專用授權已移除。';}
       catch(error){$('#bridge-progress').textContent=error.message;}
       finally{bridgeBusy=false;renderClaudeBridge();}
     };
-    $('#bridge-copy-config').onclick=async()=>{try{await native('bridge.copy-config');$('#bridge-progress').textContent='供应商配置已复制，不包含密钥。请在 CC Switch 中新增 Codex 供应商。';}catch(error){$('#bridge-progress').textContent=error.message;}};
-    $('#bridge-copy-key').onclick=async()=>{try{await native('bridge.copy-key');$('#bridge-progress').textContent='本机适配器密钥已复制。只填写到本机 CC Switch/Codex，勿发给他人。';}catch(error){$('#bridge-progress').textContent=error.message;}};
+    $('#bridge-copy-config').onclick=async()=>{try{await native('bridge.copy-config');$('#bridge-progress').textContent='供應商配置已複製，不包含密鑰。請在 CC Switch 中新增 Codex 供應商。';}catch(error){$('#bridge-progress').textContent=error.message;}};
+    $('#bridge-copy-key').onclick=async()=>{try{await native('bridge.copy-key');$('#bridge-progress').textContent='本機適配器密鑰已複製。只填寫到本機 CC Switch/Codex，勿發給他人。';}catch(error){$('#bridge-progress').textContent=error.message;}};
     setInterval(()=>{if(!$('#workspace-screen').hidden)pollClaudeBridge();},4000);
 
     function connectionLabel(){
-      if(!keyState.running)return keyState.configured?'待恢复':'未接入';
-      if(keyState.deviceProblem)return '设备回连待确认';
-      if(keyState.requestError)return '接入异常';
-      return keyState.clientConnected?'Claude 已连接':'网关已就绪';
+      if(!keyState.running)return keyState.configured?'待恢復':'未接入';
+      if(keyState.deviceProblem)return '裝置回連待確認';
+      if(keyState.requestError)return '接入異常';
+      return keyState.clientConnected?'Claude 已連線':'網關已就緒';
     }
     function renderDesktopAccess(){
       const ready=connectionReady&&!!nativeServer?.statuses?.account;
@@ -728,33 +728,33 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#claude-desktop-manage').disabled=!ready;
       $('#public-gateway-runtime').disabled=!ready;
       $('#safe-code-api-enable').disabled=unavailable||checking||publicGatewayEnabled;
-      $('#safe-code-api-enable').textContent=publicGatewayEnabled?'已启用':'启用';
+      $('#safe-code-api-enable').textContent=publicGatewayEnabled?'已啟用':'啟用';
       $('#safe-code-api-manage').disabled=unavailable||!publicGatewayEnabled;
       $('#safe-code-api-repair').disabled=unavailable||publicGatewayMissing;
       $('#safe-code-cloudcli-config').hidden=!publicGatewayNeedsCloudKey;
       $('#safe-code-cloudcli-api-key').disabled=!!publicGatewayOperation;
-      $('#claude-desktop-dialog-state').textContent=publicGatewayOperation?'处理中…':checking?'正在读取…':
-        !publicGatewayReachable?'状态待确认':publicGatewayEnabled?'公网已启用':publicGatewayUpgrade?'待升级':
-        publicGatewayMissing?'待安装':'未启用';
+      $('#claude-desktop-dialog-state').textContent=publicGatewayOperation?'處理中…':checking?'正在讀取…':
+        !publicGatewayReachable?'狀態待確認':publicGatewayEnabled?'公網已啟用':publicGatewayUpgrade?'待升級':
+        publicGatewayMissing?'待安裝':'未啟用';
       $('#safe-code-api-progress').textContent=gatewayInstructions(ready,checking);
     }
     function gatewayInstructions(ready,checking){
-      if(publicGatewayOperation)return publicGatewayOperation+' 可以关闭此窗口，稍后从「网关设置」查看。';
-      if(!ready)return '服务器连接尚未就绪。请关闭窗口，重新连接服务器。';
-      if(busy)return '服务器正在执行其他任务。请关闭窗口，任务完成后再打开「网关设置」。';
-      if(checking)return '正在读取公网网关状态。可以关闭此窗口。';
+      if(publicGatewayOperation)return publicGatewayOperation+' 可以關閉此視窗，稍後從「網關設定」查看。';
+      if(!ready)return '伺服器連線尚未就緒。請關閉視窗，重新連接伺服器。';
+      if(busy)return '伺服器正在執行其他任務。請關閉視窗，任務完成後再開啟「網關設定」。';
+      if(checking)return '正在讀取公網網關狀態。可以關閉此視窗。';
       if(publicGatewayError){
         if(publicGatewayError.action==='manage')return publicGatewayError.message+
-          (publicGatewayEnabled?' 点击「管理网关」重试。':' 点击「启用」重新检查公网网关。');
+          (publicGatewayEnabled?' 點擊「管理網關」重試。':' 點擊「啟用」重新檢查公網網關。');
         return publicGatewayError.message;
       }
       if(!publicGatewayReachable&&publicGatewayStatusError)return publicGatewayStatusError+
-        (publicGatewayEnabled?' 点击「管理网关」重试，也可以关闭窗口后检查 SSH 连接。':' 检查 SSH 连接后，点击「启用」重试。');
-      if(publicGatewayNeedsCloudKey)return '填写下方的 CloudCLI API Key，再点击「启用」。';
-      if(publicGatewayEnabled)return '点击「管理网关」创建 API Key，再回到主界面粘贴。';
-      if(publicGatewayUpgrade)return '点击「启用」升级公网网关。已有密钥可继续使用。';
-      if(publicGatewayMissing)return '点击「启用」安装并开放公网网关。首次安装可能需要几分钟。';
-      return '点击「启用」开放公网网关。';
+        (publicGatewayEnabled?' 點擊「管理網關」重試，也可以關閉視窗後檢查 SSH 連線。':' 檢查 SSH 連線後，點擊「啟用」重試。');
+      if(publicGatewayNeedsCloudKey)return '填寫下方的 CloudCLI API Key，再點擊「啟用」。';
+      if(publicGatewayEnabled)return '點擊「管理網關」建立 API Key，再回到主介面貼上。';
+      if(publicGatewayUpgrade)return '點擊「啟用」升級公網網關。已有密鑰可繼續使用。';
+      if(publicGatewayMissing)return '點擊「啟用」安裝並開放公網網關。首次安裝可能需要幾分鐘。';
+      return '點擊「啟用」開放公網網關。';
     }
     function setPublicGatewayOperation(message){
       publicGatewayOperation=message;
@@ -762,7 +762,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     }
     function readPublicGatewayStatus(){
       return native('safeCodeApi.publicStatus',{},{
-        ms:12000,message:'读取公网网关状态超时。'
+        ms:12000,message:'讀取公網網關狀態超時。'
       });
     }
     function renderPublicGatewayStatus(status,error=''){
@@ -779,16 +779,16 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       publicGatewayReachable=reachable;
       publicGatewayStatusError=error;
       badge.classList.toggle('inactive',!reachable||!publicGatewayEnabled);
-      badge.title=error||(publicGatewayEnabled?'打开 Safe Code API 网关管理':'打开 Safe Code API 公网设置');
-      if(!reachable)badge.textContent=/SSH 认证失败|服务器身份已变化/.test(error||'')
-        ?'公网网关 · 需检查 SSH':publicGatewayEnabled?'公网网关 · 管理连接重连中':'公网网关 · 状态不可用';
-      else if(publicGatewayMissing)badge.textContent='公网网关 · 待安装';
-      else if(publicGatewayUpgrade)badge.textContent='公网网关 · 待升级';
-      else if(!publicGatewayEnabled)badge.textContent='公网网关 · 未启用';
-      else if(status.waiting==null)badge.textContent='公网网关 · 已启用';
+      badge.title=error||(publicGatewayEnabled?'開啟 Safe Code API 網關管理':'開啟 Safe Code API 公網設定');
+      if(!reachable)badge.textContent=/SSH 認證失敗|伺服器身份已變化/.test(error||'')
+        ?'公網網關 · 需檢查 SSH':publicGatewayEnabled?'公網網關 · 管理連線重連中':'公網網關 · 狀態不可用';
+      else if(publicGatewayMissing)badge.textContent='公網網關 · 待安裝';
+      else if(publicGatewayUpgrade)badge.textContent='公網網關 · 待升級';
+      else if(!publicGatewayEnabled)badge.textContent='公網網關 · 未啟用';
+      else if(status.waiting==null)badge.textContent='公網網關 · 已啟用';
       else {
         const limit=String(status.concurrency_text??status.concurrency);
-        badge.textContent='公网网关 · 并发 '+status.active+(limit==='0'?'（不限）':'/'+limit)+' · 排队 '+status.waiting;
+        badge.textContent='公網網關 · 併發 '+status.active+(limit==='0'?'（不限）':'/'+limit)+' · 排隊 '+status.waiting;
       }
       if(isMac){renderDesktopAccess();return;}
       if(reachable)publicGatewaySubscription=status.subscription;
@@ -800,7 +800,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     if(!isMac)bindClaudeUsageRefresh($('#footer-claude-limits'), async()=>{
       const attempt=connectionAttempt;
       const value=await native('safeCodeApi.refreshSubscription');
-      if(attempt!==connectionAttempt)throw new Error('服务器连接已变更，请重新查询。');
+      if(attempt!==connectionAttempt)throw new Error('伺服器連線已變更，請重新查詢。');
       return value;
     },value=>{
       publicGatewaySubscription=value;
@@ -840,8 +840,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if(!publicGatewayDialog.open||!publicGatewayCreatedAccount||publicGatewayOperation)return;
       const {username,password}=publicGatewayCreatedAccount;
       publicGatewayCreatedAccount=undefined;
-      void showAppMessage('已创建 VPS 上的 CloudCLI 网页账户，请妥善保存。\n\n账号 '+username+'\n密码 '+password,
-        {title:'CloudCLI 账户已创建',confirm:'已保存',clearOnClose:true});
+      void showAppMessage('已建立 VPS 上的 CloudCLI 網頁帳戶，請妥善儲存。\n\n帳號 '+username+'\n密碼 '+password,
+        {title:'CloudCLI 帳戶已建立',confirm:'已儲存',clearOnClose:true});
     }
     function openPublicGatewaySettings(){
       if(publicGatewayDialog.open||$('#claude-desktop-manage').disabled)return;
@@ -875,7 +875,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       setRepairBusy(false);
       repairStart.hidden=false;
       repairBack.textContent='取消';
-      repairStatus.textContent='重装期间服务会短暂中断，建议等正在运行的请求完成。';
+      repairStatus.textContent='重新安裝期間服務會短暫中斷，建議等正在執行的請求完成。';
       repairDialog.showModal();
     };
     for(const button of repairDialog.querySelectorAll('[data-close-gateway-repair]')){
@@ -887,8 +887,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if(repairing||repairStart.hidden||!connectionReady||publicGatewayOperation)return;
       const attempt=connectionAttempt, reinstallCloudCLI=repairCloud.checked;
       setRepairBusy(true);
-      setPublicGatewayOperation('正在修复网关。');
-      repairStatus.textContent=reinstallCloudCLI?'正在重装网关和 CloudCLI，下载安装可能需要几分钟。':'正在重装网关并检查服务。';
+      setPublicGatewayOperation('正在修復網關。');
+      repairStatus.textContent=reinstallCloudCLI?'正在重新安裝網關和 CloudCLI，下載安裝可能需要幾分鐘。':'正在重新安裝網關並檢查服務。';
       try{
         await publicGatewayTask?.promise;
         if(attempt!==connectionAttempt)return;
@@ -896,7 +896,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         if(attempt!==connectionAttempt)return;
         publicGatewayError=undefined;
         renderPublicGatewayStatus(status);
-        repairStatus.textContent=status.cloudcliReinstalled?'网关和 CloudCLI 已重装，服务检查通过。':'网关已重装，服务检查通过。';
+        repairStatus.textContent=status.cloudcliReinstalled?'網關和 CloudCLI 已重新安裝，服務檢查通過。':'網關已重新安裝，服務檢查通過。';
         repairStart.hidden=true;
         repairBack.textContent='完成';
       }catch(error){
@@ -923,11 +923,11 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const attempt=connectionAttempt, keyField=$('#safe-code-cloudcli-api-key');
       const apiKey=publicGatewayNeedsCloudKey?keyField.value.trim():'';
       if(publicGatewayNeedsCloudKey&&!apiKey){
-        publicGatewayError={message:'请填写 CloudCLI API Key。'};renderDesktopAccess();keyField.focus();return;
+        publicGatewayError={message:'請填寫 CloudCLI API Key。'};renderDesktopAccess();keyField.focus();return;
       }
       publicGatewayError=undefined;
       let needsCloudKey=false;
-      setPublicGatewayOperation('正在确认服务器上的网关状态。');
+      setPublicGatewayOperation('正在確認伺服器上的網關狀態。');
       try{
         await publicGatewayTask?.promise;
         if(attempt!==connectionAttempt)return;
@@ -938,9 +938,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         }
         if(publicGatewayMissing||publicGatewayUpgrade){
           keyField.value='';
-          setPublicGatewayOperation('正在准备 CloudCLI 并部署公网网关，可能需要几分钟。');
+          setPublicGatewayOperation('正在準備 CloudCLI 並部署公網網關，可能需要幾分鐘。');
           const status=await native('safeCodeApi.install',apiKey?{accepted:true,cloudcli:{apiKey}}:{accepted:true},{
-            ms:13*60000,message:'等待网关部署结果超时，服务器可能仍在处理。'
+            ms:13*60000,message:'等待網關部署結果超時，伺服器可能仍在處理。'
           });
           if(attempt!==connectionAttempt)return;
           if((status.cloudcliKeyRequired||status.backend==='cloudcli')&&!nativeServer.cloudReady)
@@ -953,18 +953,18 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           renderPublicGatewayStatus(status);
         }
         if(!publicGatewayEnabled){
-          setPublicGatewayOperation('正在启用公网网关。');
+          setPublicGatewayOperation('正在啟用公網網關。');
           const status=await native('safeCodeApi.enablePublic',{accepted:true},{
-            ms:35000,message:'等待公网网关启用结果超时。'
+            ms:35000,message:'等待公網網關啟用結果超時。'
           });
           if(attempt!==connectionAttempt)return;
           renderPublicGatewayStatus(status);
         }
-        if(!publicGatewayEnabled)publicGatewayError={action:'enable',message:'未能确认公网已启用，点击「启用」重试。'};
+        if(!publicGatewayEnabled)publicGatewayError={action:'enable',message:'未能確認公網已啟用，點擊「啟用」重試。'};
       }catch(error){
         if(attempt===connectionAttempt){
           publicGatewayReachable=false;
-          publicGatewayError={action:'enable',message:error.message+' 检查连接后，点击「启用」重试。'};
+          publicGatewayError={action:'enable',message:error.message+' 檢查連線後，點擊「啟用」重試。'};
         }
       }finally{
         if(attempt===connectionAttempt){
@@ -979,10 +979,10 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if($('#safe-code-api-manage').disabled)return;
       const attempt=connectionAttempt;
       publicGatewayError=undefined;
-      setPublicGatewayOperation('正在打开网关管理。');
+      setPublicGatewayOperation('正在開啟網關管理。');
       try{
         await native('window.gateway.open',{},{
-          ms:35000,message:'打开网关管理超时。'
+          ms:35000,message:'開啟網關管理超時。'
         });
         if(attempt===connectionAttempt)publicGatewayDialog.close();
       }catch(error){
@@ -1024,13 +1024,13 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if(!keyState.running||!Number.isFinite(start)){ $('#api-duration').textContent='—';return; }
       const elapsed=Math.max(0,Math.floor((Date.now()-start)/1000));
       const hours=Math.floor(elapsed/3600), minutes=Math.floor(elapsed/60)%60, seconds=elapsed%60;
-      $('#api-duration').textContent=hours?`${hours} 小时 ${minutes} 分`:minutes?`${minutes} 分 ${seconds} 秒`:`${seconds} 秒`;
+      $('#api-duration').textContent=hours?`${hours} 小時 ${minutes} 分`:minutes?`${minutes} 分 ${seconds} 秒`:`${seconds} 秒`;
     }
     function renderApi(){
       $('#api-state-label').textContent=connectionLabel();
       $('#api-state').classList.toggle('connected',!!keyState.running&&!keyState.deviceProblem&&!keyState.requestError);
       $('#api-device').textContent=[keyState.deviceAlias,keyState.deviceProblem||keyState.requestError].filter(Boolean).join(' · ');
-      $('#api-manage-key').textContent=keyState.running?'接入设置':'恢复接入';
+      $('#api-manage-key').textContent=keyState.running?'接入設定':'恢復接入';
       setLaunchAvailability('api-open-claude',!!keyState.running&&!keyBusy);
       $('#api-usage-refresh').disabled=!keyState.running||apiFetching;
       renderApiDuration();
@@ -1048,13 +1048,13 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       try{
         const data=await native('desktopKey.balance');
         if(request!==apiRequest)return;
-        $('#api-balance').textContent=data.remainingNanos===null?'不限额':money(data.remainingNanos);
+        $('#api-balance').textContent=data.remainingNanos===null?'不限額':money(data.remainingNanos);
         $('#api-spend').textContent=money(data.usedNanos);
         const rows=Array.isArray(data.models)?data.models:[];
         const elements=rows.map(model=>{
           const row=document.createElement('tr');
           const count=model.input+model.output+model.cacheRead+model.cacheWrite;
-          const fee=model.unpricedTokens>0?(model.costNanos?money(model.costNanos)+' + 未计价':'未计价'):money(model.costNanos);
+          const fee=model.unpricedTokens>0?(model.costNanos?money(model.costNanos)+' + 未計價':'未計價'):money(model.costNanos);
           for(const [index,value] of [model.model,tokens.format(count),fee].entries()){
             const cell=document.createElement(index===0?'th':'td');
             if(index===0)cell.scope='row';
@@ -1064,11 +1064,11 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         });
         $('#api-models').replaceChildren(...elements);
         apiTable.hidden=!rows.length;apiUsage.hidden=!!rows.length;
-        apiUsage.textContent=Array.isArray(data.models)?'当前 Key 暂无模型用量。':'当前网关版本暂不提供模型明细。';
+        apiUsage.textContent=Array.isArray(data.models)?'當前 Key 暫無模型用量。':'當前網關版本暫不提供模型明細。';
       }catch{
         if(request!==apiRequest)return;
         apiUsage.hidden=false;
-        apiUsage.textContent=apiTable.hidden?'暂时无法获取用量，请点击「刷新用量」重试。':'刷新失败，已保留上次查询的数据。';
+        apiUsage.textContent=apiTable.hidden?'暫時無法獲取用量，請點擊「重新整理用量」重試。':'重新整理失敗，已保留上次查詢的數據。';
       }finally{
         if(request===apiRequest){apiFetching=false;renderApi();}
       }
@@ -1080,12 +1080,12 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         showScreen('api');$('#api-title').focus();
       }
       if(keyDialog.open)keyDialog.close();
-      resetApiUsage(keyState.running?'正在查询用量…':'恢复接入后即可查看用量。');
+      resetApiUsage(keyState.running?'正在查詢用量…':'恢復接入後即可查看用量。');
       renderApi();void refreshApiUsage();
     }
     function closeApiAccess(){
       rememberApiMode(false);
-      resetApiUsage('正在查询用量…');
+      resetApiUsage('正在查詢用量…');
       showScreen(apiReturn==='workspace'&&connectionReady?'workspace':'login');
     }
     $('#api-server-mode').onclick=closeApiAccess;
@@ -1102,9 +1102,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const code=$('#key-code'), label=$('#key-label');
       code.hidden=code.labels[0].hidden=!!entry;
       code.required=!entry;
-      label.labels[0].textContent=entry?'编辑备注':'名称';
+      label.labels[0].textContent=entry?'編輯備註':'名稱';
       label.value=entry?.name??'';
-      keyForm.querySelector('[type=submit]').textContent=entry?'保存备注':'保存 Key';
+      keyForm.querySelector('[type=submit]').textContent=entry?'儲存備註':'儲存 Key';
       keyMessage.textContent='';
       label.focus();label.select();
     }
@@ -1117,22 +1117,22 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const rows=await native('desktopKey.list');
       if(!keyListDialog.open||generation!==listGeneration)return;
       keyList.replaceChildren();
-      if(!rows.length)keyMessage.textContent='尚未保存 Key。';
+      if(!rows.length)keyMessage.textContent='尚未儲存 Key。';
       for(const entry of rows){
         const row=document.createElement('div'), info=document.createElement('div');
         row.className='key-row'+(entry.running?' current':'');
         const name=document.createElement('strong'), balance=document.createElement('small');
         const heading=document.createElement('div'), edit=document.createElement('button');
         heading.className='key-row-name';edit.className='text-button';edit.type='button';
-        name.textContent=entry.name;edit.textContent='编辑备注';
-        edit.setAttribute('aria-label','编辑备注：'+entry.name);
+        name.textContent=entry.name;edit.textContent='編輯備註';
+        edit.setAttribute('aria-label','編輯備註：'+entry.name);
         edit.onclick=()=>editKeyForm(entry);
-        heading.append(name,edit);balance.textContent='余额查询中…';info.append(heading,balance);
+        heading.append(name,edit);balance.textContent='餘額查詢中…';info.append(heading,balance);
         const action=document.createElement(entry.running?'span':'button');
         action.className=entry.running?'key-current':'key-secondary';
-        action.textContent=entry.running?'正在使用':'切换';
+        action.textContent=entry.running?'正在使用':'切換';
         if(!entry.running){
-          action.type='button';action.setAttribute('aria-label','切换到 '+entry.name);
+          action.type='button';action.setAttribute('aria-label','切換到 '+entry.name);
           action.onclick=()=>switchSavedKey(entry);
         }
         const actions=document.createElement('div');actions.className='key-row-actions';
@@ -1141,7 +1141,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           forget.type='button';forget.className='text-button';forget.textContent='移除';
           forget.setAttribute('aria-label','移除 '+entry.name);
           forget.onclick=async()=>{
-            if(libraryBusy||!await showAppMessage('从本机移除「'+entry.name+'」？',{confirm:'移除',cancel:'取消'}))return;
+            if(libraryBusy||!await showAppMessage('從本機移除「'+entry.name+'」？',{confirm:'移除',cancel:'取消'}))return;
             lockLibrary(true);
             try{await native('desktopKey.forget',{id:entry.id});await loadKeyList();}
             catch(error){keyMessage.textContent=error.message;}
@@ -1151,8 +1151,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         }
         actions.append(action);row.append(info,actions);keyList.append(row);
         native('desktopKey.savedBalance',{id:entry.id}).then(data=>{
-          balance.textContent=data.remainingNanos===null?'不限额':'余额 '+money(data.remainingNanos);
-        }).catch(()=>{balance.textContent='余额暂不可用';});
+          balance.textContent=data.remainingNanos===null?'不限額':'餘額 '+money(data.remainingNanos);
+        }).catch(()=>{balance.textContent='餘額暫不可用';});
       }
     }
     async function openKeyList(){
@@ -1164,24 +1164,24 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     async function finishKeySwitch(){
       switchPending=false;keyListDialog.close();showApiAccess();
       try{const result=await native('claudeDesktop.reopen');if(result?.installationRequired)await showAppMessage(result.message);}
-      catch(error){await showAppMessage('已切换 Key。'+error.message);}
+      catch(error){await showAppMessage('已切換 Key。'+error.message);}
     }
     async function refreshSwitchState(){
       keyState=await native('desktopKey.status');
-      if(!keyState.running)resetApiUsage('选择已保存的 Key 恢复接入。');
+      if(!keyState.running)resetApiUsage('選擇已儲存的 Key 恢復接入。');
       renderKey();
       await loadKeyList();
     }
     async function switchSavedKey(entry){
       if(libraryBusy)return;
-      lockLibrary(true);keyMessage.textContent='正在连接 '+entry.name+'…';
+      lockLibrary(true);keyMessage.textContent='正在連接 '+entry.name+'…';
       try{
         const result=await native('desktopKey.enable',{savedId:entry.id,replace:true});
         if(result.requiresDevice){
           switchPending=true;keyDeviceSetup=result;openHostControl();return;
         }
         keyState=result;
-        if(!keyState.running)throw new Error(keyState.error||'接入未启动。');
+        if(!keyState.running)throw new Error(keyState.error||'接入未啟動。');
         await finishKeySwitch();
       }catch(error){
         keyMessage.textContent=error.message;
@@ -1228,12 +1228,12 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     setInterval(refreshDesktopConnection,3000);
     document.addEventListener('visibilitychange',refreshDesktopConnection);
     function describeKey(op,args){
-      const target=keyState.deviceAlias?'\n工具目标：已授权的本机设备 '+keyState.deviceAlias:'';
+      const target=keyState.deviceAlias?'\n工具目標：已授權的本機裝置 '+keyState.deviceAlias:'';
       if(keyState.unbindPending)return keyState.error;
-      if(keyState.error)return (keyState.configured?'已保存 Key，暂未恢复接入。\n':'')+keyState.error;
-      if(keyState.running)return connectionLabel()+'。'+(keyState.deviceProblem||keyState.requestError||'')+target+'\n'+(args?.replace||args?.useSaved?'请完全退出并重新打开 Claude Desktop 以应用更改。':'首次接入请完全退出并重新打开 Claude Desktop。');
-      if(keyState.configured)return '已保存 Key，当前 Claude 配置未启用此接入。';
-      return op==='disable'?'已停用。\n请重新打开 Claude Desktop 以应用更改。':'尚未启用。';
+      if(keyState.error)return (keyState.configured?'已儲存 Key，暫未恢復接入。\n':'')+keyState.error;
+      if(keyState.running)return connectionLabel()+'。'+(keyState.deviceProblem||keyState.requestError||'')+target+'\n'+(args?.replace||args?.useSaved?'請完全退出並重新開啟 Claude Desktop 以應用更改。':'首次接入請完全退出並重新開啟 Claude Desktop。');
+      if(keyState.configured)return '已儲存 Key，當前 Claude 配置未啟用此接入。';
+      return op==='disable'?'已停用。\n請重新開啟 Claude Desktop 以應用更改。':'尚未啟用。';
     }
     function renderKey(){
       const configured=keyState.configured;
@@ -1242,17 +1242,17 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       keyInput.disabled=keyBusy||!editing;
       keyEnable.hidden=!editing;
       keyEnable.disabled=keyBusy;
-      keyEnable.textContent=keyReplacing?'验证并更换':'验证并启用';
+      keyEnable.textContent=keyReplacing?'驗證並更換':'驗證並啟用';
       keyReplace.hidden=!configured||keyState.unbindPending;
       keyReplace.disabled=keyBusy;
-      keyReplace.textContent=keyReplacing?'取消更换':'更换 Key';
+      keyReplace.textContent=keyReplacing?'取消更換':'更換 Key';
       keyResume.hidden=!configured||keyState.running||keyReplacing||keyState.unbindPending;
       keyResume.disabled=keyBusy;
       $('#desktop-key-refresh').hidden=!keyState.running||keyReplacing;
       $('#desktop-key-refresh').disabled=keyBusy;
       $('#desktop-key-disable').hidden=!configured||keyReplacing;
       $('#desktop-key-disable').disabled=keyBusy;
-      $('#desktop-key-disable').textContent=keyState.unbindPending?'重试解绑':'停用接入';
+      $('#desktop-key-disable').textContent=keyState.unbindPending?'重試解綁':'停用接入';
       $('#desktop-key-open').hidden=!keyState.running||keyReplacing;
       setLaunchAvailability('desktop-key-open',keyState.running&&!keyBusy&&!keyReplacing);
       $('#desktop-key-close').disabled=keyBusy;
@@ -1262,21 +1262,21 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     async function keyAction(op,args={}){
       if(keyBusy)return;
       keyBusy=true;
-      if(op==='enable')keyProgress.textContent=args.useSaved?'正在重新启用已保存的 Key…':'正在验证 Key 并获取模型…';
+      if(op==='enable')keyProgress.textContent=args.useSaved?'正在重新啟用已儲存的 Key…':'正在驗證 Key 並獲取模型…';
       else if(op==='refreshModels')keyProgress.textContent='正在更新模型列表…';
-      else keyProgress.textContent=op==='disable'?'正在停用接入…':'正在读取接入状态…';
+      else keyProgress.textContent=op==='disable'?'正在停用接入…':'正在讀取接入狀態…';
       renderKey();
       try{
         const result=await native('desktopKey.'+op,args);
         if(result?.requiresDevice){
-          keyProgress.textContent='网关已验证，请确认本机远程控制。';
+          keyProgress.textContent='網關已驗證，請確認本機遠端控制。';
           keyDeviceSetup=result;
           openHostControl();
           return;
         }
         keyState=result;
         if(op==='enable'&&keyState.running)keyReplacing=false;
-        keyProgress.textContent=op==='refreshModels'?'模型列表已更新。请完全退出并重新打开 Claude Desktop。':describeKey(op,args);
+        keyProgress.textContent=op==='refreshModels'?'模型列表已更新。請完全退出並重新開啟 Claude Desktop。':describeKey(op,args);
         if(op==='enable'&&keyState.running)showApiAccess();
         if(op==='disable'&&!keyState.unbindPending&&!apiScreen.hidden){keyDialog.close();closeApiAccess();}
       }catch(error){
@@ -1304,7 +1304,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if(keyBusy)return;
       keyReplacing=!keyReplacing;
       keyInput.value='';
-      keyProgress.textContent=keyReplacing?'粘贴新的接入 Key，验证通过后切换。':describeKey();
+      keyProgress.textContent=keyReplacing?'貼上新的接入 Key，驗證通過後切換。':describeKey();
       renderKey();
       if(keyReplacing)keyInput.focus();
     };
@@ -1321,15 +1321,15 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     const hostVerified=status=>status?.enabled===true&&status.state==='connected';
     const isHostSetupCurrent=attempt=>attempt===connectionAttempt&&connectionReady&&!!nativeServer?.statuses?.account;
     function renderKeyDeviceSetup(){
-      $('#host-dialog-state').textContent='等待授权';
+      $('#host-dialog-state').textContent='等待授權';
       $('#host-close').disabled=hostBusy;
       $('#host-risk').disabled=hostBusy;
       $('#host-alias').disabled=true;
       $('#host-enable').hidden=false;
       $('#host-enable').disabled=hostBusy||!$('#host-risk').checked;
       $('#host-enable').textContent=keyDeviceSetup.existingControl
-        ? (hostBusy?'正在验证…':'同意并使用')
-        : (hostBusy?'正在部署…':'同意并开始部署');
+        ? (hostBusy?'正在驗證…':'同意並使用')
+        : (hostBusy?'正在部署…':'同意並開始部署');
       $('#host-disable').hidden=true;
       $('#host-command-area').hidden=true;
     }
@@ -1337,12 +1337,12 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if(keyDeviceSetup){renderKeyDeviceSetup();return;}
       if(value)hostStatus=value;
       const enabled=!!hostStatus?.enabled,connected=hostVerified(hostStatus);
-      $('#host-state').textContent=enabled?(connected?'已连接':hostStatus?.state==='attention'?'需要处理':'重连中'):'未启用';
-      $('#host-summary').textContent=enabled?(hostStatus.message||'本机控制已启用'):'让服务器上的 AI 连接本机命令行，操作本机文件和程序。';
+      $('#host-state').textContent=enabled?(connected?'已連線':hostStatus?.state==='attention'?'需要處理':'重連中'):'未啟用';
+      $('#host-summary').textContent=enabled?(hostStatus.message||'本機控制已啟用'):'讓伺服器上的 AI 連接本機命令列，操作本機檔案和程式。';
       $('#host-manage').disabled=hostBusy||busy||!nativeServer?.statuses?.account;
       if(enabled)$('#host-risk').checked=true;
       $('#host-close').disabled=hostBusy;$('#host-alias').disabled=hostBusy||enabled;$('#host-risk').disabled=hostBusy||enabled;
-      $('#host-enable').hidden=enabled;$('#host-enable').disabled=hostBusy||!$('#host-risk').checked;$('#host-enable').textContent=hostBusy?'正在部署…':'同意并开始部署';
+      $('#host-enable').hidden=enabled;$('#host-enable').disabled=hostBusy||!$('#host-risk').checked;$('#host-enable').textContent=hostBusy?'正在部署…':'同意並開始部署';
       $('#host-disable').hidden=!enabled;$('#host-disable').disabled=hostBusy;
       $('#host-command-area').hidden=!enabled;$('#host-command').value=hostStatus?.command||'';$('#host-copy').disabled=!connected||!hostStatus?.command||hostBusy;
       $('#host-dialog-state').textContent=$('#host-state').textContent;
@@ -1363,7 +1363,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       try{
         const status=await task.promise;
         if(hostBusy||change!==hostChange||!isHostSetupCurrent(attempt))return null;
-        if(typeof status?.enabled!=='boolean')throw new Error('无法确认本机远程控制状态，请重新检查服务器连接。');
+        if(typeof status?.enabled!=='boolean')throw new Error('無法確認本機遠端控制狀態，請重新檢查伺服器連線。');
         renderHostControl(status);
         return status;
       }finally{if(hostStatusTask===task)hostStatusTask=null;}
@@ -1371,21 +1371,21 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     function openHostControl(){
       $('#host-risk').checked=false;
       $('#host-alias').value=keyDeviceSetup
-        ? (keyDeviceSetup.alias??'由网关分配')
+        ? (keyDeviceSetup.alias??'由網關分配')
         : (hostStatus?.alias||(isMac?'mac':'win'));
       const instructions=hostStatus?.enabled?hostStatus.message:(isMac
-        ?'请先在系统设置 → 通用 → 共享开启远程登录，仅允许当前账户。Safe Code 将添加专用密钥，不会开启或更改系统 SSH 服务。'
-        :'启用时会请求 Windows 管理员授权；首次部署需要几秒至几十秒。');
+        ?'請先在系統設定 → 通用 → 共享開啟遠端登入，僅允許當前帳戶。Safe Code 將添加專用密鑰，不會開啟或更改系統 SSH 服務。'
+        :'啟用時會請求 Windows 管理員授權；首次部署需要幾秒至幾十秒。');
       $('#host-progress').textContent=keyDeviceSetup
         ? (keyDeviceSetup.reuseControl
           ? (keyDeviceSetup.existingControl
-            ? '这把 Key 由当前 VPS 签发。授权后将使用已验证的本机远程控制通道。'
-            : '这把 Key 由当前 VPS 签发。授权后将通过当前 SSH 会话开启本机远程控制。')
+            ? '這把 Key 由當前 VPS 簽發。授權後將使用已驗證的本機遠端控制通道。'
+            : '這把 Key 由當前 VPS 簽發。授權後將透過當前 SSH 會話開啟本機遠端控制。')
           : (isMac
-            ? '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。SafeCode 只会为当前 macOS 账户添加一把专用 SSH 公钥。'
-            : '将在 Key 所属的网关建立加密通道，并为此设备分配唯一连接别名。部署需要 Windows 管理员授权。'))
+            ? '將在 Key 所屬的網關建立加密通道，併為此裝置分配唯一連線別名。SafeCode 只會為當前 macOS 帳戶添加一把專用 SSH 公鑰。'
+            : '將在 Key 所屬的網關建立加密通道，併為此裝置分配唯一連線別名。部署需要 Windows 管理員授權。'))
         : instructions;
-      if(keyDeviceSetup)$('#host-progress').textContent+=' 下次在这台电脑选择同一把 Key 时，会使用本次授权重新连接。';
+      if(keyDeviceSetup)$('#host-progress').textContent+=' 下次在這台電腦選擇同一把 Key 時，會使用本次授權重新連線。';
       renderHostControl();
       hostDialog.showModal();
     }
@@ -1407,7 +1407,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if(keyDeviceSetup){
         keyDeviceSetup=null;
         void native('desktopKey.cancelDevice').catch(()=>{});
-        if(switchPending){switchPending=false;keyMessage.textContent='已取消切换。';}
+        if(switchPending){switchPending=false;keyMessage.textContent='已取消切換。';}
         else keyDialog.close();
         renderHostControl();
       }
@@ -1419,9 +1419,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         hostBusy=true;renderHostControl();
         $('#host-progress').textContent=keyDeviceSetup.reuseControl
           ? (keyDeviceSetup.existingControl
-            ? '正在检查已授权的本机控制通道并启用 Key…'
-            : (isMac?'正在为系统远程登录添加专用公钥，接下来会验证本机远程控制并启用 Key。':'请完成 Windows 管理员授权。接下来会验证本机远程控制并启用 Key。'))
-          : (isMac?'正在为系统远程登录添加专用公钥，并建立 FRP 通道验证 SSH 登录。':'请完成 Windows 管理员授权。接下来会建立 FRP 通道并验证 SSH 登录。');
+            ? '正在檢查已授權的本機控制通道並啟用 Key…'
+            : (isMac?'正在為系統遠端登入添加專用公鑰，接下來會驗證本機遠端控制並啟用 Key。':'請完成 Windows 管理員授權。接下來會驗證本機遠端控制並啟用 Key。'))
+          : (isMac?'正在為系統遠端登入添加專用公鑰，並建立 FRP 通道驗證 SSH 登入。':'請完成 Windows 管理員授權。接下來會建立 FRP 通道並驗證 SSH 登入。');
         try{
           keyState=await native('desktopKey.authorizeDevice',{riskAccepted:true});
           keyDeviceSetup=null;keyReplacing=false;
@@ -1437,51 +1437,51 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       }
       const attempt=connectionAttempt;
       if(!isHostSetupCurrent(attempt))return;
-      hostBusy=true;hostChange++;renderHostControl();$('#host-progress').textContent=isMac?'正在为系统远程登录添加专用公钥，并验证 macOS 账户身份…':'正在准备专用密钥与本机 SSH，请完成 Windows 管理员授权。随后会验证服务器能否登录本机…';
+      hostBusy=true;hostChange++;renderHostControl();$('#host-progress').textContent=isMac?'正在為系統遠端登入添加專用公鑰，並驗證 macOS 帳戶身份…':'正在準備專用密鑰與本機 SSH，請完成 Windows 管理員授權。隨後會驗證伺服器能否登入本機…';
       try{
         const status=await native('host.enable',{alias:$('#host-alias').value.trim(),riskAccepted:true});
         if(!isHostSetupCurrent(attempt))return;
         renderHostControl(status);
-        $('#host-progress').textContent=hostVerified(status)?'部署完成，已通过实际 SSH 登录验证。复制下方命令发给服务器上的 AI。':(status?.message||'正在验证本机远程控制。');
+        $('#host-progress').textContent=hostVerified(status)?'部署完成，已通過實際 SSH 登入驗證。複製下方命令發給伺服器上的 AI。':(status?.message||'正在驗證本機遠端控制。');
       }
       catch(error){if(attempt===connectionAttempt){$('#host-risk').checked=false;$('#host-progress').textContent=error.message;}}
       finally{hostBusy=false;renderHostControl();}
     };
     $('#host-disable').onclick=async()=>{
       if(hostBusy)return;const attempt=connectionAttempt;
-      hostBusy=true;hostChange++;renderHostControl();$('#host-progress').textContent=isMac?'正在断开专用通道并撤销密钥；系统远程登录设置保持不变…':'正在关闭控制通道并停止本机 SSH…';
+      hostBusy=true;hostChange++;renderHostControl();$('#host-progress').textContent=isMac?'正在斷開專用通道並撤銷密鑰；系統遠端登入設定保持不變…':'正在關閉控制通道並停止本機 SSH…';
       try{
         const status=await native('host.disable');
         if(attempt!==connectionAttempt)return;
-        renderHostControl(status);$('#host-risk').checked=false;$('#host-progress').textContent='本机远程控制已停用。';
+        renderHostControl(status);$('#host-risk').checked=false;$('#host-progress').textContent='本機遠端控制已停用。';
       }
       catch(error){if(attempt===connectionAttempt)$('#host-progress').textContent=error.message;}
       finally{hostBusy=false;renderHostControl();}
     };
-    $('#host-copy').onclick=async()=>{if(!hostStatus?.command)return;try{await native('copy',{text:hostStatus.command});$('#host-progress').textContent='命令已复制。请发给当前服务器上的 AI。';}catch(error){$('#host-progress').textContent=error.message;}};
+    $('#host-copy').onclick=async()=>{if(!hostStatus?.command)return;try{await native('copy',{text:hostStatus.command});$('#host-progress').textContent='命令已複製。請發給當前伺服器上的 AI。';}catch(error){$('#host-progress').textContent=error.message;}};
     setInterval(()=>{if(!$('#workspace-screen').hidden)pollHostControl();},2000);
     let ipSaving=false;
     const ipProgress=document.createElement('div');ipProgress.className='connection-progress';ipProgress.hidden=true;ipProgress.setAttribute('role','status');ipProgress.setAttribute('aria-live','polite');
     const ipSpinner=document.createElement('span');ipSpinner.className='connection-spinner';ipSpinner.setAttribute('aria-hidden','true');const ipProgressText=document.createElement('span'),ipElapsed=document.createElement('span');ipProgress.append(ipSpinner,ipProgressText,ipElapsed);$('#ip-policy-form .config-footer').before(ipProgress);
     $('#ip-policy-dialog').addEventListener('cancel',event=>{if(ipSaving)event.preventDefault();});
     const originalOpenIpPolicy=openIpPolicy;openIpPolicy=function(){
-      if(busy){showAppMessage('已有任务正在执行，请等待完成。');return;}
-      if(nativeServer?.socksEgress?.enabled){showAppMessage('请先在「开发模式」停用 SOCKS5 出口，再更换 IP。');return;}
+      if(busy){showAppMessage('已有任務正在執行，請等待完成。');return;}
+      if(nativeServer?.socksEgress?.enabled){showAppMessage('請先在「開發模式」停用 SOCKS5 出口，再更換 IP。');return;}
       originalOpenIpPolicy();
       $('#ingress-ip-input').value=ipPolicy.ingressIp||serverConnection.ingressIp;
       const candidates=(nativeServer?.assignedIps||[]).filter(isPublicIpv4);
       $('#egress-ip-input').value=ipPolicy.egressIp||(candidates.length===2?candidates.find(ip=>ip!==serverConnection.ingressIp):serverConnection.egressIp)||'';
-      syncIpPickers();$('#ip-policy-hint').textContent='只使用服务器已绑定的 IP。保存时自动检查入口和真实出口；无法验证会恢复原设置。';
+      syncIpPickers();$('#ip-policy-hint').textContent='只使用伺服器已綁定的 IP。儲存時自動檢查入口和真實出口；無法驗證會恢復原設定。';
     };
     $('#ip-policy-form').onsubmit=async e=>{
-      e.preventDefault();if(ipSaving)return;syncIpPickers();closeIpPickers();if(busy){showAppMessage('已有任务正在执行，请等待完成。');return;}if(!$('#ip-policy-form').reportValidity())return;
+      e.preventDefault();if(ipSaving)return;syncIpPickers();closeIpPickers();if(busy){showAppMessage('已有任務正在執行，請等待完成。');return;}if(!$('#ip-policy-form').reportValidity())return;
       const args={ingressIp:$('#ingress-ip-input').value.trim(),egressIp:$('#egress-ip-input').value.trim(),lockIngress:$('#lock-ingress').checked,lockEgress:$('#lock-egress').checked};
       for(const [key,id] of [['ingressIp','ingress-ip-input'],['egressIp','egress-ip-input']]){
-        if(!isPublicIpv4(args[key])||!nativeServer?.assignedIps?.includes(args[key])){$('#ip-policy-hint').textContent='未检测到有效的已绑定 IP，请重新连接服务器后再选择。';return;}
+        if(!isPublicIpv4(args[key])||!nativeServer?.assignedIps?.includes(args[key])){$('#ip-policy-hint').textContent='未檢測到有效的已綁定 IP，請重新連接伺服器後再選擇。';return;}
       }
       ipSaving=true;busy=true;const form=$('#ip-policy-form'),button=form.querySelector('[type=submit]');const controls=[...form.querySelectorAll('button,input,select'),$('#close-ip-policy')].map(control=>[control,control.disabled]);
-      for(const [control] of controls)control.disabled=true;form.setAttribute('aria-busy','true');button.textContent='正在验证…';ipProgress.hidden=false;ipProgressText.textContent='正在检查 IP 和路由…';ipElapsed.textContent='已用时 0 秒';
-      const started=Date.now();const timer=setInterval(()=>{ipElapsed.textContent='已用时 '+Math.floor((Date.now()-started)/1000)+' 秒';},1000);renderTasks();
+      for(const [control] of controls)control.disabled=true;form.setAttribute('aria-busy','true');button.textContent='正在驗證…';ipProgress.hidden=false;ipProgressText.textContent='正在檢查 IP 和路由…';ipElapsed.textContent='已用時 0 秒';
+      const started=Date.now();const timer=setInterval(()=>{ipElapsed.textContent='已用時 '+Math.floor((Date.now()-started)/1000)+' 秒';},1000);renderTasks();
       try{
         const result=await native('ip.apply',args);
         const ingressIp=result.ipPolicy?.ingressIp||args.ingressIp;
@@ -1489,10 +1489,10 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           const [saved,draft]=await Promise.all([native('deployment.settings.get').catch(()=>null),native('account.draft.get').catch(()=>null)]);
           applyDeploymentSettings(saved);accountOptions=draft||{};accountDraftPending=!!draft;
         }
-        applyServer(result);serverConnection={ingressIp,egressIp:result.observedEgressIp||''};$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp||'待确认';
+        applyServer(result);serverConnection={ingressIp,egressIp:result.observedEgressIp||''};$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp||'待確認';
         $('#ip-policy-dialog').close();void queryIpInfo(serverConnection.egressIp);
-      }catch(error){$('#ip-policy-hint').textContent='设置未完成，填写内容已保留。请查看错误，确认当前状态后重试。';showAppMessage(error.message);}
-      finally{clearInterval(timer);ipSaving=false;busy=false;ipProgress.hidden=true;form.removeAttribute('aria-busy');for(const [control,disabled] of controls)control.disabled=disabled;button.textContent='保存设置';renderTasks();}
+      }catch(error){$('#ip-policy-hint').textContent='設定未完成，填寫內容已保留。請查看錯誤，確認當前狀態後重試。';showAppMessage(error.message);}
+      finally{clearInterval(timer);ipSaving=false;busy=false;ipProgress.hidden=true;form.removeAttribute('aria-busy');for(const [control,disabled] of controls)control.disabled=disabled;button.textContent='儲存設定';renderTasks();}
     };
     const originalNativeLog=window.safeCodeNativeLog;window.safeCodeNativeLog=function(step,line){if(ipSaving&&step==='ip_policy')ipProgressText.textContent=line;originalNativeLog?.(step,line);};
 
@@ -1500,10 +1500,10 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     let socksBusy=false, socksReading=false, socksResult=null;
     function updateSocksCard(status){
       if(!status?.enabled)return;
-      $('#ip-policy-state').textContent=status.guardActive?'SOCKS5 开发模式':'出口规则异常';
+      $('#ip-policy-state').textContent=status.guardActive?'SOCKS5 開發模式':'出口規則異常';
       $('#ip-policy-summary').textContent=status.guardActive
-        ?'机房入口保留，SOCKS5 出站。'+(status.tunnelRunning?'':'隧道暂停，出站已阻断。')
-        :'SOCKS5 防火墙规则未生效，请检查服务器。';
+        ?'機房入口保留，SOCKS5 出站。'+(status.tunnelRunning?'':'隧道暫停，出站已阻斷。')
+        :'SOCKS5 防火牆規則未生效，請檢查伺服器。';
     }
     function setSocksResult(id,value,state=''){
       const element=$('#socks-'+id);
@@ -1525,26 +1525,26 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       $('#socks-form').setAttribute('aria-busy',String(socksBusy||socksReading));
       for(const protocol of ['tcp','udp']){
         const passed=socksResult?.[protocol];
-        setSocksResult(protocol,enabled?(status.observedIp?'上次验证通过':'待验证'):passed===undefined?'待检测':passed?'通过':'未通过',
+        setSocksResult(protocol,enabled?(status.observedIp?'上次驗證通過':'待驗證'):passed===undefined?'待檢測':passed?'通過':'未通過',
           !enabled&&passed!==undefined?(passed?'pass':'fail'):'');
       }
-      setSocksResult('observed',(enabled?status.observedIp:socksResult?.observedIp)||'待检测');
+      setSocksResult('observed',(enabled?status.observedIp:socksResult?.observedIp)||'待檢測');
     }
     function socksStatusText(){
-      if(!connectionReady||developerPreview)return '连接 Ubuntu 服务器后可检测和启用。';
+      if(!connectionReady||developerPreview)return '連接 Ubuntu 伺服器後可檢測和啟用。';
       const status=nativeServer?.socksEgress;
-      if(!status?.enabled)return '检测通过后可以启用。首次启用会下载隧道组件。';
-      if(!status.guardActive)return '阻断规则未生效，请检查服务器。';
-      return status.endpoint+' · '+(status.issue||(status.tunnelRunning?'已启用，代理不可用时阻断出站。':'隧道未运行，出站已阻断。'));
+      if(!status?.enabled)return '檢測通過後可以啟用。首次啟用會下載隧道組件。';
+      if(!status.guardActive)return '阻斷規則未生效，請檢查伺服器。';
+      return status.endpoint+' · '+(status.issue||(status.tunnelRunning?'已啟用，代理不可用時阻斷出站。':'隧道未執行，出站已阻斷。'));
     }
     $('#socks-experimental').onclick=async()=>{
-      if(busy){showAppMessage('已有任务正在执行，请等待完成。');return;}
+      if(busy){showAppMessage('已有任務正在執行，請等待完成。');return;}
       socksResult=null;
       socksConfirm.checked=false;
       socksUrl.value='';
       const server=nativeServer;
       socksReading=!!(connectionReady&&server&&!developerPreview);
-      $('#socks-status').textContent=socksReading?'正在读取服务器出口状态…':socksStatusText();
+      $('#socks-status').textContent=socksReading?'正在讀取伺服器出口狀態…':socksStatusText();
       renderSocks();socksDialog.showModal();
       if(!socksReading)return;
       try{
@@ -1571,37 +1571,37 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       catch(error){$('#socks-status').textContent=error.message;}
       finally{busy=socksBusy=false;renderSocks();renderTasks();}
     }
-    $('#socks-test').onclick=()=>runSocksOperation('正在从服务器检测 TCP 和 UDP 转发…',async()=>{
+    $('#socks-test').onclick=()=>runSocksOperation('正在從伺服器檢測 TCP 和 UDP 轉發…',async()=>{
       socksResult=null;socksConfirm.checked=false;
       socksResult=await native('socks.probe',{proxyUrl:socksUrl.value.trim()});
       const failures=[socksResult.tcpMessage&&'TCP '+socksResult.tcpMessage,socksResult.udpMessage&&'UDP '+socksResult.udpMessage].filter(Boolean);
-      $('#socks-status').textContent=failures.join(' ')||'检测通过，可以启用。';
+      $('#socks-status').textContent=failures.join(' ')||'檢測通過，可以啟用。';
     });
     async function changeSocks(op,args){
       const server=await native(op,args);
       socksUrl.value='';socksConfirm.checked=false;socksResult=null;
       applyServer(server);
       serverConnection.egressIp=server.observedEgressIp||'';
-      $('#server-address').textContent=serverConnection.egressIp||'待确认';
+      $('#server-address').textContent=serverConnection.egressIp||'待確認';
       $('#socks-status').textContent=socksStatusText();
       if(serverConnection.egressIp)void queryIpInfo(serverConnection.egressIp);
     }
     $('#socks-form').onsubmit=event=>{
       event.preventDefault();
       if(!socksResult?.tcp||!socksResult?.udp||!socksConfirm.checked)return;
-      return runSocksOperation('正在部署隧道并验证整机出站…',()=>changeSocks('socks.enable',{proxyUrl:socksUrl.value.trim(),accepted:true}));
+      return runSocksOperation('正在部署隧道並驗證整機出站…',()=>changeSocks('socks.enable',{proxyUrl:socksUrl.value.trim(),accepted:true}));
     };
-    $('#socks-disable').onclick=()=>runSocksOperation('正在停用代理并恢复原出口…',()=>changeSocks('socks.disable',{}));
-    // 验收入口仅在桌面启动参数指定了私密配置文件时由宿主调用。
+    $('#socks-disable').onclick=()=>runSocksOperation('正在停用代理並恢復原出口…',()=>changeSocks('socks.disable',{}));
+    // 驗收入口僅在桌面啟動參數指定了私密設定檔時由宿主調用。
     window.safeCodeRunAcceptance=async config=>{
       try{
-        await native('acceptance.capture',{tag:'notice'});if($('#accept').getBoundingClientRect().bottom>innerHeight||$('#exit').getBoundingClientRect().bottom>innerHeight)throw new Error('声明按钮超出窗口。');$('#username').value=config.username;$('#ip').value=config.host;originalShowScreen('login');await native('window.resize',{wide:false});await native('acceptance.capture',{tag:'login'});const connectBounds=$('#connect').getBoundingClientRect();const lowest=Math.max(connectBounds.bottom,advanced.getBoundingClientRect().bottom,$('#back').getBoundingClientRect().bottom);const loginLayout={buttonBottom:connectBounds.bottom,controlsBottom:lowest,viewportHeight:innerHeight,visible:lowest<=innerHeight};if(!loginLayout.visible)throw new Error('登录连接按钮超出窗口。');const restored=await native('login.load');const restoredLogin=restored?.host===config.host&&restored?.username===config.username&&restored?.password===config.password;let result=await connect(config);config.password='';
-        if(!deploymentSettingsReady())throw new Error('部署验收需要先为该连接手动保存工作用户和本土化设置。');
+        await native('acceptance.capture',{tag:'notice'});if($('#accept').getBoundingClientRect().bottom>innerHeight||$('#exit').getBoundingClientRect().bottom>innerHeight)throw new Error('聲明按鈕超出視窗。');$('#username').value=config.username;$('#ip').value=config.host;originalShowScreen('login');await native('window.resize',{wide:false});await native('acceptance.capture',{tag:'login'});const connectBounds=$('#connect').getBoundingClientRect();const lowest=Math.max(connectBounds.bottom,advanced.getBoundingClientRect().bottom,$('#back').getBoundingClientRect().bottom);const loginLayout={buttonBottom:connectBounds.bottom,controlsBottom:lowest,viewportHeight:innerHeight,visible:lowest<=innerHeight};if(!loginLayout.visible)throw new Error('登入連線按鈕超出視窗。');const restored=await native('login.load');const restoredLogin=restored?.host===config.host&&restored?.username===config.username&&restored?.password===config.password;let result=await connect(config);config.password='';
+        if(!deploymentSettingsReady())throw new Error('部署驗收需要先為該連線手動儲存工作用戶和本土化設定。');
         result=await native('deploy',{step:'ssh',username:'workspace'});applyServer(result);await metricsTask;
-        $('#reveal').click();if($('#password').type!=='text'||!$('#reveal svg')||$('#reveal').textContent)throw new Error('密码显示按钮异常');$('#reveal').click();
-        const realIp=$('#server-ingress').textContent;$('#server-ingress').nextElementSibling.click();if($('#server-ingress').textContent===realIp)throw new Error('IP 隐藏失败');$('#server-ingress').nextElementSibling.click();if($('#server-ingress').textContent!==realIp)throw new Error('IP 恢复失败');
-        const dirs=await native('folder.list');if(!dirs.path.endsWith('/workspace'))throw new Error('远程目录起始位置错误');await native('folder.list',{path:dirs.parent});
-        $('#mount-list').replaceChildren();appendMountPair({local:'',remote:''});if(document.querySelectorAll('.folder-input button').length!==2)throw new Error('目录选择按钮位置错误');
+        $('#reveal').click();if($('#password').type!=='text'||!$('#reveal svg')||$('#reveal').textContent)throw new Error('密碼顯示按鈕異常');$('#reveal').click();
+        const realIp=$('#server-ingress').textContent;$('#server-ingress').nextElementSibling.click();if($('#server-ingress').textContent===realIp)throw new Error('IP 隱藏失敗');$('#server-ingress').nextElementSibling.click();if($('#server-ingress').textContent!==realIp)throw new Error('IP 恢復失敗');
+        const dirs=await native('folder.list');if(!dirs.path.endsWith('/workspace'))throw new Error('遠端目錄起始位置錯誤');await native('folder.list',{path:dirs.parent});
+        $('#mount-list').replaceChildren();appendMountPair({local:'',remote:''});if(document.querySelectorAll('.folder-input button').length!==2)throw new Error('目錄選擇按鈕位置錯誤');
         await native('acceptance.capture',{tag:'deployment'});await openAccountSettings();await native('acceptance.capture',{tag:'custom'});$('#account-settings').close();await $('#mount-settings').onclick();await native('acceptance.capture',{tag:'mount'});$('#mount-dialog').close();const clientChecks=await native('client.verify');switchMode('maintenance');
         clientChecks.restoredLogin=restoredLogin;clientChecks.passwordEye=true;clientChecks.ipMask=true;clientChecks.remoteDirectory=true;clientChecks.embeddedPickers=true;
 
@@ -1618,7 +1618,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         await native('notice.accept');
         previousAccept();
         confirmServices().then(showPreferences).catch(()=>{});
-      }catch{showAppMessage('无法保存声明确认，请检查本机存储空间。');}
+      }catch{showAppMessage('無法儲存聲明確認，請檢查本機存儲空間。');}
     };
     const startupReady=preferencesReady.then(()=>native('notice.state')).then(state=>{if(state.accepted&&(!window.__safeCodeAcceptance||window.__safeCodeConnectionAcceptance)){showScreen('login');confirmServices().then(showPreferences).catch(()=>{});}else{showScreen('notice');}}).catch(()=>{showScreen('notice');});
     startupReady.then(async()=>{
@@ -1633,26 +1633,26 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       if(isMac)button.onclick=()=>native('services.open').catch(error=>showAppMessage(error.message));
       else button.addEventListener('click',refreshPreferences);
     }
-    // 版本查询与统计授权相互独立，验收模式不调用外部服务。
+    // 版本查詢與統計授權相互獨立，驗收模式不調用外部服務。
     if(!window.__safeCodeAcceptance)setTimeout(()=>checkUpdate(false),1500);
     window.safeCodeRunIpAcceptance=async config=>{
       const checks={};
       try{
         await startupReady;await native('diagnostics.consent',{enabled:false});await native('services.consent',{enabled:false,confirmed:true});await native('notice.accept');
         $('#ip').value=config.host;$('#username').value=config.username;
-        const connected=await connect(config);config.password='';if(!connected||connected.osId!=='ubuntu')throw new Error('未连接指定的真实测试目标');
-        if(nativeServer.observedEgressIp!==config.egressIp||!nativeServer.ipPolicyHealthy)throw new Error('初始住宅出口基线不健康');checks.initialBaseline=true;
+        const connected=await connect(config);config.password='';if(!connected||connected.osId!=='ubuntu')throw new Error('未連線指定的真實測試目標');
+        if(nativeServer.observedEgressIp!==config.egressIp||!nativeServer.ipPolicyHealthy)throw new Error('初始住宅出口基線不健康');checks.initialBaseline=true;
         let rejected=false;try{await native('ip.apply',{ingressIp:config.ingressIp,egressIp:'192.0.2.123',lockIngress:true,lockEgress:true});}catch{rejected=true;}
-        if(!rejected)throw new Error('未分配出口没有被拒绝');checks.unassignedRejected=true;
+        if(!rejected)throw new Error('未分配出口沒有被拒絕');checks.unassignedRejected=true;
         switchMode('maintenance');openIpPolicy(true);
         $('#ingress-ip-input').value=config.egressIp;$('#egress-ip-input').value=config.egressIp;$('#lock-ingress').checked=true;$('#lock-egress').checked=true;
-        const changed=$('#ip-policy-form').onsubmit({preventDefault(){}});if(!ipSaving||!$('#close-ip-policy').disabled)throw new Error('应用等待状态或防重复提交未生效');
+        const changed=$('#ip-policy-form').onsubmit({preventDefault(){}});if(!ipSaving||!$('#close-ip-policy').disabled)throw new Error('應用等待狀態或防重複提交未生效');
         await native('acceptance.capture',{tag:'ip'});await changed;
-        if($('#ip-policy-dialog').open||nativeServer.ipPolicy?.ingressIp!==config.egressIp||nativeServer.observedEgressIp!==config.egressIp)throw new Error('更换入口未成功');checks.ingressChanged=true;
-        const remembered=await native('login.load');if(remembered?.host!==config.egressIp)throw new Error('新入口没有保存到连接记忆');checks.connectionRemembered=true;
+        if($('#ip-policy-dialog').open||nativeServer.ipPolicy?.ingressIp!==config.egressIp||nativeServer.observedEgressIp!==config.egressIp)throw new Error('更換入口未成功');checks.ingressChanged=true;
+        const remembered=await native('login.load');if(remembered?.host!==config.egressIp)throw new Error('新入口沒有儲存到連線記憶');checks.connectionRemembered=true;
         openIpPolicy(true);$('#ingress-ip-input').value=config.ingressIp;$('#egress-ip-input').value=config.egressIp;$('#lock-ingress').checked=true;$('#lock-egress').checked=true;await $('#ip-policy-form').onsubmit({preventDefault(){}});
-        if($('#ip-policy-dialog').open||nativeServer.ipPolicy?.ingressIp!==config.ingressIp||nativeServer.observedEgressIp!==config.egressIp||!nativeServer.ipPolicyHealthy)throw new Error('恢复极速入口与住宅出口失败');checks.baselineRestored=true;
-        const inspected=await native('inspect');applyServer(inspected);if(!inspected.ipPolicyHealthy)throw new Error('重新巡检未读到已保存策略');checks.persistedReadback=true;
+        if($('#ip-policy-dialog').open||nativeServer.ipPolicy?.ingressIp!==config.ingressIp||nativeServer.observedEgressIp!==config.egressIp||!nativeServer.ipPolicyHealthy)throw new Error('恢復極速入口與住宅出口失敗');checks.baselineRestored=true;
+        const inspected=await native('inspect');applyServer(inspected);if(!inspected.ipPolicyHealthy)throw new Error('重新巡檢未讀到已儲存策略');checks.persistedReadback=true;
         await native('acceptance.capture',{tag:'maintenance'});
         await native('acceptance.done',{success:true,checks,ingress:nativeServer.ipPolicy.ingressIp,observedEgress:nativeServer.observedEgressIp,policyHealthy:nativeServer.ipPolicyHealthy});
       }catch(error){await native('acceptance.done',{success:false,checks,error:error.message});}
@@ -1660,20 +1660,20 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     window.safeCodeRunUpdateAcceptance=async()=>{
       try{
         await startupReady;showScreen('login');await native('window.resize',{wide:false});
-        displayUpdate({currentVersion:'Beta-0.4.3.3',version:'Beta-0.4.3.4',status:'发现新版本（界面预览）',page:null,canInstall:false});
+        displayUpdate({currentVersion:'Beta-0.4.3.3',version:'Beta-0.4.3.4',status:'發現新版本（介面預覽）',page:null,canInstall:false});
         const notice=$('#title-update-notice'),bounds=notice.getBoundingClientRect(),controls=$('.window-controls').getBoundingClientRect();
-        if(notice.hidden||bounds.right>controls.left||bounds.width<60)throw new Error('标题更新提示缺失或与窗口按钮重叠');
-        await native('acceptance.capture',{tag:'update'});notice.click();if(!$('#services-dialog').open)throw new Error('标题提示无法打开更新窗口');
+        if(notice.hidden||bounds.right>controls.left||bounds.width<60)throw new Error('標題更新提示缺失或與視窗按鈕重疊');
+        await native('acceptance.capture',{tag:'update'});notice.click();if(!$('#services-dialog').open)throw new Error('標題提示無法開啟更新視窗');
         await native('acceptance.capture',{tag:'services'});$('#services-dialog').close();
         await native('acceptance.done',{success:true,titleUpdateNotice:true,clickOpensUpdates:true,footerHighlight:$('#services-entry').classList.contains('has-update'),previewOnly:true});
       }catch(error){await native('acceptance.done',{success:false,error:error.message});}
     };
     window.safeCodeRunServicesAcceptance=async()=>{
       try{
-        const windowSizing=await native('acceptance.window-sizes');const prefs=await native('services.preferences');showPreferences(prefs);if(prefs.enabled||prefs.diagnosticsEnabled)throw new Error('首次统计或诊断默认值错误');
-        await native('acceptance.capture',{tag:'notice'});if($('#exit').getBoundingClientRect().bottom>innerHeight||$('#usage-consent').getBoundingClientRect().bottom>$('#accept').getBoundingClientRect().top)throw new Error('声明页布局溢出');
-        await native('services.consent',{enabled:false,confirmed:false});const disabled=await native('services.preferences');if(disabled.enabled)throw new Error('关闭统计失败');showPreferences(disabled);
-        $('#services-dialog').showModal();if($('#feedback-send').getBoundingClientRect().bottom>$('#services-dialog').getBoundingClientRect().bottom)throw new Error('反馈按钮超出窗口');await checkUpdate(true);await native('acceptance.capture',{tag:'services'});const feedbackMarker='SafeCode Windows integration test '+crypto.randomUUID();await native('feedback.send',{message:feedbackMarker});$('#services-dialog').close();
+        const windowSizing=await native('acceptance.window-sizes');const prefs=await native('services.preferences');showPreferences(prefs);if(prefs.enabled||prefs.diagnosticsEnabled)throw new Error('首次統計或診斷預設值錯誤');
+        await native('acceptance.capture',{tag:'notice'});if($('#exit').getBoundingClientRect().bottom>innerHeight||$('#usage-consent').getBoundingClientRect().bottom>$('#accept').getBoundingClientRect().top)throw new Error('聲明頁佈局溢出');
+        await native('services.consent',{enabled:false,confirmed:false});const disabled=await native('services.preferences');if(disabled.enabled)throw new Error('關閉統計失敗');showPreferences(disabled);
+        $('#services-dialog').showModal();if($('#feedback-send').getBoundingClientRect().bottom>$('#services-dialog').getBoundingClientRect().bottom)throw new Error('回饋按鈕超出視窗');await checkUpdate(true);await native('acceptance.capture',{tag:'services'});const feedbackMarker='SafeCode Windows integration test '+crypto.randomUUID();await native('feedback.send',{message:feedbackMarker});$('#services-dialog').close();
         await native('services.consent',{enabled:true,confirmed:false});
         await native('acceptance.done',{success:true,windowSizing,defaultEnabled:prefs.enabled,optOutSaved:!disabled.enabled,serviceAvailable:prefs.serviceAvailable,recipient:prefs.recipient,feedbackMarker,feedbackSentWithStatsDisabled:true,updateStatus:$('#update-status').textContent,viewportHeight:innerHeight});
       }catch(error){await native('acceptance.done',{success:false,error:error.message});}
@@ -1684,33 +1684,33 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
           await startupReady;
           showScreen('login');$('#ip').value='127.0.0.1';$('#ip').dispatchEvent(new Event('input'));$('#username').value='';$('#password').value='';
           await $('#login-form').onsubmit({preventDefault(){}});
-          if($('#workspace-screen').hidden||!$('#developer-preview'))throw new Error('开发预览没有正常进入');
-          switchMode('maintenance');if($('#maintenance-panel').hidden)throw new Error('维护模式不可见');
+          if($('#workspace-screen').hidden||!$('#developer-preview'))throw new Error('開發預覽沒有正常進入');
+          switchMode('maintenance');if($('#maintenance-panel').hidden)throw new Error('維護模式不可見');
           await native('acceptance.capture',{tag:'maintenance'});
           await native('acceptance.done',{success:true,developerPreview:true,noServer:true});
         }catch(error){await native('acceptance.done',{success:false,error:error.message});}return;
       }
 
-      const waitFor=async predicate=>{const end=Date.now()+15000;while(!predicate()){if(Date.now()>end)throw new Error('等待界面超时');await new Promise(r=>setTimeout(r,30));}};
-      const centered=dialog=>{const b=dialog.getBoundingClientRect();if(Math.abs(b.left+b.width/2-innerWidth/2)>2||Math.abs(b.top+b.height/2-innerHeight/2)>2||b.right>innerWidth||b.bottom>innerHeight)throw new Error('弹窗没有居中或超出窗口');};
+      const waitFor=async predicate=>{const end=Date.now()+15000;while(!predicate()){if(Date.now()>end)throw new Error('等待介面超時');await new Promise(r=>setTimeout(r,30));}};
+      const centered=dialog=>{const b=dialog.getBoundingClientRect();if(Math.abs(b.left+b.width/2-innerWidth/2)>2||Math.abs(b.top+b.height/2-innerHeight/2)>2||b.right>innerWidth||b.bottom>innerHeight)throw new Error('彈出視窗沒有居中或超出視窗');};
       try{
         await startupReady;
         if(config.phase==='restart'){
-          if($('#login-screen').hidden||!$('#notice-screen').hidden)throw new Error('再次启动仍显示声明');
+          if($('#login-screen').hidden||!$('#notice-screen').hidden)throw new Error('再次啟動仍顯示聲明');
           await native('acceptance.capture',{tag:'login'});await native('acceptance.done',{success:true,noticeSkippedAfterRestart:true});return;
         }
-        $('#usage-consent').checked=false;await $('#accept').onclick();if(!(await native('notice.state')).accepted)throw new Error('声明确认未保存');
-        advanced.click();centered($('#advanced-dialog'));await native('acceptance.capture',{tag:'advanced'});$('#advanced-dialog .close').click();if($('#advanced-dialog').open)throw new Error('高级连接无法关闭');
-        advanced.click();$('#ssh-port').value='2222';$('#advanced-form').requestSubmit();if(sshPort!==2222||$('#advanced-dialog').open)throw new Error('SSH 端口未保存');
+        $('#usage-consent').checked=false;await $('#accept').onclick();if(!(await native('notice.state')).accepted)throw new Error('聲明確認未儲存');
+        advanced.click();centered($('#advanced-dialog'));await native('acceptance.capture',{tag:'advanced'});$('#advanced-dialog .close').click();if($('#advanced-dialog').open)throw new Error('進階連線無法關閉');
+        advanced.click();$('#ssh-port').value='2222';$('#advanced-form').requestSubmit();if(sshPort!==2222||$('#advanced-dialog').open)throw new Error('SSH 連接埠未儲存');
         const settings={host:'127.0.0.1',username:'fixture',password:'fixture-only',port:config.silentPort};
-        const pendingConnect=connect(settings);if($('#workspace-screen').hidden||!$('#deployment-panel').inert)throw new Error('连接时未立即显示主界面或操作未锁定');
+        const pendingConnect=connect(settings);if($('#workspace-screen').hidden||!$('#deployment-panel').inert)throw new Error('連線時未立即顯示主介面或操作未鎖定');
         await native('acceptance.capture',{tag:'loading'});await $('#cancel-connect').onclick();await pendingConnect;if(!$('#connection-progress').classList.contains('failed'))throw new Error('取消未生效');
         const failure=connect({...settings,port:1});await waitFor(()=>$('#app-message-dialog').open);centered($('#app-message-dialog'));
-        if(!$('#app-message-body').textContent.includes('服务器连接不上')||$('#app-message-body').textContent.includes('timed out'))throw new Error('连接失败未转换为中文提示');
-        await native('acceptance.capture',{tag:'error'});$('#app-message-dialog [data-dialog-dismiss]').click();await failure;if($('#app-message-dialog').open)throw new Error('报错弹窗无法关闭');
+        if(!$('#app-message-body').textContent.includes('伺服器連線不上')||$('#app-message-body').textContent.includes('timed out'))throw new Error('連線失敗未轉換為中文提示');
+        await native('acceptance.capture',{tag:'error'});$('#app-message-dialog [data-dialog-dismiss]').click();await failure;if($('#app-message-dialog').open)throw new Error('報錯彈出視窗無法關閉');
         const change={key:{host:'203.0.113.10',port:22,previousFingerprint:'SHA256:fixture-old',fingerprint:'SHA256:fixture-new'}};
-        const no=confirmServerIdentity(change);await waitFor(()=>$('#app-message-dialog').open);centered($('#app-message-dialog'));await native('acceptance.capture',{tag:'trust'});$('#app-message-cancel').click();if(await no)throw new Error('否被当成同意');
-        const yes=confirmServerIdentity(change);await waitFor(()=>$('#app-message-dialog').open);$('#app-message-confirm').click();if(!await yes)throw new Error('是未返回确认');
+        const no=confirmServerIdentity(change);await waitFor(()=>$('#app-message-dialog').open);centered($('#app-message-dialog'));await native('acceptance.capture',{tag:'trust'});$('#app-message-cancel').click();if(await no)throw new Error('否被當成同意');
+        const yes=confirmServerIdentity(change);await waitFor(()=>$('#app-message-dialog').open);$('#app-message-confirm').click();if(!await yes)throw new Error('是未返回確認');
         await native('acceptance.done',{success:true,immediateWorkspace:true,connectingOperationsLocked:true,cancelResponsive:true,centeredErrors:true,friendlyNetworkError:true,advancedPortSaved:true,dialogsClosable:true,reinstallYesNo:true,noticeSaved:true});
       }catch(e){await native('acceptance.done',{success:false,error:e.message});}
     };
@@ -1718,27 +1718,27 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       try{
         await startupReady;const result=await native('acceptance.connect-current');
         applyDeploymentSettings(await native('deployment.settings.get'));
-        if(!currentLocale())throw new Error('工作账户更新验收需要先为该连接手动保存本土化设置。');
+        if(!currentLocale())throw new Error('工作帳戶更新驗收需要先為該連線手動儲存本土化設定。');
         $('#username').value=result.username;nativeServer=result.server;connectionReady=true;busy=false;showScreen('workspace');lockWorkspace(false);applyServer(result.server);
         const before=await native('acceptance.hostname');await openAccountSettings();$('#custom-hostname').value='safe-draft-verification';$('#custom-username').value=result.server.username;$('#custom-password').value='fixture-password-1234';
-        const saving=$('#account-settings-form').onsubmit({preventDefault(){}});const warningDeadline=Date.now()+5000;while(!$('#app-message-dialog').open&&Date.now()<warningDeadline)await new Promise(resolve=>setTimeout(resolve,20));if(!$('#app-message-dialog').open)throw new Error('再次更改账户未弹出确认');$('#app-message-cancel').click();await saving;
-        if(await native('acceptance.hostname')!==before)throw new Error('取消更改仍修改了服务器');
-        // 后续只验证草稿存储；真实应用流程由隔离 UI 夹具覆盖，不将示例密码应用到验收服务器。
+        const saving=$('#account-settings-form').onsubmit({preventDefault(){}});const warningDeadline=Date.now()+5000;while(!$('#app-message-dialog').open&&Date.now()<warningDeadline)await new Promise(resolve=>setTimeout(resolve,20));if(!$('#app-message-dialog').open)throw new Error('再次更改帳戶未彈出確認');$('#app-message-cancel').click();await saving;
+        if(await native('acceptance.hostname')!==before)throw new Error('取消更改仍修改了伺服器');
+        // 後續只驗證草稿存儲；真實應用流程由隔離 UI 夾具覆蓋，不將範例密碼應用到驗收伺服器。
         await native('account.draft.save',{username:result.server.username,hostname:'safe-draft-verification',password:'fixture-password-1234'});accountOptions={username:result.server.username,hostname:'safe-draft-verification',password:'fixture-password-1234'};accountDraftPending=true;accountSettingsSaved=true;$('#custom-password').value='';$('#account-settings').close();renderTasks();
-        if(!accountDraftPending||states[0]!=='done'||$('#steps .step:first-child > .deploy-button:not(.locale-settings-button)').textContent!=='更新'||$('#steps .step:first-child > .deploy-button:not(.locale-settings-button)').disabled)throw new Error('已完成步骤未提供更新');
-        if(await native('acceptance.hostname')!==before)throw new Error('保存参数修改了服务器');
-        await openAccountSettings();if($('#custom-hostname').value!=='safe-draft-verification'||$('#account-settings-form button[type=submit]').textContent!=='保存')throw new Error('参数保存或按钮文案错误');await native('acceptance.capture',{tag:'draft'});$('#account-settings').close();await native('account.draft.save',{username:result.server.username,hostname:before,password:''});accountOptions={username:result.server.username,hostname:before,password:''};accountDraftPending=true;await deployOne(0);if(accountDraftPending||states[0]!=='done'||await native('acceptance.hostname')!==before)throw new Error('账户更新应用未通过或更改了测试服务器名称');
-        switchMode('maintenance');await native('acceptance.capture',{tag:'maintenance'});$('#desktop-resolution').click();await new Promise(r=>setTimeout(r,300));$('#resolution-select').value='1920x1080';await $('#resolution-form').onsubmit({preventDefault(){}});const setting=await native('desktop.resolution.get');if(setting.width!==1920||setting.height!==1080)throw new Error('分辨率未保存');await $('#desktop-resolution').onclick();await native('acceptance.capture',{tag:'resolution'});$('#resolution-dialog').close();await native('desktop.resolution.save',{width:1280,height:800});
-        await installAdvanced('mount');if(!nativeServer.mountReady)throw new Error('目录挂载组件未安装成功');if(!advancedOperation.lines.length)throw new Error('挂载安装无日志');await native('acceptance.capture',{tag:'install'});$('#operation-log-dialog').close();
+        if(!accountDraftPending||states[0]!=='done'||$('#steps .step:first-child > .deploy-button:not(.locale-settings-button)').textContent!=='更新'||$('#steps .step:first-child > .deploy-button:not(.locale-settings-button)').disabled)throw new Error('已完成步驟未提供更新');
+        if(await native('acceptance.hostname')!==before)throw new Error('儲存參數修改了伺服器');
+        await openAccountSettings();if($('#custom-hostname').value!=='safe-draft-verification'||$('#account-settings-form button[type=submit]').textContent!=='儲存')throw new Error('參數儲存或按鈕文案錯誤');await native('acceptance.capture',{tag:'draft'});$('#account-settings').close();await native('account.draft.save',{username:result.server.username,hostname:before,password:''});accountOptions={username:result.server.username,hostname:before,password:''};accountDraftPending=true;await deployOne(0);if(accountDraftPending||states[0]!=='done'||await native('acceptance.hostname')!==before)throw new Error('帳戶更新應用未通過或更改了測試伺服器名稱');
+        switchMode('maintenance');await native('acceptance.capture',{tag:'maintenance'});$('#desktop-resolution').click();await new Promise(r=>setTimeout(r,300));$('#resolution-select').value='1920x1080';await $('#resolution-form').onsubmit({preventDefault(){}});const setting=await native('desktop.resolution.get');if(setting.width!==1920||setting.height!==1080)throw new Error('解像度未儲存');await $('#desktop-resolution').onclick();await native('acceptance.capture',{tag:'resolution'});$('#resolution-dialog').close();await native('desktop.resolution.save',{width:1280,height:800});
+        await installAdvanced('mount');if(!nativeServer.mountReady)throw new Error('目錄掛載組件未安裝成功');if(!advancedOperation.lines.length)throw new Error('掛載安裝無日誌');await native('acceptance.capture',{tag:'install'});$('#operation-log-dialog').close();
         let cloud=null;if(!nativeServer.cloudReady){cloud=installAdvanced('cloud');await new Promise(r=>setTimeout(r,500));$('#operation-log-dialog').close();}
-        await $('#mount-settings').onclick();$('#remote-folder-dialog').showModal();const started=Date.now();await listRemote();if($('#folder-confirm').disabled)throw new Error('目录读取失败：'+$('#folder-error').textContent);const folderDuration=Date.now()-started;if(folderDuration>12000)throw new Error('目录读取未受超时约束');await native('acceptance.capture',{tag:'folder'});$('#remote-folder-dialog').close();$('#mount-dialog').close();
-        if(cloud)await cloud;if(!nativeServer.cloudReady)throw new Error('CloudCLI 安装未完成');const page=await native('acceptance.cloud-http');if(page.status!==200)throw new Error('CloudCLI 网页无法打开');$('#operation-log-dialog').close();
+        await $('#mount-settings').onclick();$('#remote-folder-dialog').showModal();const started=Date.now();await listRemote();if($('#folder-confirm').disabled)throw new Error('目錄讀取失敗：'+$('#folder-error').textContent);const folderDuration=Date.now()-started;if(folderDuration>12000)throw new Error('目錄讀取未受超時約束');await native('acceptance.capture',{tag:'folder'});$('#remote-folder-dialog').close();$('#mount-dialog').close();
+        if(cloud)await cloud;if(!nativeServer.cloudReady)throw new Error('CloudCLI 安裝未完成');const page=await native('acceptance.cloud-http');if(page.status!==200)throw new Error('CloudCLI 網頁無法開啟');$('#operation-log-dialog').close();
         await native('acceptance.done',{success:true,draftSaveDidNotApply:true,completedAccountUpdateEnabled:true,idempotentAccountUpdateApplied:true,resolutionPersisted:true,mountInstalled:nativeServer.mountReady,cloudInstalled:nativeServer.cloudReady,cloudHttp:page.status,folderReadMilliseconds:folderDuration,folderReadSucceeded:true,hostnameBefore:before});
       }catch(e){await native('acceptance.done',{success:false,error:e.message});}
     };
     if(isMac){
       for(const element of document.querySelectorAll('.host-permission-note p'))element.textContent=element.textContent.replaceAll('Windows','macOS');
-      document.querySelector('.host-risk small').textContent='需先在系统设置中开启远程登录，仅允许当前账户。使用专用密钥，不会修改系统 SSH 设置。';
+      document.querySelector('.host-risk small').textContent='需先在系統設定中開啟遠端登入，僅允許當前帳戶。使用專用密鑰，不會修改系統 SSH 設定。';
       $('#host-alias').placeholder='例如 mac 或 local';
       renderClaudeBridge();
       $('#bridge-manage').title='查看第三方功能警告';

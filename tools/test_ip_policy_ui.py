@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""出入口设置的真实前端等待、重复提交、确认结果和保存回读检查；不连接 VPS。"""
+"""出入口設定的真實前端等待、重複提交、確認結果和儲存回讀檢查；不連接 VPS。"""
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 root=Path(__file__).resolve().parent.parent
@@ -27,7 +27,7 @@ with sync_playwright() as p:
         if(message.op==='metrics')result={latencyMs:100,lossPercent:0};
         if(message.op==='ip.info')result={location:'fixture',score:100,regionCode:'kr'};
         if(message.op==='ip.apply'){
-          if(window.failNextIp){window.failNextIp=false;queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,error:'出口验证失败，已回退'}));return;}
+          if(window.failNextIp){window.failNextIp=false;queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,error:'出口驗證失敗，已回退'}));return;}
           if(message.args.egressIp==='192.0.2.123'){queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,error:'未分配地址'}));return;}
           window.ipCalls.push(message);return;
         }
@@ -46,8 +46,8 @@ with sync_playwright() as p:
     page.evaluate("document.querySelector('#ip-policy-form').onsubmit({preventDefault(){}})")
     assert page.evaluate('window.ipCalls.length')==1
     page.keyboard.press('Escape');assert page.locator('#ip-policy-dialog').is_visible()
-    page.evaluate("window.safeCodeNativeLog('ip_policy','正在用全新连接验证入口…')")
-    assert '全新连接' in page.locator('#ip-policy-form [role=status]').inner_text()
+    page.evaluate("window.safeCodeNativeLog('ip_policy','正在用全新連線驗證入口…')")
+    assert '全新連線' in page.locator('#ip-policy-form [role=status]').inner_text()
     output=root/'.local/evidence';output.mkdir(exist_ok=True,parents=True)
     page.screenshot(path=str(output/'ip-policy-progress.png'))
     page.evaluate('window.finishIp()');page.wait_for_function('window.ipCalls.length===2')

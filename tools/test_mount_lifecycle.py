@@ -34,11 +34,11 @@ class Server(paramiko.ServerInterface):
             op=request['op'];options=request.get('options') or {};status=0
             if op=='fixture_error':
                 channel.send_stderr(b'legacy stderr detail\n')
-                line='SC_ERROR_JSON:'+json.dumps('挂载失败\n第二行原因\n最后一行',ensure_ascii=False);status=1
+                line='SC_ERROR_JSON:'+json.dumps('掛載失敗\n第二行原因\n最後一行',ensure_ascii=False);status=1
             elif any(m['remote'].endswith('/nonempty') for m in options.get('mappings',[])):
-                line='SC_ERROR_JSON:'+json.dumps('服务器目录不是空目录，请选择新的或空的目录。');status=1
+                line='SC_ERROR_JSON:'+json.dumps('伺服器目錄不是空目錄，請選擇新的或空的目錄。');status=1
             elif not re.fullmatch('[a-f0-9]{20}',options.get('clientId','')):
-                line='SC_ERROR_JSON:'+json.dumps('挂载客户端标识无效。');status=1
+                line='SC_ERROR_JSON:'+json.dumps('掛載客戶端標識無效。');status=1
             else:line='SC_RESULT:'+json.dumps({'clientId':options['clientId'],'paths':[m['remote'] for m in options.get('mappings',[])]})
             channel.send((line+'\n').encode());channel.send_exit_status(status);channel.shutdown_write();time.sleep(.05);channel.close()
         threading.Thread(target=reply,daemon=True).start();return True

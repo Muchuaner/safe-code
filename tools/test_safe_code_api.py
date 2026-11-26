@@ -81,12 +81,12 @@ class SafeCodeApiTest(unittest.TestCase):
             self.assertEqual(json.loads(gateway.subscription_path.read_text()), gateway.subscription)
             self.registry.record(other, model, False, usage)
             self.assertEqual(gateway.account_footer(digest, model, usage),
-                             ('Key 余额 $0.9200', '账户额度（上次查询） · 5 小时剩余 75% · 7 天剩余 91%'))
+                             ('Key 餘額 $0.9200', '帳戶額度（上次查詢） · 5 小時剩餘 75% · 7 天剩餘 91%'))
             self.registry.record(digest, model, False, usage)
             self.assertEqual(self.registry.balance(digest)['remaining_nanos'], 920_000_000)
-            self.assertEqual(gateway.account_footer(other, model, usage)[0], 'Key 余额 不限额')
+            self.assertEqual(gateway.account_footer(other, model, usage)[0], 'Key 餘額 不限額')
             gateway.remember_subscription({'sampled_at': 101, 'windows': {'five_hour': {'used': 0, 'resets_at': 1}}})
-            self.assertIn('5 小时暂无记录 · 7 天暂无记录', gateway.account_footer(digest, model, {})[1])
+            self.assertIn('5 小時暫無記錄 · 7 天暫無記錄', gateway.account_footer(digest, model, {})[1])
 
     def wait_for(self, predicate):
         start=time.monotonic()
@@ -150,26 +150,26 @@ class SafeCodeApiTest(unittest.TestCase):
                     input INTEGER,output INTEGER,cache_read INTEGER,cache_write INTEGER,last_used INTEGER,
                     PRIMARY KEY(key_id,model));
             ''')
-            db.execute('INSERT INTO keys(id,note,created) VALUES(?,?,0)', (self.digests[0], '原有密钥'))
+            db.execute('INSERT INTO keys(id,note,created) VALUES(?,?,0)', (self.digests[0], '原有密鑰'))
             db.execute('INSERT INTO usage VALUES (?,?,1,0,100,10,20,40,0)',
                        (self.digests[0], 'claude-sonnet-5'))
         for _ in range(2):
             registry = KeyRegistry(path)
             self.assertEqual(registry.usage(self.digests[0])[0]['cost_nanos'], 404_000)
             legacy, = registry.list()
-            self.assertEqual((legacy['note'], legacy['expires_at'], legacy['allowed_models']), ('原有密钥', None, None))
+            self.assertEqual((legacy['note'], legacy['expires_at'], legacy['allowed_models']), ('原有密鑰', None, None))
             self.assertTrue(registry.enabled(legacy['id']))
 
     def test_legacy_keys_usage_and_revoke(self):
         first, second, _ = self.digests
         self.assertEqual({first,second},{key['id'] for key in self.registry.list()})
-        self.registry.update(first,'笔记本',12)
+        self.registry.update(first,'筆記本',12)
         self.registry.record(first,'claude-test',False,{'input_tokens':80,'output_tokens':3,'cache_read_input_tokens':40})
         self.registry.record(first,'claude-test',True,{'input_tokens':10})
         self.registry.revoke(first)
         next_registry = KeyRegistry(self.root)
         key = next(row for row in next_registry.list() if row['id']==first)
-        self.assertEqual((key['note'],key['rpm'],key['requests'],key['enabled']),('笔记本',12,2,False))
+        self.assertEqual((key['note'],key['rpm'],key['requests'],key['enabled']),('筆記本',12,2,False))
         usage = next_registry.usage(first)[0]
         self.assertEqual((usage['input'],usage['output'],usage['cache_read'],usage['failures']),(90,3,40,1))
         self.assertEqual(next_registry.usage(second),[])
@@ -264,10 +264,10 @@ class SafeCodeApiTest(unittest.TestCase):
         with socket.socket() as occupied:
             occupied.bind(('127.0.0.1', 0))
             occupied.listen()
-            with self.assertRaisesRegex(ValueError, '占用'):
+            with self.assertRaisesRegex(ValueError, '佔用'):
                 server.configure_port(self.root, 45143, occupied.getsockname()[1])
         self.assertEqual(json.loads(config_path.read_text()), original)
-        with self.assertRaisesRegex(ValueError, '已变更'):
+        with self.assertRaisesRegex(ValueError, '已變更'):
             server.configure_port(self.root, 45142, 45144)
 
         with socket.socket() as probe:
@@ -289,7 +289,7 @@ class SafeCodeApiTest(unittest.TestCase):
               patch.object(agent, 'run', side_effect=configure),
               patch.object(agent, 'safe_code_api_admin', return_value={'port': 45143, 'busy': False}),
               patch.object(agent, 'restart_safe_code_api', side_effect=restart) as restarted):
-            with self.assertRaisesRegex(RuntimeError, '已恢复原监听端口'):
+            with self.assertRaisesRegex(RuntimeError, '已恢復原監聽連接埠'):
                 agent.change_safe_code_api_port([], {'port': new_port, 'expectedPort': 45143})
             self.assertEqual([call.args[1] for call in restarted.call_args_list], [new_port, 45143])
         self.assertEqual(json.loads(config_path.read_text()), original)
@@ -304,9 +304,9 @@ class SafeCodeApiTest(unittest.TestCase):
         self.assertEqual(agent.gateway_public_origin(
             {**settings, 'bind': '127.0.0.1', 'origin': 'https://forward.example:5443'}, hints),
             'https://forward.example:5443')
-        with self.assertRaisesRegex(ValueError, '回环'):
+        with self.assertRaisesRegex(ValueError, '迴環'):
             agent.gateway_public_origin({**settings, 'bind': '127.0.0.1'}, hints)
-        with self.assertRaisesRegex(ValueError, '未识别到'):
+        with self.assertRaisesRegex(ValueError, '未識別到'):
             agent.gateway_public_origin(settings, {'sshHost': '192.0.2.1'})
 
     def test_upgrade_client_issues_and_refreshes_tickets_with_an_older_gateway(self):
@@ -454,7 +454,7 @@ print('\nUsage unavailable', flush=True)
 if sys.stdin.buffer.read(1) == b'\r':
     open(os.path.expanduser('~/unexpected-enter'), 'w').close()
 """)
-            with self.assertRaisesRegex(UsageUnavailable, '内置 /usage'):
+            with self.assertRaisesRegex(UsageUnavailable, '內置 /usage'):
                 read_subscription(timeout=1.5)
         self.assertFalse((self.root/'unexpected-enter').exists())
 
@@ -502,7 +502,7 @@ if sys.stdin.buffer.read(1) == b'\r':
               patch.object(agent, 'run', side_effect=run) as runner,
               patch.object(agent, 'safe_code_api_admin', return_value={'enabled': False, 'backend':'cloudcli'})):
             self.assertEqual(agent.safe_code_api({'action':'public_status'}), {'installed':False,'enabled':False,'cloudcliConfigured':True})
-            with self.assertRaisesRegex(ValueError, '确认安装'):
+            with self.assertRaisesRegex(ValueError, '確認安裝'):
                 agent.safe_code_api({'action':'install','files':files})
             runner.assert_not_called()
             install = {'action':'install','accepted':True,'files':files}
@@ -583,7 +583,7 @@ if sys.stdin.buffer.read(1) == b'\r':
               patch.object(agent.shutil, 'which', side_effect=lambda cmd:'/usr/bin/curl' if cmd=='curl' else None),
               patch.object(agent, 'run', side_effect=run)):
             verified = False
-            with self.assertRaisesRegex(RuntimeError, '校验失败'):
+            with self.assertRaisesRegex(RuntimeError, '校驗失敗'):
                 agent.gateway_node()
             self.assertFalse(node_root.exists())
             verified = True
@@ -660,7 +660,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 try:
                     return public.manage({'action':'issue'})['id']
                 except ValueError as error:
-                    self.assertIn('激活码', str(error))
+                    self.assertIn('啟用碼', str(error))
                     return None
 
             with ThreadPoolExecutor(2) as pool:
@@ -668,10 +668,10 @@ if sys.stdin.buffer.read(1) == b'\r':
             self.assertEqual(len(issued), 1)
             self.assertTrue(public.manage({'action':'list'})['activation_required'])
             for invalid in ('', 'wrong', 'agentom', 123):
-                with self.assertRaisesRegex(ValueError, '激活码'):
+                with self.assertRaisesRegex(ValueError, '啟用碼'):
                     public.manage({'action':'issue','activation_code':invalid})
             destination = self.root/'unissued.key'
-            with self.assertRaisesRegex(ValueError, '激活码'):
+            with self.assertRaisesRegex(ValueError, '啟用碼'):
                 server.issue(self.root, 'https://fixture.example', destination)
             self.assertFalse(destination.exists())
             second = public.manage({'action':'issue','activation_code':'Agentom'})['id']
@@ -733,7 +733,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 self.assertEqual(request('POST','/v1/messages',legacy_key)[0],403)
                 counter_path='/v1/messages/count_tokens'
                 self.assertEqual(request('POST',counter_path,legacy_key)[0],403)
-                with self.assertRaisesRegex(ValueError, '启用公网'):
+                with self.assertRaisesRegex(ValueError, '啟用公網'):
                     server.issue(self.root, 'https://fixture.example', self.root/'unissued.key')
                 self.assertFalse((self.root/'unissued.key').exists())
                 self.assertEqual(manage('enable_public', accepted=True), {'enabled': True, 'backend':'cloudcli', 'gatewayRevision':server.GATEWAY_REVISION})
@@ -796,7 +796,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 def post(path, key=None, body=True):
                     return request('POST',path,key,json.dumps({'model':'claude-test'}) if body else None)
 
-                created=manage('issue',note='设备一',rpm=1)
+                created=manage('issue',note='裝置一',rpm=1)
                 ticket_payload = decode_new_ticket(created['ticket'])
                 self.assertEqual(ticket_payload['url'], 'https://fixture.example')
                 key=ticket_payload['key']
@@ -843,7 +843,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 self.assertEqual(analytics['latency']['wait_ms']['samples'], 2)
                 self.assertEqual(analytics['latency']['duration_ms']['p95_ms'], success['duration_ms'])
                 self.assertNotIn('analytics', manage('list', details=True, analytics=['1h']))
-                self.assertIn('请先撤销', admin_request('delete', id=created['id'])['error'])
+                self.assertIn('請先撤銷', admin_request('delete', id=created['id'])['error'])
                 self.assertEqual(manage('usage', id=created['id']), details)
                 owner = created['id']
                 ssh_devices = self.root/'ssh-devices'
@@ -900,7 +900,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 self.assertEqual(balance['used_nanos'],sum(model['cost_nanos'] for model in balance['models']))
                 self.assertNotIn('claude-opus-5-5',[model['model'] for model in
                     json.loads(request('GET','/v1/key/balance',counter_key)[1])['models']])
-                manage('update', id=capped['id'], note='保留额度')
+                manage('update', id=capped['id'], note='保留額度')
                 self.assertEqual(post('/v1/messages', capped_key)[0], 402)
                 manage('update', id=capped['id'], budget_cents=2)
                 self.assertEqual(post('/v1/messages', capped_key)[0], 200)
@@ -908,7 +908,7 @@ if sys.stdin.buffer.read(1) == b'\r':
                 origin = 'https://new.fixture.example:45143'
                 self.assertEqual(manage('set_origin', origin=origin+'/')['origin'], origin)
                 self.assertEqual(manage('settings')['origin'], origin)
-                self.assertEqual(decode_new_ticket(manage('issue', note='设备二', rpm=10)['ticket'])['url'], origin)
+                self.assertEqual(decode_new_ticket(manage('issue', note='裝置二', rpm=10)['ticket'])['url'], origin)
                 with server.PublicServer(self.root,{'bind':'127.0.0.1','port':0}) as reopened:
                     self.assertEqual(reopened.manage({'action':'settings'})['origin'], origin)
                 admin.shutdown()

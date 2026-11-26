@@ -1,10 +1,10 @@
-# Safe Code 反馈服务
+# Safe Code 回饋服務
 
-这一目录提供匿名使用统计、诊断和手动反馈的接收与查询。客户端的采集范围和保留期见 [匿名功能诊断](../../docs/DIAGNOSTICS.md)。
+這一目錄提供匿名使用統計、診斷和手動回饋的接收與查詢。客戶端的採集範圍和保留期見 [匿名功能診斷](../../docs/DIAGNOSTICS.md)。
 
-服务使用 Python 标准库和 SQLite。`server.py` 默认监听本机回环地址。运行时通过 `SAFECODE_PORT` 与 `SAFECODE_DB` 指定端口和数据库文件。部署时可参考同目录的 systemd 单元，并用自己的 HTTPS 反向代理对外提供 `/health`、`/v1/usage`、`/v1/feedback` 和 `/v1/diagnostics`。为接收进程设置单独账户，并确保数据库仅服务账户和管理员可读。
+服務使用 Python 標準庫和 SQLite。`server.py` 預設監聽本機迴環地址。執行階段透過 `SAFECODE_PORT` 與 `SAFECODE_DB` 指定連接埠和資料庫檔案。部署時可參考同目錄的 systemd 單元，並用自己的 HTTPS 反向代理對外提供 `/health`、`/v1/usage`、`/v1/feedback` 和 `/v1/diagnostics`。為接收進程設定單獨帳戶，並確保資料庫僅服務帳戶和管理員可讀。
 
-统计和诊断请求采用固定字段校验。查询和汇总在部署主机本地执行，接口无需公开数据库。
+統計和診斷請求採用固定欄位校驗。查詢和彙總在部署主機本地執行，接口無需公開資料庫。
 
 ```sh
 python3 services/feedback/report.py /path/to/data.sqlite3 --summary

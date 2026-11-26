@@ -17,18 +17,18 @@ if(args.Length>1&&args[0]=="algorithm-fixture"){
         using var tunnel=(Renci.SshNet.SshClient)typeof(SshSession).GetMethod("NewMountConnection",flags)!.Invoke(session,new object?[]{null})!;
         foreach(var connection in new Renci.SshNet.BaseClient[]{sftp,tunnel}){
             bool rejected=false;try{await connection.ConnectAsync(default);}catch(Renci.SshNet.Common.SshConnectionException){rejected=true;}
-            if(rejected!=changed)throw new Exception(changed?"替换密钥未被拒绝。":"服务器新增密钥类型导致已信任连接失败。");
+            if(rejected!=changed)throw new Exception(changed?"替換密鑰未被拒絕。":"伺服器新增密鑰類型導致已信任連線失敗。");
         }
     }
     await Check(false);
     typeof(SshSession).GetField("client",flags)!.SetValue(session,initial);
     typeof(SshSession).GetField("remoteDirectory",flags)!.SetValue(session,"/tmp/fixture");
     var deployed=await session.RequestAsync<ServerInfo>("claude");
-    if(!deployed.Statuses.GetValueOrDefault("claude"))throw new Exception("VPS 后台安装任务没有返回就绪状态。");
+    if(!deployed.Statuses.GetValueOrDefault("claude"))throw new Exception("VPS 背景安裝任務沒有返回就緒狀態。");
     bool remoteFailure=false;
     try{await session.RequestAsync<ServerInfo>("claude");}
-    catch(RemoteOperationException error){remoteFailure=error.Code=="dns_failure"&&error.Message=="VPS 下载失败";}
-    if(!remoteFailure)throw new Exception("VPS 下载失败未原样传回。");
+    catch(RemoteOperationException error){remoteFailure=error.Code=="dns_failure"&&error.Message=="VPS 下載失敗";}
+    if(!remoteFailure)throw new Exception("VPS 下載失敗未原樣傳回。");
     Console.WriteLine("CLAUDE_VPS_JOB_WITHOUT_CLIENT_PAYLOAD_PASSED");
     File.WriteAllText(mode,"changed");await Check(true);
     Console.WriteLine("ADDED_HOST_KEY_TYPE_PRESERVES_SFTP_AND_TUNNEL; REPLACED_KEY_REJECTED");return 0;
@@ -46,8 +46,8 @@ if(args.Length>1&&args[0]=="ip-rollback-fixture"){
     typeof(SshSession).GetProperty("Server")!.SetValue(session,new ServerInfo{Architecture="x86_64"});
     bool rolledBack=false;
     try{await session.ApplyIpPolicyAsync(new IpPolicySettings("127.0.0.1","203.0.113.1",true,true,port));}
-    catch(InvalidOperationException error)when(error.InnerException is TimeoutException&&error.Message.Contains("已执行回退")){rolledBack=true;}
-    if(!rolledBack)throw new Exception("新连接不可达时未通过现有控制通道执行回退。");
+    catch(InvalidOperationException error)when(error.InnerException is TimeoutException&&error.Message.Contains("已執行回退")){rolledBack=true;}
+    if(!rolledBack)throw new Exception("新連線不可達時未透過現有控制通道執行回退。");
     Console.WriteLine("IP_ROLLBACK_USES_ESTABLISHED_CONTROL_CHANNEL");return 0;
 }
 if(args.Length>1&&args[0]=="mount-fixture"){
@@ -59,15 +59,15 @@ if(args.Length>1&&args[0]=="mount-fixture"){
     typeof(SshSession).GetProperty("Server")!.SetValue(session,new ServerInfo{MountReady=true});
     Directory.CreateDirectory(Path.Combine(directory,"local"));var mappings=new List<MountMapping>{new(Path.Combine(directory,"local"),"/home/fixture/shared")};
     var first=await session.ApplyMountsAsync(mappings);var second=await session.ApplyMountsAsync(mappings);
-    if(first.ClientId.Length!=20||second.ClientId!=first.ClientId||!session.HasMounts)throw new Exception("重挂载客户端标识丢失。");
-    if(session.ReadMountMappings().Count!=1)throw new Exception("挂载设置未保存。");
+    if(first.ClientId.Length!=20||second.ClientId!=first.ClientId||!session.HasMounts)throw new Exception("重掛載客戶端標識丟失。");
+    if(session.ReadMountMappings().Count!=1)throw new Exception("掛載設定未儲存。");
     var oldChannel=typeof(SshSession).GetField("fileServer",flags)!.GetValue(session);bool refused=false;
-    try{await session.ApplyMountsAsync([new(mappings[0].Local,"/home/fixture/nonempty")]);}catch(InvalidOperationException e){refused=e.Message.Contains("不是空目录");}
-    if(!refused||!ReferenceEquals(oldChannel,typeof(SshSession).GetField("fileServer",flags)!.GetValue(session))||session.ReadMountMappings()[0].Remote!=mappings[0].Remote)throw new Exception("无效目录导致旧文件通道或设置丢失。");
-    await session.ApplyMountsAsync([]);if(session.HasMounts||session.ReadMountMappings().Count!=0)throw new Exception("清空挂载失败。");
-    var third=await session.ApplyMountsAsync(mappings);if(third.ClientId!=first.ClientId)throw new Exception("重新挂载身份改变。");await session.UnmountAsync();
-    bool completeError=false;try{await session.RequestAsync<JsonElement>("fixture_error");}catch(InvalidOperationException e){completeError=e.Message=="挂载失败\n第二行原因\n最后一行";}
-    if(!completeError)throw new Exception("多行远端错误被截断。");
+    try{await session.ApplyMountsAsync([new(mappings[0].Local,"/home/fixture/nonempty")]);}catch(InvalidOperationException e){refused=e.Message.Contains("不是空目錄");}
+    if(!refused||!ReferenceEquals(oldChannel,typeof(SshSession).GetField("fileServer",flags)!.GetValue(session))||session.ReadMountMappings()[0].Remote!=mappings[0].Remote)throw new Exception("無效目錄導致舊檔案通道或設定丟失。");
+    await session.ApplyMountsAsync([]);if(session.HasMounts||session.ReadMountMappings().Count!=0)throw new Exception("清空掛載失敗。");
+    var third=await session.ApplyMountsAsync(mappings);if(third.ClientId!=first.ClientId)throw new Exception("重新掛載身份改變。");await session.UnmountAsync();
+    bool completeError=false;try{await session.RequestAsync<JsonElement>("fixture_error");}catch(InvalidOperationException e){completeError=e.Message=="掛載失敗\n第二行原因\n最後一行";}
+    if(!completeError)throw new Exception("多行遠端錯誤被截斷。");
     Console.WriteLine("REMOUNT_ID_INVALID_TARGET_PRESERVES_CHANNEL_SETTINGS_CLEAR_REAPPLY_AND_MULTILINE_ERROR_PASSED");return 0;
 }
 if(args.Length>1&&args[0]=="directory-fixture"){
@@ -96,12 +96,12 @@ if(args.Length>1&&args[0]=="trust-fixture"){
 }
 if(args.Length>0&&args[0]=="geo"){
     string fixture="""{"country":"Hong Kong","countryCode":"hk","trust_score":78,"cidr":"203.0.113.0/24","geo_sources":[{"country":"Hong Kong","country_code":"hk"},{"country":"Japan","country_code":"jp","city":"Tokyo"},{"country":"Japan","country_code":"jp","city":"Tokyo"},{"country":"Japan","country_code":"jp","city":"Shinagawa"}]}""";
-    var chosen=IpIntelligenceService.ParseLookup("203.0.113.9",fixture);if(chosen.RegionCode!="jp"||chosen.City!="Tokyo"||!chosen.HasGeoConflict)throw new Exception("多源多数定位失败。");
-    if(args.Length>1){var live=IpIntelligenceService.ParseLookup("fixture",File.ReadAllText(args[1]));Console.WriteLine(JsonSerializer.Serialize(live,JsonDefaults.Options));if(live.RegionCode!="jp")throw new Exception("详情页综合定位未选择日本。");}
+    var chosen=IpIntelligenceService.ParseLookup("203.0.113.9",fixture);if(chosen.RegionCode!="jp"||chosen.City!="Tokyo"||!chosen.HasGeoConflict)throw new Exception("多源多數定位失敗。");
+    if(args.Length>1){var live=IpIntelligenceService.ParseLookup("fixture",File.ReadAllText(args[1]));Console.WriteLine(JsonSerializer.Serialize(live,JsonDefaults.Options));if(live.RegionCode!="jp")throw new Exception("詳情頁綜合定位未選擇日本。");}
     Console.WriteLine("GEO_CONSENSUS_JAPAN_OVERRIDES_REGISTERED_LOCATION_OK");return 0;
 }
 if (args.Length>0 && args[0]=="webdav") { await TestWebDavAsync(); return 0; }
-if (args.Length < 1) { Console.Error.WriteLine("用法：SafeCode.Verify 私密测试配置.json [inspect|deploy|check|cloud]"); return 2; }
+if (args.Length < 1) { Console.Error.WriteLine("用法：SafeCode.Verify 私密測試配置.json [inspect|deploy|check|cloud]"); return 2; }
 try
 {
     using var config = JsonDocument.Parse(File.ReadAllText(args[0])); var root = config.RootElement;
@@ -114,14 +114,14 @@ try
     Console.WriteLine("SSH_CONNECTED " + server.OsName + " " + server.Architecture);
     if(phase=="localization"){
         server=await session.DeployAsync("localization",DeploymentCatalog.Locales[0]);
-        if(!server.Statuses.GetValueOrDefault("localization"))throw new Exception("本土化语言包未就绪。");Console.WriteLine("LOCALE_TIMEZONE_AND_LANGUAGE_PACKS_VERIFIED");
+        if(!server.Statuses.GetValueOrDefault("localization"))throw new Exception("本土化語言包未就緒。");Console.WriteLine("LOCALE_TIMEZONE_AND_LANGUAGE_PACKS_VERIFIED");
     }
     if (phase == "deploy")
     {
         foreach (var task in DeploymentCatalog.Steps)
         {
             server = await session.DeployAsync(task.Id, DeploymentCatalog.Locales[0]);
-            if (!server.Statuses.GetValueOrDefault(task.Id)) throw new Exception(task.Title + " 验证未通过。");
+            if (!server.Statuses.GetValueOrDefault(task.Id)) throw new Exception(task.Title + " 驗證未通過。");
             Console.WriteLine("VERIFIED " + task.Id);
         }
     }
@@ -135,28 +135,28 @@ try
         await tcp.GetStream().WriteAsync(request);
         byte[] response = new byte[1024]; using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
         int count = await tcp.GetStream().ReadAsync(response, timeout.Token);
-        if (count < 11 || response[0] != 3 || response[5] != 208) throw new Exception("RDP 协议协商验证失败。");
+        if (count < 11 || response[0] != 3 || response[5] != 208) throw new Exception("RDP 協定協商驗證失敗。");
         Console.WriteLine("RDP_TUNNEL_NEGOTIATED " + count);
     }
     if(phase=="durable")
     {
         var job=await session.RequestAsync<RemoteJob>("claude");
         string active=await session.ExecuteTextAsync("systemctl is-active safe-code-job-"+job.JobId+".service");
-        if(active.Trim()!="active")throw new Exception("任务未处于运行状态，无法验证断线恢复。");
+        if(active.Trim()!="active")throw new Exception("任務未處於執行狀態，無法驗證斷線恢復。");
         Console.WriteLine("DURABLE_JOB_STARTED_ACTIVE "+job.JobId);session.Dispose();
         using var resumed=new SshSession(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0]))!,"verify-state"));resumed.Log+=line=>Console.WriteLine(line);
         await resumed.ConnectAsync(settings,key=>key.Fingerprint==Read("fingerprint"));
         server=await resumed.ResumeJobAsync(job.JobId);
-        if(!server.Statuses.GetValueOrDefault("claude"))throw new Exception("断线后任务未完成。");
+        if(!server.Statuses.GetValueOrDefault("claude"))throw new Exception("斷線後任務未完成。");
         Console.WriteLine("REMOTE_JOB_SURVIVED_DISCONNECT_AND_RESUMED");
     }
     if (phase == "ip")
     {
         var policy=new IpPolicySettings(settings.Host,settings.Host,true,true,settings.Port);
         server=await session.ApplyIpPolicyAsync(policy);
-        if(server.IpPolicy?.LockEgress!=true||server.IpPolicy.LockIngress!=true)throw new Exception("IP 策略提交状态错误。");
+        if(server.IpPolicy?.LockEgress!=true||server.IpPolicy.LockIngress!=true)throw new Exception("IP 策略提交狀態錯誤。");
         string table=await session.ExecuteTextAsync("nft list table inet safe_code_ip");
-        if(!table.Contains("egress_guard")||!table.Contains(settings.Host))throw new Exception("实际防火墙规则缺失。");
+        if(!table.Contains("egress_guard")||!table.Contains(settings.Host))throw new Exception("實際防火牆規則缺失。");
         Console.WriteLine("IP_POLICY_COMMITTED_EGRESS_AND_NEW_SSH_VERIFIED");
     }
     if(phase=="iprollback")
@@ -167,9 +167,9 @@ try
         Console.WriteLine("ROLLBACK_TIMER_ARMED "+prepared.Token);
         await Task.Delay(TimeSpan.FromSeconds(130));
         string after=await session.ExecuteTextAsync("nft list table inet safe_code_ip");
-        if(!after.Contains("ip saddr != "+settings.Host+" drop")||!after.Contains("ip daddr != "+settings.Host+" tcp dport "+settings.Port+" drop"))throw new Exception("自动回退未恢复入口 / 出口阻断规则。");
+        if(!after.Contains("ip saddr != "+settings.Host+" drop")||!after.Contains("ip daddr != "+settings.Host+" tcp dport "+settings.Port+" drop"))throw new Exception("自動回退未恢復入口 / 出口阻斷規則。");
         string pending=await session.ExecuteTextAsync("test ! -e /var/lib/safe-code/ip-pending-"+prepared.Token+".json && printf removed");
-        if(pending!="removed")throw new Exception("自动回退记录尚未结束。");
+        if(pending!="removed")throw new Exception("自動回退記錄尚未結束。");
         Console.WriteLine("AUTOMATIC_120_SECOND_ROLLBACK_VERIFIED");
     }
     if (phase == "mount")
@@ -186,29 +186,29 @@ try
             var mounted=await session.ApplyMountsAsync([new(localRoot,remoteRoot+"/one"),new(Path.Combine(localRoot,"two"),remoteRoot+"/two")]);
             mountClientId=mounted.ClientId;
             string read=await session.ExecuteTextAsync("cat "+SshSession.Quote(remoteRoot+"/one/from-local.txt"));
-            if(read!="local-to-server")throw new Exception("本地到服务器文件读取失败。");
+            if(read!="local-to-server")throw new Exception("本地到伺服器檔案讀取失敗。");
             read=await session.ExecuteTextAsync("cat "+SshSession.Quote(remoteRoot+"/two/second.txt"));
-            if(read!="second-mapping")throw new Exception("第二组目录映射失败。");
+            if(read!="second-mapping")throw new Exception("第二組目錄映射失敗。");
             await session.ExecuteTextAsync("runuser -u "+SshSession.Quote(server.Username)+" -- sh -c "+SshSession.Quote("printf server-to-local > "+SshSession.Quote(remoteRoot+"/one/from-server.txt")));
             for(int i=0;i<30&&!File.Exists(Path.Combine(localRoot,"from-server.txt"));i++)await Task.Delay(500);
-            if(!File.Exists(Path.Combine(localRoot,"from-server.txt"))||await File.ReadAllTextAsync(Path.Combine(localRoot,"from-server.txt"))!="server-to-local")throw new Exception("服务器到本地文件写入失败。");
+            if(!File.Exists(Path.Combine(localRoot,"from-server.txt"))||await File.ReadAllTextAsync(Path.Combine(localRoot,"from-server.txt"))!="server-to-local")throw new Exception("伺服器到本地檔案寫入失敗。");
             Console.WriteLine("MOUNT_TWO_WAY_AND_MULTI_OK "+mounted.Paths.Count);
             string cloudPid=(await session.ExecuteTextAsync("systemctl show safe-code-cloudcli -p MainPID --value")).Trim();
             if(int.TryParse(cloudPid,out int cp)&&cp>0){
                 await session.ExecuteTextAsync("nsenter -t "+cp+" -m -- runuser -u "+SshSession.Quote(server.Username)+" -- sh -c "+SshSession.Quote("printf cloud-namespace-write > "+SshSession.Quote(remoteRoot+"/one/from-cloud.txt")));
                 for(int i=0;i<30&&!File.Exists(Path.Combine(localRoot,"from-cloud.txt"));i++)await Task.Delay(500);
-                if(!File.Exists(Path.Combine(localRoot,"from-cloud.txt"))||await File.ReadAllTextAsync(Path.Combine(localRoot,"from-cloud.txt"))!="cloud-namespace-write")throw new Exception("CloudCLI 命名空间无法写入挂载目录。");
+                if(!File.Exists(Path.Combine(localRoot,"from-cloud.txt"))||await File.ReadAllTextAsync(Path.Combine(localRoot,"from-cloud.txt"))!="cloud-namespace-write")throw new Exception("CloudCLI 命名空間無法寫入掛載目錄。");
                 Console.WriteLine("CLOUD_NAMESPACE_MOUNT_WRITE_OK");
             }
         }
         finally { await session.UnmountAsync(); }
         string mounts=await session.ExecuteTextAsync("findmnt -rn -t fuse.davfs -o TARGET || true");
-        if(mountClientId.Length>0&&mounts.Contains(mountClientId))throw new Exception("退出后仍残留挂载。");
+        if(mountClientId.Length>0&&mounts.Contains(mountClientId))throw new Exception("退出後仍殘留掛載。");
         Console.WriteLine("MOUNT_CLEANUP_OK");
     }
     if (phase == "mount-cloud")
     {
-        if(!server.CloudReady||!server.MountReady)throw new Exception("联动验收需要已有 CloudCLI 和挂载组件。");
+        if(!server.CloudReady||!server.MountReady)throw new Exception("聯動驗收需要已有 CloudCLI 和掛載組件。");
         string fixture=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0]))!,"cloud-link-"+Guid.NewGuid().ToString("N")[..10]);Directory.CreateDirectory(fixture);
         string one=Path.Combine(fixture,"one"),two=Path.Combine(fixture,"two");Directory.CreateDirectory(one);Directory.CreateDirectory(two);await File.WriteAllTextAsync(Path.Combine(one,"source.txt"),"cloud-link-local");
         string remote=server.HomeDirectory+"/cloud-link-verify-"+Guid.NewGuid().ToString("N")[..10];string clientId="";List<string> paths=[];bool unmounted=false;
@@ -228,22 +228,22 @@ print(json.dumps({'projects':[{'id':p['projectId'],'name':p['displayName'],'path
         try
         {
             var first=await session.ApplyMountsAsync([new(one,remote+"/one"),new(two,remote+"/two")]);clientId=first.ClientId;paths=first.ManagedPaths??[];
-            if(first.CloudWarning!=null||paths.Count!=2)throw new Exception(first.CloudWarning??"挂载路径缺失。");
-            if(await session.ExecuteTextAsync("cat "+SshSession.Quote(remote+"/one/source.txt"))!="cloud-link-local")throw new Exception("真实挂载读取失败。");
-            var before=await Check();if(before.GetProperty("projects").GetArrayLength()!=2)throw new Exception("原生 CloudCLI API 未列出两组目录。");
+            if(first.CloudWarning!=null||paths.Count!=2)throw new Exception(first.CloudWarning??"掛載路徑缺失。");
+            if(await session.ExecuteTextAsync("cat "+SshSession.Quote(remote+"/one/source.txt"))!="cloud-link-local")throw new Exception("真實掛載讀取失敗。");
+            var before=await Check();if(before.GetProperty("projects").GetArrayLength()!=2)throw new Exception("原生 CloudCLI API 未列出兩組目錄。");
             string ids=before.GetProperty("stored").GetRawText();
             var second=await session.ApplyMountsAsync([new(two,remote+"/two"),new(one,remote+"/one")]);
-            if(second.CloudWarning!=null||!second.ManagedPaths!.SequenceEqual(paths.AsEnumerable().Reverse()))throw new Exception("改序改变了项目路径。");
-            var reordered=await Check();if(reordered.GetProperty("stored").GetRawText()!=ids)throw new Exception("重复挂载改变了项目 ID。");
-            await session.RequestAsync<ServerInfo>("cloud_setup");if((await Check()).GetProperty("stored").GetRawText()!=ids)throw new Exception("补登记生成重复项目。");
+            if(second.CloudWarning!=null||!second.ManagedPaths!.SequenceEqual(paths.AsEnumerable().Reverse()))throw new Exception("改序改變了項目路徑。");
+            var reordered=await Check();if(reordered.GetProperty("stored").GetRawText()!=ids)throw new Exception("重複掛載改變了項目 ID。");
+            await session.RequestAsync<ServerInfo>("cloud_setup");if((await Check()).GetProperty("stored").GetRawText()!=ids)throw new Exception("補登記生成重複項目。");
             Console.WriteLine("CLOUD_NATIVE_API_TWO_PROJECTS_STABLE_IDS_REORDER_AND_OPEN_SYNC_OK");
             await session.UnmountAsync();unmounted=true;var after=await Check();
-            if(after.GetProperty("projects").GetArrayLength()!=0||after.GetProperty("stored").EnumerateArray().Any(row=>row[2].GetInt32()!=1))throw new Exception("卸载后项目未归档。");
+            if(after.GetProperty("projects").GetArrayLength()!=0||after.GetProperty("stored").EnumerateArray().Any(row=>row[2].GetInt32()!=1))throw new Exception("卸載後項目未歸檔。");
             var remounted=await session.ApplyMountsAsync([new(one,remote+"/one"),new(two,remote+"/two")]);unmounted=false;
-            if(remounted.CloudWarning!=null||(await Check()).GetProperty("stored").GetRawText()!=ids)throw new Exception("重新挂载未恢复原项目。");
+            if(remounted.CloudWarning!=null||(await Check()).GetProperty("stored").GetRawText()!=ids)throw new Exception("重新掛載未恢復原項目。");
             await session.UnmountAsync();unmounted=true;Console.WriteLine("CLOUD_UNMOUNT_ARCHIVE_AND_REMOUNT_SAME_IDS_OK");
             uint refreshPort=await session.ForwardAsync(3001);using var http=new HttpClient();string html=await http.GetStringAsync("http://127.0.0.1:"+refreshPort);
-            if(!html.Contains("data-safe-code-mounts")||!(await http.GetStringAsync("http://127.0.0.1:"+refreshPort+"/safe-code-mounts.js")).Contains("websocket_reconnected"))throw new Exception("CloudCLI 未提供自动刷新组件。");
+            if(!html.Contains("data-safe-code-mounts")||!(await http.GetStringAsync("http://127.0.0.1:"+refreshPort+"/safe-code-mounts.js")).Contains("websocket_reconnected"))throw new Exception("CloudCLI 未提供自動重新整理組件。");
             Console.WriteLine("CLOUD_HTTP_REFRESH_ASSETS_OK");
         }
         finally
@@ -262,7 +262,7 @@ print(json.dumps({'projects':[{'id':p['projectId'],'name':p['displayName'],'path
         uint local = await session.ForwardAsync(3001);
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         string html = await http.GetStringAsync("http://127.0.0.1:" + local);
-        if (!html.Contains("<html", StringComparison.OrdinalIgnoreCase)) throw new Exception("CloudCLI 未返回网页。");
+        if (!html.Contains("<html", StringComparison.OrdinalIgnoreCase)) throw new Exception("CloudCLI 未返回網頁。");
         Console.WriteLine("CLOUD_HTTP_OK " + html.Length);
     }
     Console.WriteLine(JsonSerializer.Serialize(new { success = true, server }, JsonDefaults.Options)); return 0;
@@ -276,15 +276,15 @@ static async Task TestWebDavAsync()
     {
         await File.WriteAllTextAsync(Path.Combine(root,"read.txt"),"hello");
         using var server=new WebDavServer([new(root,"/unused")]);using var http=new HttpClient();string url="http://127.0.0.1:"+server.Port+"/m0/";
-        if((int)(await http.GetAsync(url+"read.txt")).StatusCode!=401)throw new Exception("缺少认证未被拦截。");
+        if((int)(await http.GetAsync(url+"read.txt")).StatusCode!=401)throw new Exception("缺少認證未被攔截。");
         http.DefaultRequestHeaders.Authorization=new System.Net.Http.Headers.AuthenticationHeaderValue("Basic",Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(server.Username+":"+server.Password)));
-        if(await http.GetStringAsync(url+"read.txt")!="hello")throw new Exception("WebDAV 读取错误。");
-        var put=await http.PutAsync(url+"write.txt",new StringContent("world"));if(!put.IsSuccessStatusCode||await File.ReadAllTextAsync(Path.Combine(root,"write.txt"))!="world")throw new Exception("WebDAV 写入错误。");
-        if((int)(await http.DeleteAsync(url)).StatusCode!=403)throw new Exception("允许删除挂载根目录。");
-        if((int)(await http.GetAsync(url+"..%2Foutside.txt")).StatusCode!=403)throw new Exception("路径穿越未被拦截。");
+        if(await http.GetStringAsync(url+"read.txt")!="hello")throw new Exception("WebDAV 讀取錯誤。");
+        var put=await http.PutAsync(url+"write.txt",new StringContent("world"));if(!put.IsSuccessStatusCode||await File.ReadAllTextAsync(Path.Combine(root,"write.txt"))!="world")throw new Exception("WebDAV 寫入錯誤。");
+        if((int)(await http.DeleteAsync(url)).StatusCode!=403)throw new Exception("允許刪除掛載根目錄。");
+        if((int)(await http.GetAsync(url+"..%2Foutside.txt")).StatusCode!=403)throw new Exception("路徑穿越未被攔截。");
         if(!OperatingSystem.IsWindows()){
             string outside=Path.Combine(Path.GetTempPath(),"safe-code-outside-"+Guid.NewGuid().ToString("N"));await File.WriteAllTextAsync(outside,"not-shared");File.CreateSymbolicLink(Path.Combine(root,"link"),outside);
-            if((int)(await http.GetAsync(url+"link")).StatusCode!=403)throw new Exception("符号链接逃逸未被拦截。");File.Delete(outside);
+            if((int)(await http.GetAsync(url+"link")).StatusCode!=403)throw new Exception("符號連結逃逸未被攔截。");File.Delete(outside);
         }
         Console.WriteLine("WEBDAV_AUTH_READ_WRITE_TRAVERSAL_ROOT_PROTECTION_OK");
     }

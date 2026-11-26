@@ -3,7 +3,7 @@ $root=[Environment]::GetFolderPath('CommonApplicationData')+'\SafeCodeHostBridge
 $r=Get-Content -LiteralPath ($root+'\request.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $taskName='SafeCode-HostBridge'
 $existing=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if($existing -and $existing.State -eq 'Running'){throw '本机控制服务仍在使用，请先停用并等待结束。'}
+if($existing -and $existing.State -eq 'Running'){throw '本機控制服務仍在使用，請先停用並等待結束。'}
 $bin=$root+'\bin\OpenSSH-Win64'
 foreach($name in @('sshd.exe','sshd-auth.exe','sshd-session.exe','ssh-keygen.exe')) {
  $signature=Get-AuthenticodeSignature -LiteralPath ($bin+'\'+$name)

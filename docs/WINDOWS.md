@@ -1,38 +1,38 @@
 # Safe Code for Windows
 
-## 安装
+## 安裝
 
-运行发布页中的 `SafeCode-版本-Setup-x64.exe`。支持 Windows 10 2004（19041）及更新版本、Windows 11 x64。安装到当前用户的应用目录，默认创建桌面和开始菜单快捷方式。安装包自带 .NET 和 WebView2 离线运行时。[下载 Windows 安装包](https://github.com/Muchuaner/safe-code/releases)
+執行發佈頁中的 `SafeCode-版本-Setup-x64.exe`。支援 Windows 10 2004（19041）及更新版本、Windows 11 x64。安裝到當前用戶的應用目錄，預設建立桌面和開始選單捷徑。安裝包自帶 .NET 和 WebView2 離線執行階段。[下載 Windows 安裝包](https://github.com/Muchuaner/safe-code/releases)
 
-## 连接和部署
+## 連線和部署
 
-1. 填写 Ubuntu VPS 的 SSH 地址、端口和管理员登录信息。默认 SSH 端口为 22，也可以在「高级连接」修改。首次连接，或服务器重装后指纹变化时，请先核对指纹再确认。
-2. 部署要求 Ubuntu 22.04 或 24.04 x86_64、可用的 systemd，以及 root 或具备免密 sudo 的登录账户。建议至少 4 GB 内存和 8 GB 可用磁盘。
-3. 分别在「自定义」中保存工作账户与本地化配置，再选择组件并开始部署。安装任务在服务器上继续运行，客户端重新连接后可查看进度。
+1. 填寫 Ubuntu VPS 的 SSH 地址、連接埠和管理員登入資料。預設 SSH 連接埠為 22，也可以在「進階連線」修改。首次連線，或伺服器重新安裝後指紋變化時，請先核對指紋再確認。
+2. 部署要求 Ubuntu 22.04 或 24.04 x86_64、可用的 systemd，以及 root 或具備免密 sudo 的登入帳戶。建議至少 4 GB 記憶體和 8 GB 可用磁碟。
+3. 分別在「自訂」中儲存工作帳戶與本地化配置，再選擇組件並開始部署。安裝任務在伺服器上繼續執行，客戶端重新連線後可查看進度。
 
-在维护模式中可以管理工作账户、打开 SSH 终端、连接远程桌面或启动 CloudCLI。CloudCLI 首次打开时，请自行创建网页账户，并按需要用自己的账号登录 Claude Code。SSH 终端依赖 Windows OpenSSH Client，精简系统可在系统的可选功能中启用。
+在維護模式中可以管理工作帳戶、開啟 SSH 終端機、連線遠端桌面或啟動 CloudCLI。CloudCLI 首次開啟時，請自行建立網頁帳戶，並按需要用自己的帳號登入 Claude Code。SSH 終端機依賴 Windows OpenSSH Client，精簡系統可在系統的可選功能中啟用。
 
-登录资料按当前 Windows 账户加密保存。若在服务器端修改过 SSH 登录密码，回到主界面点击「更新登录密码」，验证同一服务器身份和新密码后，可恢复已配置的通道。
+登入資料按當前 Windows 帳戶加密儲存。若在伺服器端修改過 SSH 登入密碼，回到主介面點擊「更新登入密碼」，驗證同一伺服器身份和新密碼後，可恢復已配置的通道。
 
-## 远程桌面和目录挂载
+## 遠端桌面和目錄掛載
 
-远程桌面通过已验证的 SSH 隧道连接。可选择原始大小、等比缩放、动态分辨率或全屏。全屏时把鼠标移到顶部可打开工具栏，也可按 `Ctrl+Alt+Enter` 退出全屏。
+遠端桌面透過已驗證的 SSH 隧道連線。可選擇原始大小、等比縮放、動態解像度或全螢幕。全螢幕時把滑鼠移到頂部可開啟工具列，也可按 `Ctrl+Alt+Enter` 退出全螢幕。
 
-要把 Windows 截图贴进云桌面，先点云端文档或聊天输入框，在本机用 `Win+Shift+S` 截图，再点远程桌面工具栏的「粘贴本机图片」。按钮右侧的箭头可以为当前窗口开启「Ctrl+V 粘贴本机图片」，重新打开窗口时该选项默认关闭。文字、文件和富文本继续使用远程桌面的常规粘贴。
+要把 Windows 截圖貼進雲桌面，先點雲端文件或聊天輸入框，在本機用 `Win+Shift+S` 截圖，再點遠端桌面工具列的「貼上本機圖片」。按鈕右側的箭頭可以為當前視窗開啟「Ctrl+V 貼上本機圖片」，重新開啟視窗時該選項預設關閉。文字、檔案和富文本繼續使用遠端桌面的常規貼上。
 
-图片通过当前桌面的 SSH 连接交给 XFCE 剪贴板。程序优先提供本机已有的图片格式，Windows 截图只提供位图时会生成 PNG。接收应用选择它支持的格式，单次传输的各格式合计最多 32 MiB。
+圖片透過當前桌面的 SSH 連線交給 XFCE 剪貼板。程式優先提供本機已有的圖片格式，Windows 截圖只提供位圖時會生成 PNG。接收應用選擇它支援的格式，單次傳輸的各格式合計最多 32 MiB。
 
-目录挂载支持从本机选择文件夹，并在服务器端选择工作账户下的新目录或空目录。挂载使用 SSH 传输。服务器需预留足够的文件缓存空间，使用期间请保持 Safe Code 运行。退出前在托盘中选择「安全退出」，等待同步和卸载完成。
+目錄掛載支援從本機選擇資料夾，並在伺服器端選擇工作帳戶下的新目錄或空目錄。掛載使用 SSH 傳輸。伺服器需預留足夠的檔案快取空間，使用期間請保持 Safe Code 執行。退出前在系統匣中選擇「安全退出」，等待同步和卸載完成。
 
 ## Claude Desktop 接入
 
 
-通过 SSH 登录 VPS 后，在维护模式打开 Claude Desktop 的「网关设置」，点击「启用」，再进入「管理网关」创建 API Key。
+透過 SSH 登入 VPS 後，在維護模式開啟 Claude Desktop 的「網關設定」，點擊「啟用」，再進入「管理網關」建立 API Key。
 
-回到 Safe Code 主界面或登录页，在「API Key 接入」粘贴完整密钥，点击「验证并启用」。已保存的 Key 可以更换、重新启用或停用。首次接入或修改配置后，请完全退出并重新打开 Claude Desktop。聊天期间请保持 Safe Code 运行。[网关与 Key 使用说明](https://github.com/Muchuaner/safe-code/blob/main/tools/desktop-api/README.md)
+回到 Safe Code 主介面或登入頁，在「API Key 接入」貼上完整密鑰，點擊「驗證並啟用」。已儲存的 Key 可以更換、重新啟用或停用。首次接入或修改配置後，請完全退出並重新開啟 Claude Desktop。聊天期間請保持 Safe Code 執行。[網關與 Key 使用說明](https://github.com/Muchuaner/safe-code/blob/main/tools/desktop-api/README.md)
 
-如果 Windows 拒绝写入 Claude Desktop 的当前用户策略，请先安全退出 Safe Code，再用同一个 Windows 账户右键 Safe Code，选择「以管理员身份运行」后重试。若电脑由组织管理，请联系管理员确认策略权限。
+如果 Windows 拒絕寫入 Claude Desktop 的當前用戶策略，請先安全退出 Safe Code，再用同一個 Windows 帳戶右鍵 Safe Code，選擇「以管理員身份執行」後重試。若電腦由組織管理，請聯繫管理員確認策略權限。
 
-## 更新和反馈
+## 更新和回饋
 
-打开「更新与反馈」可检查版本、提交反馈，以及选择是否启用基础使用统计和匿名功能诊断。这两项默认关闭。[在线更新](https://github.com/Muchuaner/safe-code/blob/main/docs/UPDATES.md) · [匿名功能诊断](https://github.com/Muchuaner/safe-code/blob/main/docs/DIAGNOSTICS.md)
+開啟「更新與回饋」可檢查版本、提交回饋，以及選擇是否啟用基礎使用統計和匿名功能診斷。這兩項預設關閉。[網上更新](https://github.com/Muchuaner/safe-code/blob/main/docs/UPDATES.md) · [匿名功能診斷](https://github.com/Muchuaner/safe-code/blob/main/docs/DIAGNOSTICS.md)

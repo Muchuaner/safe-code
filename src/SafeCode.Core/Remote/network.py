@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe Code 独立 IPv4 出入口策略。仅管理专用 nft 表与自己的默认路由首选源。"""
+"""Safe Code 獨立 IPv4 出入口策略。僅管理專用 nft 表與自己的預設路由首選源。"""
 import contextlib,fcntl,functools,ipaddress,json,os,re,secrets,shlex,subprocess,sys,time
 from pathlib import Path
 ROOT=Path('/var/lib/safe-code')
@@ -38,7 +38,7 @@ def assigned():
 
 def route():
     lines=run(['ip','-4','route','show','default']).stdout.strip().splitlines()
-    if len(lines)!=1:raise PolicyError('invalid_argument','当前网络有多个或没有默认路由，请先由管理员确认网络配置。')
+    if len(lines)!=1:raise PolicyError('invalid_argument','當前網絡有多個或沒有預設路由，請先由管理員確認網絡配置。')
     tokens=shlex.split(lines[0]);data=json.loads(run(['ip','-j','-4','route','show','default']).stdout)[0]
     return {'tokens':tokens,'dev':data.get('dev',''),'source':data.get('prefsrc','')}
 
@@ -47,7 +47,7 @@ def existing_table():
     if p.returncode:return None
     objects=json.loads(p.stdout).get('nftables',[])
     table=next((x['table'] for x in objects if 'table' in x),{})
-    if table.get('comment')!=MARKER:raise PolicyError('operation_failed','同名防火墙表并非本软件创建，拒绝覆盖。')
+    if table.get('comment')!=MARKER:raise PolicyError('operation_failed','同名防火牆表並非本軟件建立，拒絕覆蓋。')
     return run(['nft','list','table','inet',TABLE]).stdout
 
 def rules(policy):
@@ -80,7 +80,7 @@ def rules(policy):
 
 def snapshot():
     unit=Path('/etc/systemd/system')/SERVICE
-    if unit.exists() and 'Safe Code assigned IP policy' not in unit.read_text():raise PolicyError('operation_failed','同名启动服务并非本软件创建。')
+    if unit.exists() and 'Safe Code assigned IP policy' not in unit.read_text():raise PolicyError('operation_failed','同名啟動服務並非本軟件建立。')
     return {'route':route(),'table':existing_table(),'policy':json.loads((ROOT/'ip-policy.json').read_text()) if (ROOT/'ip-policy.json').exists() else None,
             'unit':unit.read_text() if unit.exists() else None,'enabled':run(['systemctl','is-enabled',SERVICE],False).stdout.strip()=='enabled',
             'module':Path('/opt/safe-code/network.py').read_text() if Path('/opt/safe-code/network.py').exists() else None}
@@ -97,14 +97,14 @@ def healthy(policy):
 
 def valid_policy(options):
     try:ingress=str(ipaddress.IPv4Address(options.get('ingressIp','')));egress=str(ipaddress.IPv4Address(options.get('egressIp','')))
-    except (TypeError,ValueError):raise PolicyError('invalid_argument','入口和出口 IP 格式无效，请重新选择。')
+    except (TypeError,ValueError):raise PolicyError('invalid_argument','入口和出口 IP 格式無效，請重新選擇。')
     addresses=assigned()
-    if ingress not in addresses or egress not in addresses:raise PolicyError('invalid_argument','入口和出口 IP 必须已由服务商分配并绑定到本机，不能只填入一个未分配的地址。')
+    if ingress not in addresses or egress not in addresses:raise PolicyError('invalid_argument','入口和出口 IP 必須已由服務商分配並綁定到本機，不能只填入一個未分配的地址。')
     try:port=int(options.get('sshPort',22))
-    except (TypeError,ValueError):raise PolicyError('invalid_argument','SSH 端口无效。')
-    if not 1<=port<=65535:raise PolicyError('invalid_argument','SSH 端口无效。')
+    except (TypeError,ValueError):raise PolicyError('invalid_argument','SSH 連接埠無效。')
+    if not 1<=port<=65535:raise PolicyError('invalid_argument','SSH 連接埠無效。')
     r=route()
-    if addresses[egress]!=r['dev']:raise PolicyError('invalid_argument','出口与默认路由不在同一网卡，本版本拒绝自动修改此类多网卡网络。')
+    if addresses[egress]!=r['dev']:raise PolicyError('invalid_argument','出口與預設路由不在同一網卡，本版本拒絕自動修改此類多網卡網絡。')
     return {'ingressIp':ingress,'egressIp':egress,'lockIngress':bool(options.get('lockIngress')),'lockEgress':bool(options.get('lockEgress')),'sshPort':port}
 
 def replace_source(policy,baseline):
@@ -123,15 +123,15 @@ def apply_rules(policy):
 
 @serialized
 def prepare(options):
-    if not Path('/usr/sbin/nft').exists():raise PolicyError('operation_failed','请先安装 nftables 组件。')
-    if (ROOT/'socks-egress.json').exists():raise PolicyError('deployment_busy','请先停用开发模式的 SOCKS5 出口。')
+    if not Path('/usr/sbin/nft').exists():raise PolicyError('operation_failed','請先安裝 nftables 組件。')
+    if (ROOT/'socks-egress.json').exists():raise PolicyError('deployment_busy','請先停用開發模式的 SOCKS5 出口。')
     policy=valid_policy(options)
     for pending in ROOT.glob('ip-pending-*.json'):
         record=json.loads(pending.read_text())
-        # 准备后未应用的记录没有触碰路由，也不会创建回退计时器。
-        # 客户端中断或旧版本异常留下的此类记录，十分钟后可安全清理。
+        # 準備後未應用的記錄沒有觸碰路由，也不會建立回退計時器。
+        # 客戶端中斷或舊版本異常留下的此類記錄，十分鐘後可安全清理。
         if not record.get('applied') and time.time()-record.get('created',time.time())>600:pending.unlink()
-        else:raise PolicyError('deployment_busy','已有网络变更正在验证，请等待完成；已应用的变更受独立自动回退保护。')
+        else:raise PolicyError('deployment_busy','已有網絡變更正在驗證，請等待完成；已應用的變更受獨立自動回退保護。')
     token=secrets.token_hex(12)
     before=snapshot()
     save(ROOT/('ip-pending-'+token+'.json'),{'policy':policy,'before':before,'created':time.time()})
@@ -139,15 +139,15 @@ def prepare(options):
     return {'token':token,'policy':policy}
 
 def load_pending(token):
-    if not re.fullmatch('[a-f0-9]{24}',token):raise PolicyError('invalid_argument','网络变更标识无效。')
+    if not re.fullmatch('[a-f0-9]{24}',token):raise PolicyError('invalid_argument','網絡變更標識無效。')
     path=ROOT/('ip-pending-'+token+'.json')
-    if not path.exists():raise PolicyError('invalid_argument','网络变更已过期或已回退，请重新检查。')
+    if not path.exists():raise PolicyError('invalid_argument','網絡變更已過期或已回退，請重新檢查。')
     return path,json.loads(path.read_text())
 
 @serialized
 def schedule_apply(token):
     path,record=load_pending(token)
-    if record.get('scheduled') or record.get('applied'):raise PolicyError('deployment_busy','此网络变更已经启动，请勿重复提交。')
+    if record.get('scheduled') or record.get('applied'):raise PolicyError('deployment_busy','此網絡變更已經啟動，請勿重複提交。')
     target=Path('/opt/safe-code/network-apply-'+token+'.py');save(target,Path(__file__).read_text());target.chmod(0o700)
     record['scheduled']=True;save(path,record)
     try:run(['systemd-run','--quiet','--unit=safe-code-ip-apply-'+token,'--on-active=1s','/usr/bin/python3',str(target),'apply',token])
@@ -162,7 +162,7 @@ def status(token):
 @serialized
 def apply(token):
     path,record=load_pending(token);policy=valid_policy(record['policy'])
-    # 回退脚本保存在本机 root 管理目录，不依赖 SSH 会话存活。
+    # 回退腳本儲存在本機 root 管理目錄，不依賴 SSH 會話存活。
     target=Path('/opt/safe-code/network-rollback-'+token+'.py');save(target,Path(__file__).read_text());target.chmod(0o700)
     unit='safe-code-ip-rollback-'+token
     run(['systemd-run','--quiet','--unit='+unit,'--on-active=120s','/usr/bin/python3',str(target),'rollback',token])
@@ -186,7 +186,7 @@ def _rollback(token):
     now=existing_table();batch='delete table inet '+TABLE+'\n' if now is not None else ''
     if before.get('table'):batch+=before['table']
     if batch:run(['nft','--file','-'],stdin=batch)
-    # 提交持久化失败时，运行时和下次启动的设置必须一起恢复。
+    # 提交持久化失敗時，執行階段和下次啟動的設定必須一起恢復。
     if record.get('persisting'):
         policy_path=ROOT/'ip-policy.json';unit_path=Path('/etc/systemd/system')/SERVICE
         if before.get('policy') is None:policy_path.unlink(missing_ok=True)
@@ -209,18 +209,18 @@ def _rollback(token):
 @serialized
 def commit(token):
     path,record=load_pending(token)
-    if not record.get('ready',record.get('applied')):raise PolicyError('deployment_busy','网络策略尚未应用。')
+    if not record.get('ready',record.get('applied')):raise PolicyError('deployment_busy','網絡策略尚未應用。')
     policy=valid_policy(record['policy'])
     probe=run(['curl','--noproxy','*','-4','-fsS','--connect-timeout','5','--max-time','12','https://api.ipify.org'],False)
     try:actual=str(ipaddress.IPv4Address(probe.stdout.strip())) if probe.returncode==0 else ''
     except ValueError:actual=''
     if policy.get('lockEgress'):
-        if not actual:raise PolicyError('operation_failed','新入口 SSH 已连通，但未能从外部确认出口 IP，将回退。请检查服务器的外网连接。')
-        if actual!=policy['egressIp']:raise PolicyError('operation_failed','出口验证未通过：外部看到的 IP 与所选住宅出口不一致，将自动回退。')
+        if not actual:raise PolicyError('operation_failed','新入口 SSH 已連通，但未能從外部確認出口 IP，將回退。請檢查伺服器的外網連線。')
+        if actual!=policy['egressIp']:raise PolicyError('operation_failed','出口驗證未通過：外部看到的 IP 與所選住宅出口不一致，將自動回退。')
     unit='''[Unit]\nDescription=Safe Code assigned IP policy\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/python3 /opt/safe-code/network.py boot\n[Install]\nWantedBy=multi-user.target\n'''
     unit_path=Path('/etc/systemd/system/safe-code-ip-policy.service')
-    if unit_path.exists() and 'Safe Code assigned IP policy' not in unit_path.read_text():raise PolicyError('operation_failed','同名启动服务并非本软件创建。')
-    # 记录持久化已开始，回退才能恢复旧策略、模块和服务状态。
+    if unit_path.exists() and 'Safe Code assigned IP policy' not in unit_path.read_text():raise PolicyError('operation_failed','同名啟動服務並非本軟件建立。')
+    # 記錄持久化已開始，回退才能恢復舊策略、模組和服務狀態。
     record['persisting']=True;save(path,record)
     try:
         save('/opt/safe-code/network.py',Path(__file__).read_text());Path('/opt/safe-code/network.py').chmod(0o700)
@@ -236,13 +236,13 @@ def commit(token):
 @serialized
 def boot():
     policy=json.loads((ROOT/'ip-policy.json').read_text())
-    # 即使住宅地址在开机时缺失，也先加载阻断规则，不能静默回退到其他出口。
+    # 即使住宅地址在開機時缺失，也先載入阻斷規則，不能靜默回退到其他出口。
     apply_rules(policy)
     valid_policy(policy)
     replace_source(policy,json.loads((ROOT/'ip-baseline.json').read_text()))
 
 if __name__=='__main__':
-    if os.geteuid()!=0:raise SystemExit('需要 root 权限。')
+    if os.geteuid()!=0:raise SystemExit('需要 root 權限。')
     if sys.argv[1]=='rollback':print(json.dumps(rollback(sys.argv[2])))
     elif sys.argv[1]=='apply':print(json.dumps(apply(sys.argv[2])),flush=True)
     elif sys.argv[1]=='status':print(json.dumps(status(sys.argv[2])),flush=True)

@@ -22,15 +22,15 @@ class FeedbackTests(unittest.TestCase):
         event=self.usage();event['password']='must-not-store';self.assertEqual(self.post('/v1/usage',event),400)
         with self.store.connect() as db:self.assertEqual(db.execute('SELECT count(*) FROM usage').fetchone()[0],0)
     def test_feedback_independent_from_telemetry_and_rate_limited(self):
-        for i in range(5):self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='0.4.0',message='测试反馈文字')),202)
-        self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='0.4.0',message='测试反馈文字')),429)
+        for i in range(5):self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='0.4.0',message='測試回饋文字')),202)
+        self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='0.4.0',message='測試回饋文字')),429)
         self.assertEqual(self.post('/v1/usage',self.usage()),202)
     def test_admin_not_public_and_size_limit(self):
         self.assertEqual(self.post('/admin',{}),404)
         self.assertEqual(self.post('/v1/feedback',{'message':'x'*40000}),413)
-        self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId='bad',version='0.4.0',message='测试反馈文字')),400)
+        self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId='bad',version='0.4.0',message='測試回饋文字')),400)
     def test_full_chinese_feedback_escaped_json(self):
-        self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='0.4.0',message='测'*4000)),202)
+        self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='0.4.0',message='測'*4000)),202)
     def test_beta_version(self):
         event=self.usage();event['version']='Beta-0.4.3.1';self.assertEqual(self.post('/v1/usage',event),202)
         self.assertEqual(self.post('/v1/feedback',dict(schema=1,eventId=str(uuid.uuid4()),version='Beta-0.4.3.1',message='Beta test feedback')),202)
@@ -44,7 +44,7 @@ class FeedbackTests(unittest.TestCase):
         return event
     def test_v2_correlation_feedback_and_legacy_coexist(self):
         event=self.diagnostic_v2();self.assertEqual(self.post('/v1/diagnostics',event),202)
-        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='最近一次操作失败',context=dict(correlation=event['context'],report=event['report']))
+        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='最近一次操作失敗',context=dict(correlation=event['context'],report=event['report']))
         self.assertEqual(self.post('/v1/feedback',feedback),202)
         self.assertEqual(self.post('/v1/diagnostics',self.diagnostic()),202)
         with self.store.connect() as db:
@@ -65,7 +65,7 @@ class FeedbackTests(unittest.TestCase):
                                             sseError=True,anthropicError='invalid_request_error',
                                             anthropicRequestId='req_Fixture1234'))
         self.assertEqual(self.post('/v1/diagnostics',event),202)
-        feedback=dict(schema=3,eventId=str(uuid.uuid4()),version=event['version'],message='网关回复失败',
+        feedback=dict(schema=3,eventId=str(uuid.uuid4()),version=event['version'],message='網關回復失敗',
                       context=dict(correlation=event['context'],report=event['report']))
         self.assertEqual(self.post('/v1/feedback',feedback),202)
         for flag in ('--diagnostics','--feedback'):
@@ -83,7 +83,7 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(self.post('/v1/diagnostics',gateway),202)
         relay=self.diagnostic_v2();relay['report'].update(operation='desktop_key_request',errorKind='gateway_upstream_failed',stage='started',signals=[])
         self.assertEqual(self.post('/v1/diagnostics',relay),202)
-        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=relay['version'],message='本机接入请求失败',
+        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=relay['version'],message='本機接入請求失敗',
                       context=dict(correlation=relay['context'],report=relay['report']))
         self.assertEqual(self.post('/v1/feedback',feedback),202)
         download=self.diagnostic_v2()
@@ -130,12 +130,12 @@ class FeedbackTests(unittest.TestCase):
             elif mutation=='stage':event['report']['stage']='private path'
             elif mutation=='raw':event['report']['message']='secret'
             else:
-                event=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='用户主动描述',context=dict(correlation=event['context'],report=event['report'],logs='secret'));path='/v1/feedback'
+                event=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='用戶主動描述',context=dict(correlation=event['context'],report=event['report'],logs='secret'));path='/v1/feedback'
             self.assertEqual(self.post(path,event),400)
         with self.store.connect() as db:self.assertEqual(db.execute('SELECT count(*) FROM report_context').fetchone()[0],0)
     def test_report_queries_correlated_issue_and_full_summary(self):
         event=self.diagnostic_v2();self.store.insert('diagnostics',event)
-        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='最近一次操作失败',context=dict(correlation=event['context'],report=event['report']))
+        feedback=dict(schema=2,eventId=str(uuid.uuid4()),version=event['version'],message='最近一次操作失敗',context=dict(correlation=event['context'],report=event['report']))
         self.store.insert('feedback',feedback)
         def report(*args):return json.loads(subprocess.check_output([sys.executable,str(Path(__file__).with_name('report.py')),self.store.path,*args],text=True))
         self.assertEqual(report('--feedback','--issue',event['eventId'])[0]['event_id'],feedback['eventId'])

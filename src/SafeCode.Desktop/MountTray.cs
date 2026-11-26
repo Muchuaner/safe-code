@@ -101,6 +101,6 @@ internal sealed class MountTray : IDisposable
     }
     public void SetExiting(bool value){exiting=value;if(panel.IsVisible)_=Script("document.getElementById('quit').disabled="+(exiting?"true":"false"));}
     public void Open(){if(disposed)return;dismissTimer.Stop();Position();panel.Show();panel.Activate();Render(true);}
-    public void NotifyHidden()=>icon.ShowBalloonTip(2000,"Safe Code","已转入托盘，后台任务继续运行。",Forms.ToolTipIcon.Info);
+    public void NotifyHidden()=>icon.ShowBalloonTip(2000,"Safe Code","已轉入系統匣，背景任務繼續執行。",Forms.ToolTipIcon.Info);
     public void Dispose(){disposed=true;timer.Stop();dismissTimer.Stop();icon.Visible=false;icon.Dispose();appIcon.Dispose();panel.Close();view.Dispose();}
 }

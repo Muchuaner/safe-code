@@ -48,7 +48,7 @@ with sync_playwright() as p:
     toggle.uncheck();page.wait_for_function('window.diagnosticConsentCalls.length===2')
     assert page.evaluate('window.diagnosticConsentCalls')==[True,False]
     assert not page.locator('#diagnostics-consent').is_checked()
-    assert '不发送原始日志' in page.locator('#services-dialog').inner_text()
+    assert '不傳送原始日誌' in page.locator('#services-dialog').inner_text()
     page.locator('#feedback-send').scroll_into_view_if_needed()
     bounds=page.locator('#feedback-send').bounding_box()
     assert bounds and 0<=bounds['y'] and bounds['y']+bounds['height']<=536, 'Feedback became inaccessible in small window'

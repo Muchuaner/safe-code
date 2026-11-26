@@ -13,7 +13,7 @@ public sealed class WindowsClients : IDisposable
     public async Task OpenDesktopAsync(SshSession session,CancellationToken ct,DesktopResolution? resolution=null)=>await LaunchDesktopAsync(session,ct,resolution);
     private async Task<RdpDesktop> LaunchDesktopAsync(SshSession session,CancellationToken ct,DesktopResolution? resolution=null)
     {
-        if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
+        if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("請先安裝虛擬桌面。");
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         var connection=await session.PrepareRemoteDesktopAsync(account.Username,false,ct);
         var window=new RdpDesktop(resolution,ResizePreferences,DisplayOperationCompleted,session.BindDesktopImagePaste(account.Username,connection.Port));desktops.Add(window);
@@ -30,7 +30,7 @@ public sealed class WindowsClients : IDisposable
         var before=await session.RequestAsync<System.Text.Json.JsonElement>("desktop_login_probe",null,ct);
         long offset=before.GetProperty("offset").GetInt64();
         using var desktop=await LaunchDesktopAsync(session,ct);
-        try{for(int i=0;i<30;i++){await Task.Delay(1000,ct);var state=await session.RequestAsync<System.Text.Json.JsonElement>("desktop_login_probe",new{offset},ct);if(state.GetProperty("loggedIn").GetBoolean())return true;}throw new IOException("远程桌面未在 30 秒内完成自动登录。");}
+        try{for(int i=0;i<30;i++){await Task.Delay(1000,ct);var state=await session.RequestAsync<System.Text.Json.JsonElement>("desktop_login_probe",new{offset},ct);if(state.GetProperty("loggedIn").GetBoolean())return true;}throw new IOException("遠端桌面未在 30 秒內完成自動登入。");}
         finally{desktop.Close();}
     }
     private static string NativeSshPath()
@@ -41,7 +41,7 @@ public sealed class WindowsClients : IDisposable
     private static string[] SshOptions(SshSession session,string username,bool interactive)
     {
         string config=Path.Combine(Path.GetDirectoryName(session.KnownHostsPath)!,"ssh-client-config");
-        File.WriteAllText(config,"# Safe Code 单次连接不加载用户的通配主机配置。\n");
+        File.WriteAllText(config,"# Safe Code 單次連線不載入用戶的通配主機配置。\n");
         return [interactive?"-t":"-T","-F",config,"-i",session.KeyPath,"-p",session.Port.ToString(),"-o","BatchMode=yes","-o","ForwardAgent=no","-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o",SshClientOptions.UserKnownHostsFile(session.KnownHostsPath),username+"@"+session.Host];
     }
     public async Task<bool> VerifyNativeSshAsync(SshSession session,CancellationToken ct)
@@ -50,30 +50,30 @@ public sealed class WindowsClients : IDisposable
         var start=new ProcessStartInfo(NativeSshPath()){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
         foreach(string arg in SshOptions(session,account.Username,false))start.ArgumentList.Add(arg);
         start.ArgumentList.Add("test -x .local/bin/safe-code-terminal && printf SAFE_CODE_NATIVE_SSH_OK");
-        using var process=Process.Start(start)??throw new IOException("无法启动 OpenSSH 客户端。");
+        using var process=Process.Start(start)??throw new IOException("無法啟動 OpenSSH 客戶端。");
         var output=process.StandardOutput.ReadToEndAsync(ct);var error=process.StandardError.ReadToEndAsync(ct);
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(30));
         try{await process.WaitForExitAsync(timeout.Token);}catch{if(!process.HasExited)process.Kill(true);throw;}
-        if(process.ExitCode!=0||!(await output).Contains("SAFE_CODE_NATIVE_SSH_OK"))throw new IOException("Windows OpenSSH 验证失败："+await error);
+        if(process.ExitCode!=0||!(await output).Contains("SAFE_CODE_NATIVE_SSH_OK"))throw new IOException("Windows OpenSSH 驗證失敗："+await error);
         return true;
     }
     public async Task OpenTerminalAsync(SshSession session, CancellationToken ct)
     {
-        if (session.Server?.Statuses.GetValueOrDefault("account") != true) throw new InvalidOperationException("请先部署工作用户。");
+        if (session.Server?.Statuses.GetValueOrDefault("account") != true) throw new InvalidOperationException("請先部署工作用戶。");
         await session.DeployAsync("ssh", null, ct: ct); await session.VerifyWorkspaceKeyAsync(ct);
         var account = await session.RequestAsync<AccountInfo>("account_info", null, ct);
         string ssh=NativeSshPath();
         string[] args=[..SshOptions(session,account.Username,true),".local/bin/safe-code-terminal"];
         var start=new ProcessStartInfo(ssh){UseShellExecute=true};
         foreach(string arg in args)start.ArgumentList.Add(arg);
-        var process=Process.Start(start)??throw new IOException("无法打开 Windows 终端。");terminals.Add(process);
+        var process=Process.Start(start)??throw new IOException("無法開啟 Windows 終端機。");terminals.Add(process);
     }
     public static string OpenCodex()
     {
         try
         {
             Process.Start(new ProcessStartInfo("codex://") { UseShellExecute = true });
-            return "已请求打开 Codex 客户端。";
+            return "已請求開啟 Codex 客戶端。";
         }
         catch
         {
@@ -83,17 +83,17 @@ public sealed class WindowsClients : IDisposable
                 try
                 {
                     Process.Start(new ProcessStartInfo("explorer.exe", @"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App") { UseShellExecute = true });
-                    return "已请求打开 Codex 客户端。";
+                    return "已請求開啟 Codex 客戶端。";
                 }
                 catch { }
             }
-            throw new InvalidOperationException("未能打开 Codex，请先安装官方客户端，或从开始菜单启动。");
+            throw new InvalidOperationException("未能開啟 Codex，請先安裝官方客戶端，或從開始選單啟動。");
         }
     }
     public static void OpenUrl(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "https" && !(uri.Scheme == "http" && uri.IsLoopback)))
-            throw new InvalidOperationException("拒绝打开不受支持的地址。");
+            throw new InvalidOperationException("拒絕開啟不受支援的地址。");
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     }
     public void Dispose()

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Claude Desktop Messages API → 现有 VPS 桥接守护进程 → 原版 Claude Code。
+"""Claude Desktop Messages API → 現有 VPS 橋接守護進程 → 原版 Claude Code。
 
-模型请求由远端 claude 进程发出。桥接服务不读取上游模型密钥。
-状态、会话及正文只在工作用户范围内；HTTP 仅回环监听，需独立随机 token。
+模型請求由遠端 claude 進程發出。橋接服務不讀取上游模型密鑰。
+狀態、會話及正文只在工作用戶範圍內；HTTP 僅迴環監聽，需獨立隨機 token。
 """
 import argparse
 import base64
@@ -43,7 +43,7 @@ MAX_REQUEST = 8 * 1024 * 1024
 MAX_MESSAGES_REQUEST = 16 * 1024 * 1024
 MAX_CLOUDCLI_STREAM = 32 * 1024 * 1024
 CLOUDCLI_SSE_PING_INTERVAL = 15
-API_ONLY_TURN_RUNNING = '上一轮仍在 CloudCLI 中执行。请等待完成后在本对话重试；如需立即停止，请在 CloudCLI 中停止上一轮。'
+API_ONLY_TURN_RUNNING = '上一輪仍在 CloudCLI 中執行。請等待完成後在本對話重試；如需立即停止，請在 CloudCLI 中停止上一輪。'
 CLOUDCLI_PROGRESS_TIMEOUT = 120
 CLOUDCLI_TURN_LIMIT = 30 * 60
 CLOUDCLI_HISTORY_LIMIT = 4 * 1024 * 1024
@@ -230,7 +230,7 @@ class GatewayError(Exception):
 CLOUDCLI_CONFIG = Path('.config/safe-code/cloudcli-gateway.json')
 DEFAULT_CLOUDCLI_PROJECT = Path('.local/share/safe-code/cloudcli-workspace')
 DEFAULT_CLOUDCLI_MODELS = ('claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5')
-CLOUDCLI_REQUIRED = '请先在当前 VPS 配置 CloudCLI 后端。Safe Code 的 Claude Desktop 接入需要 CloudCLI。'
+CLOUDCLI_REQUIRED = '請先在當前 VPS 配置 CloudCLI 後端。Safe Code 的 Claude Desktop 接入需要 CloudCLI。'
 CLOUDCLI_MCP_SCRIPT = '/opt/safe-code/desktop-api/host_control_mcp.py'
 CLOUDCLI_SESSION_ID = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}')
 CLOUDCLI_ERROR_STATUS = {400, 401, 402, 403, 404, 409, 413, 422, 429, 500, 502, 503, 504, 529}
@@ -283,7 +283,7 @@ def require_cloudcli_config():
     try:
         config = load_cloudcli_config()
     except GatewayError:
-        raise GatewayError('VPS 上的 CloudCLI 配置无效，请检查工作账户的网关配置。', 503) from None
+        raise GatewayError('VPS 上的 CloudCLI 配置無效，請檢查工作帳戶的網關配置。', 503) from None
     if config is None:
         raise GatewayError(CLOUDCLI_REQUIRED, 503)
     return config
@@ -296,12 +296,12 @@ def verify_cloudcli_agent(config):
             conn.request('POST', '/api/agent', b'{}', {'Content-Type': 'application/json', 'x-api-key': config['apiKey']})
             with conn.getresponse() as response:
                 if response.status in (401, 403):
-                    raise GatewayError('CloudCLI 拒绝了网关使用的 API Key，请检查 CloudCLI 的密钥设置。', 503)
+                    raise GatewayError('CloudCLI 拒絕了網關使用的 API Key，請檢查 CloudCLI 的密鑰設定。', 503)
                 if response.status == 400 and json.loads(response.read(4096)).get('error') == 'Either githubUrl or projectPath is required':
                     return
     except (OSError, HTTPException, ValueError, AttributeError):
         pass
-    raise GatewayError('无法验证 VPS 上的 CloudCLI Agent API，请检查 CloudCLI 是否已安装并运行。', 503)
+    raise GatewayError('無法驗證 VPS 上的 CloudCLI Agent API，請檢查 CloudCLI 是否已安裝並執行。', 503)
 
 
 def cloudcli_web_origin(origin):
@@ -399,7 +399,7 @@ def valid_mac_workspace(value):
 
 
 class StreamMessage:
-    """保留 CLI 流中的真实部分响应，以正确处理 max_tokens 截断。"""
+    """保留 CLI 流中的真實部分響應，以正確處理 max_tokens 截斷。"""
     def __init__(self):
         self.content={};self.json_parts={};self.stop=None
         self.started = False
@@ -436,7 +436,7 @@ def blocks(value):
 
 
 def normalized(messages):
-    """忽略缓存提示及文本分块差异，不丢失角色、工具 ID、工具参数和图片。"""
+    """忽略快取提示及文本分塊差異，不丟失角色、工具 ID、工具參數和圖片。"""
     out = []
     for message in messages:
         content = []
@@ -487,7 +487,7 @@ def validate_request(data):
     choice = data.get('tool_choice', {}).get('type', 'auto')
     if choice not in ('auto', 'none'):
         raise GatewayError('Forced tool selection is not supported by this CLI bridge', 400)
-    # CLI 没有等价的采样/停止序列控制，拒绝而非悄悄改变其语义。
+    # CLI 沒有等價的採樣/停止序列控制，拒絕而非悄悄改變其語義。
     if data.get('stop_sequences') or data.get('temperature') not in (None, 1) or data.get('top_k') is not None or data.get('top_p') is not None:
         raise GatewayError('Sampling overrides and stop sequences are not supported by this CLI bridge', 400)
     maximum = data.get('max_tokens')
@@ -507,7 +507,7 @@ def desktop_title(messages):
             title = ' '.join(''.join(c if c.isprintable() else ' ' for c in text).split())
             if title:
                 return title if len(title) <= 64 else title[:63]+'…'
-    return '附件对话'
+    return '附件對話'
 
 
 def desktop_project():
@@ -1111,10 +1111,10 @@ class CloudCliApproval:
                     or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', tool)
                     or len(json.dumps(original, ensure_ascii=False).encode()) > 24000):
                 return None
-            question = {'question': '是否允许 CloudCLI 执行上面显示的这一次操作？',
-                        'header': '远端授权', 'multiSelect': False, 'options': [
-                            {'label': '允许一次', 'description': '由 CloudCLI 执行这一项操作'},
-                            {'label': '拒绝', 'description': '拒绝这一项操作'},
+            question = {'question': '是否允許 CloudCLI 執行上面顯示的這一次操作？',
+                        'header': '遠端授權', 'multiSelect': False, 'options': [
+                            {'label': '允許一次', 'description': '由 CloudCLI 執行這一項操作'},
+                            {'label': '拒絕', 'description': '拒絕這一項操作'},
                         ]}
             fields = {'type': 'tool_use', 'id': 'toolu_'+uuid.uuid4().hex, 'name': 'AskUserQuestion',
                       'input': {'questions': [question]}}
@@ -1199,9 +1199,9 @@ class CloudCliApproval:
             raise CloudCliError('Claude Desktop returned an empty or oversized answer', 400)
         if self.upstream_tool is not None:
             selected = answers[questions[0]]
-            if selected == '允许一次':
+            if selected == '允許一次':
                 return {**decision, 'allow': True, 'updatedInput': self.original}
-            if selected == '拒绝':
+            if selected == '拒絕':
                 return {**decision, 'message': 'The user denied this tool request in Claude Desktop.'}
             raise CloudCliError('Choose Allow once or Deny for this CloudCLI tool request', 400)
         return {**decision, 'allow': True, 'updatedInput': {**self.original, 'answers': answers}}
@@ -1266,7 +1266,7 @@ class CloudCliProgress:
         self.tools = {}
         self.tool_failures = set()
         self.device_command = shlex.split(device['command']) if device else ()
-        self.device_name = 'Windows' if device and device['platform'] == 'windows' else '本机设备'
+        self.device_name = 'Windows' if device and device['platform'] == 'windows' else '本機裝置'
         self.device_tools = {}
         self.device_failure = False
         self.device_retry_reported = False
@@ -1320,7 +1320,7 @@ class CloudCliProgress:
         if used + len(body) > limit:
             if used <= limit:
                 self.notice_chars[interactive] = limit + 1
-                self.write('\n\n> **SafeCode** · 后续活动超出显示上限，可在 CloudCLI 查看。\n\n')
+                self.write('\n\n> **SafeCode** · 後續活動超出顯示上限，可在 CloudCLI 查看。\n\n')
             return
         self.notice_chars[interactive] += len(body)
         self.write(body+'\n\n')
@@ -1338,8 +1338,8 @@ class CloudCliProgress:
 
     def open_session(self):
         if self.web_origin and self.session:
-            return f'[打开 CloudCLI 原会话]({self.web_origin}/session/{self.session})'
-        return f'打开 CloudCLI 会话 `{self.session}`' if self.session else '打开 CloudCLI 原会话'
+            return f'[開啟 CloudCLI 原會話]({self.web_origin}/session/{self.session})'
+        return f'開啟 CloudCLI 會話 `{self.session}`' if self.session else '開啟 CloudCLI 原會話'
 
     def question(self, data, source, action=None):
         questions = data.get('questions') if isinstance(data, dict) else None
@@ -1349,7 +1349,7 @@ class CloudCliProgress:
         for question in questions:
             if not isinstance(question, dict) or not isinstance(question.get('question'), str):
                 continue
-            mode = '多选' if question.get('multiSelect') is True else '单选'
+            mode = '多選' if question.get('multiSelect') is True else '單選'
             header = question.get('header')
             heading = self.preview(header, 120) if isinstance(header, str) else ''
             lines = [f'{heading}（{mode}）', self.preview(question['question'], 1600)]
@@ -1363,7 +1363,7 @@ class CloudCliProgress:
                     if isinstance(description, str) and description:
                         line += ' — '+self.preview(description, 640)
                     lines.append(line)
-            lines.append('其他：可在 CloudCLI 输入自定义答案。')
+            lines.append('其他：可在 CloudCLI 輸入自訂答案。')
             details.append('\n'.join(lines))
         if not details:
             return
@@ -1374,8 +1374,8 @@ class CloudCliProgress:
             return
         self.questions[fingerprint] = source
         for output in details:
-            self.notice('Claude 提出了选择题', output,
-                        action=action or self.open_session()+'查看题目并处理待答选项。')
+            self.notice('Claude 提出了選擇題', output,
+                        action=action or self.open_session()+'查看題目並處理待答選項。')
 
     @staticmethod
     def preview(text, length):
@@ -1393,13 +1393,13 @@ class CloudCliProgress:
             data = event.get('input')
             if tool == 'AskUserQuestion':
                 self.question(data, kind)
-            detail = self.fields(data, {'description': '说明', 'command': '命令', 'plan': '计划',
-                                        'file_path': '文件', 'message': '消息', 'url': '网址'})
-            waiting = '等待回答' if tool == 'AskUserQuestion' else '等待授权'
-            self.notice(f'`{tool}` {waiting}', detail, action=self.open_session()+'处理此请求。')
+            detail = self.fields(data, {'description': '說明', 'command': '命令', 'plan': '計劃',
+                                        'file_path': '檔案', 'message': '消息', 'url': '網址'})
+            waiting = '等待回答' if tool == 'AskUserQuestion' else '等待授權'
+            self.notice(f'`{tool}` {waiting}', detail, action=self.open_session()+'處理此請求。')
             return
         tool = self.permissions.pop(request, 'CloudCLI')
-        title = '已收到处理结果' if kind == 'permission_resolved' else '等待已取消'
+        title = '已收到處理結果' if kind == 'permission_resolved' else '等待已取消'
         self.notice(f'`{tool}` {title}', event.get('reason'))
 
     def task(self, event):
@@ -1411,20 +1411,20 @@ class CloudCliProgress:
     def activity(self):
         if not self.activity_reported:
             self.activity_reported = True
-            self.notice('正在执行工具操作')
+            self.notice('正在執行工具操作')
 
     def summarize_activity(self):
         if not self.activity_reported:
             return
         summary = []
         if self.tools:
-            summary.append(f'工具调用 {len(self.tools)} 次')
+            summary.append(f'工具調用 {len(self.tools)} 次')
         if self.tasks:
-            summary.append(f'后台任务 {len(self.tasks)} 项')
+            summary.append(f'背景任務 {len(self.tasks)} 項')
         failed = len(self.tool_failures) + sum(status == 'failed' for status in self.tasks.values())
         if failed:
-            summary.append(f'其中 {failed} 项操作未成功')
-        summary.append(self.open_session()+'查看过程详情')
+            summary.append(f'其中 {failed} 項操作未成功')
+        summary.append(self.open_session()+'查看過程詳情')
         self.notice(' · '.join(summary))
 
     def track_device_command(self, identifier, data):
@@ -1442,7 +1442,7 @@ class CloudCliProgress:
         self.device_tools[identifier] = self.device_failure
         if self.device_failure and not self.device_retry_reported:
             self.device_retry_reported = True
-            self.notice(f'正在再次尝试连接 {self.device_name}')
+            self.notice(f'正在再次嘗試連接 {self.device_name}')
 
     def tool_result(self, event):
         identifier = event.get('toolId')
@@ -1459,18 +1459,18 @@ class CloudCliProgress:
             if match:
                 failed = True
                 if not self.device_failure:
-                    detail = '连接超时' if 'timed out' in match[0] else '连接中断'
+                    detail = '連線超時' if 'timed out' in match[0] else '連線中斷'
                     self.notice(f'{self.device_name} SSH {detail}，本次命令未完成')
                 self.device_failure = True
             elif retry and self.device_failure and not failed and output.strip():
                 self.device_failure = self.device_retry_reported = False
-                self.notice(f'{self.device_name} 的后续命令已返回结果')
+                self.notice(f'{self.device_name} 的後續命令已返回結果')
         if failed:
             self.tool_failures.add(identifier)
 
     def incomplete(self, message, status=502):
         if self.device_failure:
-            return CloudCliError(f'{self.device_name} 连接中断，本轮未完成。连接恢复后可在原对话重试。', 503)
+            return CloudCliError(f'{self.device_name} 連線中斷，本輪未完成。連線恢復後可在原對話重試。', 503)
         return CloudCliError(message, status)
 
     def report_thinking(self, content):
@@ -1503,8 +1503,8 @@ class CloudCliProgress:
                          and cloudcli_model_family(reported_model) == requested_model)):
             self.other_models.add(reported_model)
         if event.get('compact') or event.get('isCompactSummary') or event.get('isLocalCommandStdout'):
-            title = '上下文压缩摘要' if event.get('isCompactSummary') else (
-                '本地命令输出' if event.get('isLocalCommandStdout') else '上下文压缩')
+            title = '上下文壓縮摘要' if event.get('isCompactSummary') else (
+                '本地命令輸出' if event.get('isLocalCommandStdout') else '上下文壓縮')
             self.notice(title, value)
         elif self.pending.startswith(value):
             self.write(value[self.sent:])
@@ -1567,33 +1567,33 @@ class CloudCliProgress:
         elif kind in ('task_status', 'task_notification'):
             self.task(event)
         elif kind == 'history_truncated':
-            title = '已回到你编辑的位置，正在重新执行' if self.edit_anchor is not None else 'CloudCLI 调整了本轮上下文'
+            title = '已回到你編輯的位置，正在重新執行' if self.edit_anchor is not None else 'CloudCLI 調整了本輪上下文'
             self.notice(title, event.get('summary') or event.get('content'))
         elif kind == 'status':
             if event.get('text') == 'token_budget':
                 self.context_budget = event.get('tokenBudget')
             else:
-                self.notice('CloudCLI 状态', event.get('text') or event.get('content') or event.get('status'))
+                self.notice('CloudCLI 狀態', event.get('text') or event.get('content') or event.get('status'))
         elif isinstance(kind, str) and kind not in ('complete', 'session_created', 'stream_delta', 'stream_end'):
             if kind not in self.unrecognized:
                 self.unrecognized.add(kind)
-                self.notice('CloudCLI 返回了当前版本未识别的事件', kind)
+                self.notice('CloudCLI 返回了當前版本未識別的事件', kind)
 
     def finish(self, usage=None):
         for data in self.deferred_questions:
-            self.question(data, 'tool_use', action='可以在当前 Desktop 对话中回复。')
+            self.question(data, 'tool_use', action='可以在當前 Desktop 對話中回覆。')
         self.summarize_activity()
         if self.other_models:
-            self.notice('CloudCLI 报告本轮使用了其他模型', '\n'.join(sorted(self.other_models)))
+            self.notice('CloudCLI 報告本輪使用了其他模型', '\n'.join(sorted(self.other_models)))
         if isinstance(self.context_budget, dict):
             used, total = self.context_budget.get('used'), self.context_budget.get('total')
             if type(used) is int and type(total) is int and used >= 0 and total > 0:
                 self.notice(f'上下文用量 {used:,} / {total:,} tokens')
         if self.permissions:
-            self.notice('CloudCLI 已结束本轮，仍有请求未报告处理结果',
-                        action=self.open_session()+'查看状态。')
+            self.notice('CloudCLI 已結束本輪，仍有請求未報告處理結果',
+                        action=self.open_session()+'查看狀態。')
         if not self.has_assistant_text and not self.sent:
-            self.notice('CloudCLI 已完成本轮，未返回额外的助手文字')
+            self.notice('CloudCLI 已完成本輪，未返回額外的助手文字')
         if self.account_footer is not None and usage is not None:
             for line in self.account_footer(self.reported_model or self.model, usage):
                 self.notice(line)
@@ -1607,15 +1607,15 @@ class CloudCliProgress:
         text = approval.plan
         prompts = approval.original.get('allowedPrompts')
         if isinstance(prompts, list) and prompts:
-            text += '\n\nCloudCLI 提交的工具权限说明\n'+json.dumps(prompts, ensure_ascii=False, indent=2)
+            text += '\n\nCloudCLI 提交的工具權限說明\n'+json.dumps(prompts, ensure_ascii=False, indent=2)
         text = ''.join(c if c in '\r\n\t' or c.isprintable() else ' ' for c in text)
-        self.write('\n\n> **SafeCode** · 请先阅读云端计划，再在 Desktop 确认。\n>\n'
+        self.write('\n\n> **SafeCode** · 請先閱讀雲端計劃，再在 Desktop 確認。\n>\n'
                    +'\n'.join('>     '+row for row in text.splitlines())+'\n\n')
 
     def show_tool_approval(self, approval):
         inputs = json.dumps(approval.original, ensure_ascii=False, indent=2)
         inputs = ''.join(c if c.isprintable() or c == '\n' else ' ' for c in inputs)
-        self.write(f'\n\n> **SafeCode** · CloudCLI 等待授权 `{approval.tool_name}`\n>\n'
+        self.write(f'\n\n> **SafeCode** · CloudCLI 等待授權 `{approval.tool_name}`\n>\n'
                    +'\n'.join('>     '+row for row in inputs.splitlines())+'\n\n')
 
 
@@ -1679,7 +1679,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
         if kind == 'error' or event_type == 'error' or (kind != 'tool_result' and event.get('is_error') is True):
             raise cloudcli_failure(event, progress)
         if event_type == 'status' and event.get('message') not in ('Session started', 'Repository cloned and session started'):
-            progress.notice('CloudCLI 状态', event.get('message'))
+            progress.notice('CloudCLI 狀態', event.get('message'))
         if event_type == 'session-id':
             candidate = event.get('sessionId')
             if not isinstance(candidate, str) or not CLOUDCLI_SESSION_ID.fullmatch(candidate):
@@ -1694,7 +1694,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                 if progress.on_session:
                     progress.on_session(candidate)
                 if progress.stream is not None and getattr(progress.stream, 'send_events', True):
-                    progress.notice('已接收任务')
+                    progress.notice('已接收任務')
         if kind == 'text' and event.get('role') == 'assistant' and not event.get('parentToolUseId'):
             content = event.get('content')
             if (isinstance(content, str) and (event.get('isApiErrorMessage') or event.get('is_api_error_message')
@@ -1711,7 +1711,7 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
                 if progress.stopping.is_set():
                     raise CloudCliStopped('Desktop stopped its CloudCLI turn')
                 if progress.session and progress.dispatched:
-                    raise CloudCliNativeStop('本轮已在 CloudCLI 中停止。请在原对话发送下一条消息。', 400)
+                    raise CloudCliNativeStop('本輪已在 CloudCLI 中停止。請在原對話傳送下一條消息。', 400)
                 raise progress.incomplete('CloudCLI run was canceled', 409)
             if type(event.get('exitCode')) is not int or event['exitCode'] != 0 or event.get('success') is False:
                 raise cloudcli_failure(event, progress)
@@ -2327,14 +2327,14 @@ class CloudCliBackend:
     @staticmethod
     def ssh_workspace_instruction(target, system, workspace, command):
         if workspace is None:
-            return (f'本机是 {target}（`{system}`）。通过 `{command}` 在本机执行任务。'
-                    '请使用用户指定的目录。任务需要目录且路径未知时，再询问用户。')
+            return (f'本機是 {target}（`{system}`）。透過 `{command}` 在本機執行任務。'
+                    '請使用用戶指定的目錄。任務需要目錄且路徑未知時，再詢問用戶。')
         return (
-            f'本机是 {target}（`{system}`），当前工作目录为 `{workspace}`。'
-            '把它当作本次会话的项目根目录，用户说「这里」「这个项目」或「我的电脑」时，就使用这个目录。\n\n'
-            f'需要操作项目时，通过 `{command}` 连接本机。每条命令从项目根目录开始，相对路径也以此为准。'
-            '通过同一连接读取项目说明、查找和修改文件、运行 Git、构建及测试。项目修改和生成的文件都保存在本机项目目录里。\n\n'
-            '如果操作失败，先检查实际错误，在现有权限内能解决就继续。仅在需要用户提供信息或确认时再询问。'
+            f'本機是 {target}（`{system}`），當前工作目錄為 `{workspace}`。'
+            '把它當作本次會話的項目根目錄，用戶說「這裏」「這個項目」或「我的電腦」時，就使用這個目錄。\n\n'
+            f'需要操作項目時，透過 `{command}` 連接本機。每條命令從項目根目錄開始，相對路徑也以此為準。'
+            '透過同一連線讀取項目說明、尋找和修改檔案、執行 Git、構建及測試。項目修改和生成的檔案都儲存在本機項目目錄裏。\n\n'
+            '如果操作失敗，先檢查實際錯誤，在現有權限內能解決就繼續。僅在需要用戶提供資料或確認時再詢問。'
         )
 
     def host_instruction(self, project, workspace):
@@ -2351,7 +2351,7 @@ class CloudCliBackend:
                     'Never substitute a similarly named VPS directory or claim a VPS operation '
                     'touched their computer. Use these VPS tools only for an explicitly VPS-side task.')
         if workspace is None:
-            return '所选本机目录超出了已配置的文件访问范围。需要操作项目文件时，请用户确认一个可访问的本机目录。'
+            return '所選本機目錄超出了已配置的檔案訪問範圍。需要操作項目檔案時，請用戶確認一個可訪問的本機目錄。'
         home = Path.home()
         client = host['clientId']
         allow_ssh_shell = host.get('allowSshShell', False)
@@ -2383,11 +2383,11 @@ class CloudCliBackend:
                     raise ValueError()
         except (OSError, ValueError, AttributeError, KeyError, TypeError):
             raise CloudCliError('SafeCode local host control is unavailable for the CloudCLI project', 409) from None
-        target = host['deviceName'] or '用户选定的电脑'
+        target = host['deviceName'] or '用戶選定的電腦'
         if command is not None:
             return self.ssh_workspace_instruction(target, 'macOS', workspace, command)
-        return (f'本机是 {target}，当前工作目录为 `{workspace}`。'
-                '通过 SafeCode 本机文件工具操作这个目录中的文件。')
+        return (f'本機是 {target}，當前工作目錄為 `{workspace}`。'
+                '透過 SafeCode 本機檔案工具操作這個目錄中的檔案。')
 
     def call(self, payload, progress):
         try:
@@ -2765,7 +2765,7 @@ class CloudCliBackend:
                         session, project, workspace, model, _ = closed
                         if check_model is not None:
                             check_model(model)
-                        reply = self.local_reply(data['model'], '之前的提问已结束，本次选择未提交。可以在这个对话继续提问。')
+                        reply = self.local_reply(data['model'], '之前的提問已結束，本次選擇未提交。可以在這個對話繼續提問。')
                         confirmed = history_signature([*messages, reply], 'cloudcli')
                         self.save_session(db, namespace, expected, session, project, workspace, [confirmed])
                         db.execute('INSERT OR REPLACE INTO requests VALUES (?,?,?,?)',
@@ -2925,7 +2925,7 @@ class CloudCliBackend:
         complete = desktop_assistant_text(reply)
         if not complete:
             return None
-        if not missing and text.strip() not in ('Request failed', '请求失败'):
+        if not missing and text.strip() not in ('Request failed', '請求失敗'):
             if len(text) >= len(complete) or not complete.startswith(text):
                 return None
         # The caller verifies the reconstructed history against the same conversation's checkpoint.
@@ -3325,7 +3325,7 @@ class CloudCliBackend:
         approval_transport = self.config.get('desktopToolApprovals', False)
         tool_approvals = approval_transport and not unrestricted
         if chat_mode and not self.config.get('desktopQuestions'):
-            raise CloudCliError('此网关需要连接 CloudCLI 网页账户才能使用截图、附件或计划模式。请联系网关管理员，或改发普通文本。', 400)
+            raise CloudCliError('此網關需要連接 CloudCLI 網頁帳戶才能使用截圖、附件或計劃模式。請聯繫網關管理員，或改發普通文本。', 400)
         if not dispatch_task and not attachments:
             raise CloudCliError('CloudCLI requires text for the user task', 400)
         # Model checks can carry the current Desktop conversation ID. Reply
@@ -3344,7 +3344,7 @@ class CloudCliBackend:
             raise CloudCliError('Desktop WebFetch helper has no matching CloudCLI tool', 400)
         forwarded_task = (manager.review_prompt(dispatch_task)
                           if dispatch_task and manager.review_prompt is not None else dispatch_task)
-        payload = {'provider': 'claude', 'message': forwarded_task or '请查看本轮附加的文件。',
+        payload = {'provider': 'claude', 'message': forwarded_task or '請查看本輪附加的檔案。',
                    'model': model, 'stream': True}
         family = cloudcli_model_family(model)
         diagnostic(stage='session_route', **({'modelFamily': family} if family else {}))
@@ -3410,8 +3410,8 @@ class CloudCliBackend:
                         if (scope and not self.config.get('desktopQuestions') and
                                 db.execute('SELECT 1 FROM sessions WHERE scope=? AND history=?',
                                            (namespace, history_signature(messages, 'cloudcli'))).fetchone()):
-                            raise CloudCliError('本轮已中断。请在原对话发送下一条消息。', 400)
-                        raise CloudCliError('上一轮已提交，尚无已确认的结果。请先在 CloudCLI 核对执行状态。', 409)
+                            raise CloudCliError('本輪已中斷。請在原對話傳送下一條消息。', 400)
+                        raise CloudCliError('上一輪已提交，尚無已確認的結果。請先在 CloudCLI 核對執行狀態。', 409)
                     return json.loads(prior[0])
                 compact_context = desktop_compact_context(messages[:-1]) if scope else None
                 saved = self.closed_question_binding(db, namespace, interrupted_prefixes) if interrupted_prefixes else None
@@ -3465,8 +3465,8 @@ class CloudCliBackend:
                         payload['message'] += '\n\n'+host_instruction
                         workspace_prompt_fingerprint = fingerprint
                 if attachments:
-                    payload['message'] += ('\n\n本轮上传的文件请通过 CloudCLI 提供的附件读取。'
-                                           '附带的本机路径只是原始引用，本机项目文件仍走已授权设备。')
+                    payload['message'] += ('\n\n本輪上載的檔案請透過 CloudCLI 提供的附件讀取。'
+                                           '附帶的本機路徑只是原始引用，本機項目檔案仍走已授權裝置。')
                 self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
                 # cause an automatic second dispatch of this scoped task.
@@ -3518,9 +3518,9 @@ class CloudCliBackend:
 # TODO: Remove the legacy direct Claude Code backend (DESKTOP_LAUNCHER, Channel, and Conversation).
 # SafeCode API requests must go through CloudCliBackend so CloudCLI owns Claude Code execution.
 class Channel:
-    """复用现有协议；新 clientId 保证不会接管 Codex 的连接或取消其任务。"""
+    """複用現有協定；新 clientId 保證不會接管 Codex 的連線或取消其任務。"""
     def __init__(self, manager, data, directory=None, client_id=None):
-        # Unix socket 路径有约 108 字节上限；客户端 UUID 的完整状态路径过长。
+        # Unix socket 路徑有約 108 位元組上限；客戶端 UUID 的完整狀態路徑過長。
         self.directory = Path(directory) if directory else Path.home()/'.local/state/scd'/hashlib.sha256(
             str(manager.directory).encode()).hexdigest()[:12]/client_id.removeprefix('desktop_')[:20]
         if not self.directory.resolve().is_relative_to(Path.home().resolve()):raise GatewayError('Invalid CLI channel directory')
@@ -3595,7 +3595,7 @@ class Channel:
         except (OSError, ValueError):pass
         try:self.process.wait(2)
         except subprocess.TimeoutExpired:self.process.terminate()
-        # 仅关闭本通道自己的守护进程；Codex 的共享 daemon 完全独立。
+        # 僅關閉本通道自己的守護進程；Codex 的共享 daemon 完全獨立。
         pidfile = self.directory/'run/daemon.pid'
         try:
             pid = int(pidfile.read_text())
@@ -3664,7 +3664,7 @@ class Conversation:
                 self.channel_dir=self.channel.directory
                 self.turn_model=data['model']
                 if not self.session_id and len(messages) > 1:
-                    # 迁移旧会话时保留角色结构；不会伪造 CLI transcript 或登录状态。
+                    # 遷移舊會話時保留角色結構；不會偽造 CLI transcript 或登入狀態。
                     content.insert(0, {'type': 'text', 'text': 'Previous conversation (JSON, preserve roles and tool results):\n'+json.dumps(messages[:-1], ensure_ascii=False)})
                 system = '\n'.join(b.get('text', '') for b in blocks(data.get('system', '')) if b.get('type') == 'text')
                 if data.get('thinking', {}).get('type') == 'disabled':
@@ -4259,7 +4259,7 @@ def serve(directory):
 
 
 def manage(directory, request):
-    """控制请求只通过本机回环 HTTP，不接触模型 API 或 Claude 登录凭据。"""
+    """控制請求只透過本機迴環 HTTP，不接觸模型 API 或 Claude 登入憑據。"""
     import urllib.request
     directory = Path(directory)
     marker = directory/'component.json'
@@ -4291,7 +4291,7 @@ def manage(directory, request):
                 time.sleep(.1)
             if running.exists():raise GatewayError('Previous gateway is still stopping')
         except (OSError, ValueError):
-            # 从未向不确定身份的 PID 发信号；过期监听文件本身不等于可杀的进程。
+            # 從未向不確定身份的 PID 發信號；過期監聽檔案本身不等於可殺的進程。
             if Path('/proc/'+str(state.get('pid', -1))).exists():raise GatewayError('Gateway stop could not be verified')
             running.unlink(missing_ok=True)
     if request['action'] == 'stop':

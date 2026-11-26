@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成 Windows x64 自包含便携包。仅写本地 dist，不连接 GitHub。"""
+"""生成 Windows x64 自包含便攜包。僅寫本地 dist，不連接 GitHub。"""
 import argparse,hashlib,json,os,shutil,subprocess,zipfile
 from xml.etree import ElementTree
 from pathlib import Path
@@ -7,17 +7,17 @@ p=argparse.ArgumentParser();p.add_argument('--dotnet',default='dotnet');p.add_ar
 root=Path(__file__).resolve().parent.parent
 project=root/'src/SafeCode.Desktop/SafeCode.Desktop.csproj'
 app_version=ElementTree.parse(project).findtext('./PropertyGroup/InformationalVersion')
-if not app_version:raise SystemExit('Windows 项目未设置 InformationalVersion。')
+if not app_version:raise SystemExit('Windows 項目未設定 InformationalVersion。')
 output=a.output_dir.resolve() if a.output_dir else root/'dist'/('SafeCode-'+app_version+'-win-x64');archive=output.parent/(output.name+'.zip')
 if output.exists():shutil.rmtree(output)
 subprocess.run([a.dotnet,'publish',str(root/'src/SafeCode.Desktop/SafeCode.Desktop.csproj'),'-c','Release','-r','win-x64','--self-contained','true','-o',str(output),'--nologo'],cwd=root,check=True,env={**os.environ,'DOTNET_CLI_TELEMETRY_OPTOUT':'1'})
 shutil.move(output/'SafeCode.Desktop.exe',output/'SafeCode.exe')
 for path in output.rglob('*.pdb'):path.unlink()
-# 浏览器概念稿的独立模拟客户端不随真实 Windows 客户端打包。
+# 瀏覽器概念稿的獨立模擬客戶端不隨真實 Windows 客戶端打包。
 (output/'Web'/'web'/'client-preview.html').unlink(missing_ok=True)
 shutil.copy2(root/'LICENSE',output/'LICENSE')
 shutil.copy2(root/'third_party'/'THIRD_PARTY_NOTICES.md',output/'THIRD_PARTY_NOTICES.md')
-shutil.copy2(root/'docs/WINDOWS.md',output/'使用说明.txt')
+shutil.copy2(root/'docs/WINDOWS.md',output/'使用說明.txt')
 legal=output/'licenses';legal.mkdir()
 assets=json.loads((root/'src/SafeCode.Desktop/obj/project.assets.json').read_text())
 packages=set(assets.get('libraries',{}))
@@ -53,12 +53,12 @@ if a.frp_payload:
   (legal/'FRP-0.71.1-Apache.txt').write_bytes(source.read(prefix+'LICENSE'))
  (bundled/'source.json').write_text(json.dumps({'version':'0.71.1','sha256':expected,'source':'https://github.com/fatedier/frp/releases/download/v0.71.1/frp_0.71.1_windows_amd64.zip'}))
 if a.codex_bridge_payload:
- if hashlib.sha256(a.codex_bridge_payload.read_bytes()).hexdigest()!='5aa7eac204d3a8273ceb25924520d62f6d705d2004a29d38aa5f6d63751b8348':raise SystemExit('Claude Codex 用户附件 SHA256 不匹配。')
+ if hashlib.sha256(a.codex_bridge_payload.read_bytes()).hexdigest()!='5aa7eac204d3a8273ceb25924520d62f6d705d2004a29d38aa5f6d63751b8348':raise SystemExit('Claude Codex 用戶附件 SHA256 不匹配。')
  bundled=output/'Payloads/codex-claude';bundled.mkdir(parents=True)
  with zipfile.ZipFile(a.codex_bridge_payload) as source:
-  prefix='Claude-Codex-VPS迁移包/app/'
+  prefix='Claude-Codex-VPS遷移包/app/'
   data=source.read(prefix+'codex-claude-win.exe')
-  if hashlib.sha256(data).hexdigest()!='c8b2353f14afeef2a04c759d0da64d4aca301127a9e0fcdb82a8032026acd070':raise SystemExit('第三方适配器程序校验失败。')
+  if hashlib.sha256(data).hexdigest()!='c8b2353f14afeef2a04c759d0da64d4aca301127a9e0fcdb82a8032026acd070':raise SystemExit('第三方適配器程式校驗失敗。')
   (bundled/'codex-claude-win.exe').write_bytes(data)
   for name in ['LICENSE.txt','THIRD_PARTY_LICENSES.txt','UPSTREAM.txt']:
    data=source.read(prefix+name);(bundled/name).write_bytes(data);(legal/('Claude-Codex-'+name)).write_bytes(data)

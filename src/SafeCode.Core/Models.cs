@@ -8,7 +8,7 @@ public sealed record AccountInfo(string Username, string Password);
 public sealed record LocaleSettings(string Region, string Timezone, string Locale, string Language);
 public sealed record NetworkStats(double? LatencyMs, double LossPercent, int Probes);
 public sealed record ServerResourceStats(double CpuPercent, long MemoryUsedBytes, long MemoryTotalBytes, long DiskUsedBytes, long DiskTotalBytes);
-public sealed record IpIntelligence(string Ip, string Location, int? Score, string RegionCode, string? City, bool IsSubnetScore,string GeoSource = "简表",bool HasGeoConflict = false);
+public sealed record IpIntelligence(string Ip, string Location, int? Score, string RegionCode, string? City, bool IsSubnetScore,string GeoSource = "簡表",bool HasGeoConflict = false);
 public sealed class ServerInfo
 {
     public string OsId { get; set; } = "";
@@ -40,23 +40,23 @@ public sealed record DeploymentStep(string Id, string Title, string Description)
 public static class DeploymentCatalog
 {
     public static readonly DeploymentStep[] Steps = [
-        new("account", "更新系统并设置工作用户", "先完成系统更新，再创建开发账户和配置机器名称。"),
-        new("localization", "本土化设置", "手动选择时区与系统语言。"),
-        new("desktop", "安装虚拟桌面", "安装 XFCE 与 xrdp，通过加密隧道访问。"),
-        new("chrome", "安装 Chrome", "使用 Google 官方软件源安装浏览器。"),
-        new("input", "安装中文输入法", "安装拼音输入法与中文字体。"),
-        new("claude", "安装 Claude Code", "安装官方原生程序、Git 和 tmux。"),
-        new("ssh", "配置 SSH 安全通道", "配置工作用户密钥与持久终端会话。")
+        new("account", "更新系統並設定工作用戶", "先完成系統更新，再建立開發帳戶和配置機器名稱。"),
+        new("localization", "本土化設定", "手動選擇時區與系統語言。"),
+        new("desktop", "安裝虛擬桌面", "安裝 XFCE 與 xrdp，透過加密隧道訪問。"),
+        new("chrome", "安裝 Chrome", "使用 Google 官方軟件源安裝瀏覽器。"),
+        new("input", "安裝中文輸入法", "安裝拼音輸入法與中文字體。"),
+        new("claude", "安裝 Claude Code", "安裝官方原生程式、Git 和 tmux。"),
+        new("ssh", "配置 SSH 安全通道", "配置工作用戶密鑰與持久終端機會話。")
     ];
     public static readonly LocaleSettings[] Locales = [
-        new("日本", "Asia/Tokyo", "ja_JP.UTF-8", "日语"),
-        new("美国 · 洛杉矶", "America/Los_Angeles", "en_US.UTF-8", "英语"),
-        new("美国 · 纽约", "America/New_York", "en_US.UTF-8", "英语"),
-        new("新加坡", "Asia/Singapore", "en_SG.UTF-8", "英语"),
-        new("英国", "Europe/London", "en_GB.UTF-8", "英语"),
-        new("德国", "Europe/Berlin", "de_DE.UTF-8", "德语"),
-        new("韩国", "Asia/Seoul", "ko_KR.UTF-8", "韩语"),
-        new("德国 · 法兰克福", "Europe/Berlin", "de_DE.UTF-8", "德语")
+        new("日本", "Asia/Tokyo", "ja_JP.UTF-8", "日語"),
+        new("美國 · 洛杉磯", "America/Los_Angeles", "en_US.UTF-8", "英語"),
+        new("美國 · 紐約", "America/New_York", "en_US.UTF-8", "英語"),
+        new("新加坡", "Asia/Singapore", "en_SG.UTF-8", "英語"),
+        new("英國", "Europe/London", "en_GB.UTF-8", "英語"),
+        new("德國", "Europe/Berlin", "de_DE.UTF-8", "德語"),
+        new("韓國", "Asia/Seoul", "ko_KR.UTF-8", "韓語"),
+        new("德國 · 法蘭克福", "Europe/Berlin", "de_DE.UTF-8", "德語")
     ];
     public static LocaleSettings? FindLocale(string region) => region switch
     {
@@ -84,7 +84,7 @@ public sealed class JobPoll { public List<string> Lines{get;set;}=[]; public lon
 
 public sealed record EgressProbe(string Ip);
 
-public sealed class RemoteOperationException(string message,string? code) : InvalidOperationException(code=="json_invalid"?"服务器配置或任务结果无法解析，请提交反馈。":message)
+public sealed class RemoteOperationException(string message,string? code) : InvalidOperationException(code=="json_invalid"?"伺服器配置或任務結果無法解析，請提交回饋。":message)
 {
     public string Code {get;}=Allowed.Contains(code??"")?code!:"operation_failed";
     private static readonly HashSet<string> Allowed=["json_invalid","package_lock_wait","package_fetch_failed","dns_failure","disk_full","package_interrupted","mount_failed","mount_timeout","mount_target_invalid","deployment_busy","access_denied","timeout","invalid_argument","operation_failed"];

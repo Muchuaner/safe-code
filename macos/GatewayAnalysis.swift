@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 final class GatewayAnalysis: NSStackView {
     private static let ranges = ["1h", "24h", "7d"]
-    private static let rangeNames = ["近 1 小时", "近 24 小时", "近 7 天"]
+    private static let rangeNames = ["近 1 小時", "近 24 小時", "近 7 天"]
     private static let mint = GatewayStyle.color(0x277c62)
     private static let blue = GatewayStyle.color(0x426fa7)
     private static let gold = GatewayStyle.color(0xac711c)
@@ -44,25 +44,25 @@ final class GatewayAnalysis: NSStackView {
         }
         let range = GatewayStyle.surface(Self.horizontal(rangeButtons, spacing:3),
             inset:NSEdgeInsets(top:3,left:3,bottom:3,right:3),radius:9,fill:GatewayStyle.header)
-        let header = Self.vertical([GatewayStyle.label("流量与性能", size:SafeCodeType.large, weight:.semibold), summary],spacing:4)
+        let header = Self.vertical([GatewayStyle.label("流量與性能", size:SafeCodeType.large, weight:.semibold), summary],spacing:4)
         summary.heightAnchor.constraint(equalToConstant:16).isActive = true
         header.widthAnchor.constraint(greaterThanOrEqualToConstant:250).isActive = true
         let heading = Self.horizontal([header, NSView(), range])
         heading.heightAnchor.constraint(equalToConstant:52).isActive = true
         addFullWidth(heading)
 
-        trafficUnits.addItems(withTitles: ["Token / 分钟", "请求 / 分钟", "Token 总量", "请求次数"])
-        latencyUnits.addItems(withTitles: ["处理耗时", "排队等待"])
+        trafficUnits.addItems(withTitles: ["Token / 分鐘", "請求 / 分鐘", "Token 總量", "請求次數"])
+        latencyUnits.addItems(withTitles: ["處理耗時", "排隊等待"])
         for control in [trafficUnits, latencyUnits] {
             control.font = .systemFont(ofSize: SafeCodeType.small)
             control.target = self
             control.action = #selector(update)
         }
-        let requestButton = GatewayButton("查看记录", kind: .standard, target: self, action: #selector(openRequests))
-        let trafficCard = Self.card("吞吐趋势", stack: Self.vertical([trafficSummary, traffic], spacing: 6), action: trafficUnits)
+        let requestButton = GatewayButton("查看記錄", kind: .standard, target: self, action: #selector(openRequests))
+        let trafficCard = Self.card("吞吐趨勢", stack: Self.vertical([trafficSummary, traffic], spacing: 6), action: trafficUnits)
         traffic.heightAnchor.constraint(equalToConstant: 172).isActive = true
-        let liveCard = Self.card("并发与排队", stack: queue,
-                                 action: GatewayStyle.label("● 实时", color: Self.mint, size: SafeCodeType.small))
+        let liveCard = Self.card("併發與排隊", stack: queue,
+                                 action: GatewayStyle.label("● 實時", color: Self.mint, size: SafeCodeType.small))
         let top = Self.horizontal([trafficCard, liveCard])
         top.alignment = .top
         trafficCard.heightAnchor.constraint(equalTo:liveCard.heightAnchor).isActive = true
@@ -71,10 +71,10 @@ final class GatewayAnalysis: NSStackView {
         addFullWidth(top)
 
         let comparisons = Self.horizontal([
-            Self.card("耗时分布", stack: latency, action: latencyUnits),
-            Self.card("请求结果", stack: outcomes, action: requestButton),
-            Self.card("错误与限流趋势", stack: Self.vertical([errors]),
-                      action: GatewayStyle.label("失败 · 受限", color: GatewayStyle.muted, size: SafeCodeType.small))
+            Self.card("耗時分佈", stack: latency, action: latencyUnits),
+            Self.card("請求結果", stack: outcomes, action: requestButton),
+            Self.card("錯誤與限流趨勢", stack: Self.vertical([errors]),
+                      action: GatewayStyle.label("失敗 · 受限", color: GatewayStyle.muted, size: SafeCodeType.small))
         ])
         comparisons.distribution = .fillEqually
         comparisons.alignment = .top
@@ -87,7 +87,7 @@ final class GatewayAnalysis: NSStackView {
         addFullWidth(comparisons)
 
         addFullWidth(Self.card("模型用量", stack: models,
-                                     action: GatewayStyle.label("历史累计", color: GatewayStyle.muted, size: SafeCodeType.small)))
+                                     action: GatewayStyle.label("歷史累計", color: GatewayStyle.muted, size: SafeCodeType.small)))
         for stack in [queue, latency, outcomes, models] {
             stack.orientation = .vertical
             stack.alignment = .width
@@ -148,9 +148,9 @@ final class GatewayAnalysis: NSStackView {
         let requests = points.reduce(0) { $0 + Display.number($1["requests"]) }
         let tokens = points.reduce(0) { $0 + Display.number($1["tokens"]) }
         let periodName = Self.rangeNames[rangeIndex]
-        summary.stringValue = data.isEmpty ? "正在读取" + periodName + "的统计"
-            : "\(Display.integer(requests)) 次请求 · \(Display.integer(tokens)) Token"
-        let segment = [300: "5 分钟", 3600: "1 小时", 86400: "1 天"][step] ?? ""
+        summary.stringValue = data.isEmpty ? "正在讀取" + periodName + "的統計"
+            : "\(Display.integer(requests)) 次請求 · \(Display.integer(tokens)) Token"
+        let segment = [300: "5 分鐘", 3600: "1 小時", 86400: "1 天"][step] ?? ""
         trafficSummary.stringValue = data.isEmpty ? "" : periodName + " · 每段 " + segment
         let unit = max(0, trafficUnits.indexOfSelectedItem)
         let field = unit % 2 == 0 ? "tokens" : "requests"
@@ -161,7 +161,7 @@ final class GatewayAnalysis: NSStackView {
         let values = points.map { Double(Display.number($0[field])) * (unit < 2 ? 60/Double(step) : 1) }
         traffic.set(labels: labels, series: requests == 0 ? [] : [(trafficUnits.titleOfSelectedItem ?? "", Self.mint, values)])
         errors.set(labels: labels, series: requests == 0 ? [] : [
-            ("失败", Self.rose, points.map { Double(Display.number($0["failed"])) }),
+            ("失敗", Self.rose, points.map { Double(Display.number($0["failed"])) }),
             ("受限", Self.gold, points.map { Double(Display.number($0["limited"])) })
         ])
         renderQueue()
@@ -199,9 +199,9 @@ final class GatewayAnalysis: NSStackView {
         let waiting = Display.number(snapshot["waiting"])
         let capacity = Display.number(snapshot["concurrency"])
         let limit = Display.number(snapshot["queue_limit"])
-        var content: [NSView] = [paired("并发占用", "\(active) / " + (capacity == 0 ? "不限" : "\(capacity)"))]
+        var content: [NSView] = [paired("併發佔用", "\(active) / " + (capacity == 0 ? "不限" : "\(capacity)"))]
         if let bar = progress(active, max: capacity) { content.append(bar) }
-        content.append(paired("排队请求", limit > 0 ? "\(waiting) / \(limit)" : "\(waiting)"))
+        content.append(paired("排隊請求", limit > 0 ? "\(waiting) / \(limit)" : "\(waiting)"))
         if let bar = progress(waiting, max: limit, color: Self.gold) { content.append(bar) }
         let items = (snapshot["keys"] as? [[String: Any]] ?? []).filter {
             Display.number($0["active_count"] ?? $0["active"]) > 0 || Display.number($0["waiting"]) > 0
@@ -211,12 +211,12 @@ final class GatewayAnalysis: NSStackView {
             let waiting = Display.number(item["waiting"])
             let fallback = String((item["id"] as? String ?? "").prefix(12))
             let note = item["note"] as? String ?? ""
-            let states = [running > 0 ? "执行中 \(running)" : "", waiting > 0 ? "排队 \(waiting)" : ""].filter { !$0.isEmpty }
+            let states = [running > 0 ? "執行中 \(running)" : "", waiting > 0 ? "排隊 \(waiting)" : ""].filter { !$0.isEmpty }
             content.append(paired(note.isEmpty ? fallback : note, states.joined(separator: " · ")))
         }
-        if items.isEmpty { content.append(label("网关空闲")) }
-        if items.count > 4 { content.append(label("还有 \(items.count-4) 把密钥正在等待")) }
-        if let limit = snapshot["wait_limit"] as? NSNumber { content.append(label("最长等待 \(limit) 秒")) }
+        if items.isEmpty { content.append(label("網關空閒")) }
+        if items.count > 4 { content.append(label("還有 \(items.count-4) 把密鑰正在等待")) }
+        if let limit = snapshot["wait_limit"] as? NSNumber { content.append(label("最長等待 \(limit) 秒")) }
         replace(queue, with: content)
     }
 
@@ -225,7 +225,7 @@ final class GatewayAnalysis: NSStackView {
         let measure = choices[latencyUnits.indexOfSelectedItem == 1 ? "wait_ms" : "duration_ms"] ?? [:]
         guard Display.number(measure["samples"]) > 0, let histogram = measure["histogram"] as? [NSNumber],
               let edges = data["latency_limits"] as? [NSNumber], histogram.count == edges.count+1, !edges.isEmpty else {
-            replace(latency, with: [label("这个时段暂无耗时样本。")]); return
+            replace(latency, with: [label("這個時段暫無耗時樣本。")]); return
         }
         let average = Display.duration(measure["average_ms"] ?? NSNull())
         let percentile = Display.duration(measure["p95_ms"] ?? NSNull())
@@ -255,20 +255,20 @@ final class GatewayAnalysis: NSStackView {
 
     private func renderOutcomes(_ data: [String: Any]) {
         let events = data["outcomes"] as? [[String: Any]] ?? []
-        let categories = [("success","成功",Self.mint),("failed","失败",Self.rose),
+        let categories = [("success","成功",Self.mint),("failed","失敗",Self.rose),
                           ("limited","受限",Self.gold),("canceled","已取消",Self.gray)]
         let counts = categories.map { category in
             events.filter { $0["outcome"] as? String == category.0 }.reduce(Int64(0)) { $0 + Display.number($1["requests"]) }
         }
         let total = counts.reduce(0,+)
-        guard total > 0 else { replace(outcomes, with: [label("这个时段暂无请求。")]); return }
+        guard total > 0 else { replace(outcomes, with: [label("這個時段暫無請求。")]); return }
         let donut = GatewayDonut(counts: counts, colors: categories.map(\.2),
             value: Display.percent(100*Double(counts[0])/Double(total)), caption: "成功率")
         let legend = zip(categories,counts).map { category, count in
             let line = paired("● " + category.1, Display.integer(count))
             (line.arrangedSubviews.first as? NSTextField)?.textColor = category.2
             line.toolTip = events.filter { $0["outcome"] as? String == category.0 }.map {
-                "HTTP \(Display.number($0["status"])) · \(Display.number($0["requests"])) 条"
+                "HTTP \(Display.number($0["status"])) · \(Display.number($0["requests"])) 條"
             }.joined(separator: "；")
             return line
         }
@@ -277,15 +277,15 @@ final class GatewayAnalysis: NSStackView {
 
     private func renderModels() {
         let rows = snapshot["models"] as? [[String: Any]] ?? []
-        guard !rows.isEmpty else { replace(models, with: [label("暂无模型用量。")]); return }
+        guard !rows.isEmpty else { replace(models, with: [label("暫無模型用量。")]); return }
         let colors = [Self.mint, Self.blue, Self.violet, Self.gold, Self.gray]
         let tokens = rows.map { Display.number($0["tokens"]) }
         let total = tokens.reduce(0,+)
         var shares = Array(tokens.prefix(4))
         if tokens.count > 4 { shares.append(total-shares.reduce(0,+)) }
-        let donut = GatewayDonut(counts: shares, colors: colors, value: Display.integer(total), caption: "总 Token")
+        let donut = GatewayDonut(counts: shares, colors: colors, value: Display.integer(total), caption: "總 Token")
         donut.isHidden = total == 0
-        let entries: [[String]] = [["模型", "请求", "失败", "Token", "估算费用"]] + rows.map {
+        let entries: [[String]] = [["模型", "請求", "失敗", "Token", "估算費用"]] + rows.map {
             [$0["model"] as? String ?? "—", Display.integer(Display.number($0["requests"])),
              Display.integer(Display.number($0["failures"])), Display.integer(Display.number($0["tokens"])),
              Display.usd(Display.number($0["cost_nanos"]))]
@@ -314,7 +314,7 @@ private final class GatewayLineChart: NSView {
         self.series = series
         if let selected, !labels.indices.contains(selected) { self.selected = nil }
         setAccessibilityLabel(series.map(\.title).joined(separator: "、"))
-        setAccessibilityHelp("用左右方向键查看各时段")
+        setAccessibilityHelp("用左右方向鍵查看各時段")
         setAccessibilityElement(true)
         setAccessibilityRole(.image)
         needsDisplay = true
@@ -352,7 +352,7 @@ private final class GatewayLineChart: NSView {
         let font = NSFont.systemFont(ofSize: SafeCodeType.small)
         let attrs: [NSAttributedString.Key: Any] = [.font:font,.foregroundColor:GatewayStyle.muted]
         guard !series.isEmpty else {
-            let message = NSAttributedString(string:"这个时段暂无请求。",attributes:attrs)
+            let message = NSAttributedString(string:"這個時段暫無請求。",attributes:attrs)
             message.draw(at:NSPoint(x:max(0,(bounds.width-message.size().width)/2),y:bounds.midY))
             return
         }

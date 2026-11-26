@@ -7,8 +7,8 @@ const dollars = new Intl.NumberFormat('en-US', {style: 'currency', currency: 'US
 const compact = new Intl.NumberFormat('en', {notation: 'compact', maximumFractionDigits: 1});
 const dateTime = new Intl.DateTimeFormat('zh-CN', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
 const expiryDateTime = new Intl.DateTimeFormat('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
-const outcomes = {success: '成功', failed: '失败', limited: '受限', canceled: '已取消'};
-const keyStates = {enabled: '已启用', expired: '已过期', revoked: '已撤销'};
+const outcomes = {success: '成功', failed: '失敗', limited: '受限', canceled: '已取消'};
+const keyStates = {enabled: '已啟用', expired: '已過期', revoked: '已撤銷'};
 const viewButtons = [...document.querySelectorAll('[data-view]')];
 let snapshot;
 let editingKey;
@@ -38,7 +38,7 @@ window.safeCodeNativeResponse = ({id, result, error}) => {
   else request.resolve(result);
 };
 function rpc(op, args = {}) {
-  if (!window.chrome?.webview) return Promise.reject(new Error('请从 Safe Code 客户端打开网关管理。'));
+  if (!window.chrome?.webview) return Promise.reject(new Error('請從 Safe Code 客戶端開啟網關管理。'));
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID();
     pending.set(id, {resolve, reject});
@@ -116,55 +116,55 @@ function renderOverview() {
   const reviewButton = byId('gateway-prompt-review');
   const reviewState = byId('prompt-review-state');
   reviewButton.disabled = !review;
-  reviewButton.title = review ? '' : '更新 VPS 网关后可配置前置审查';
+  reviewButton.title = review ? '' : '更新 VPS 網關後可配置前置審查';
   reviewState.hidden = !review;
-  reviewState.textContent = review?.enabled ? '已开启' : '关闭';
+  reviewState.textContent = review?.enabled ? '已開啟' : '關閉';
   reviewState.dataset.enabled = String(review?.enabled === true);
   const keyQueue = snapshot.key_queue;
   byId('gateway-key-queue').disabled = !keyQueue;
-  byId('gateway-key-queue').title = keyQueue ? '' : '更新 VPS 网关后可配置 API 排队';
+  byId('gateway-key-queue').title = keyQueue ? '' : '更新 VPS 網關後可配置 API 排隊';
   const keyQueueState = byId('key-queue-state');
   keyQueueState.hidden = !keyQueue;
-  keyQueueState.textContent = keyQueue?.enabled ? '已开启' : '关闭';
+  keyQueueState.textContent = keyQueue?.enabled ? '已開啟' : '關閉';
   keyQueueState.dataset.enabled = String(keyQueue?.enabled === true);
   const concurrencyButton = byId('gateway-concurrency');
   concurrencyButton.disabled = !snapshot.concurrency_text;
-  concurrencyButton.textContent = '处理槽位 ' + slotLabel(snapshot);
-  concurrencyButton.title = concurrencyButton.disabled ? '更新 VPS 网关后可调整处理槽位' : '';
+  concurrencyButton.textContent = '處理槽位 ' + slotLabel(snapshot);
+  concurrencyButton.title = concurrencyButton.disabled ? '更新 VPS 網關後可調整處理槽位' : '';
   byId('metric-keys').textContent = fmt(keys.filter(key => keyState(key) === 'enabled').length);
-  byId('metric-keys-detail').textContent = '共 ' + fmt(keys.length) + ' 把密钥';
-  byId('metric-requests-label').textContent = stats ? '近 24 小时请求' : '累计请求';
+  byId('metric-keys-detail').textContent = '共 ' + fmt(keys.length) + ' 把密鑰';
+  byId('metric-requests-label').textContent = stats ? '近 24 小時請求' : '累計請求';
   byId('metric-requests').textContent = fmt(stats?.requests ?? keys.reduce((sum, key) => sum + key.requests, 0));
   byId('metric-requests-detail').textContent = stats
-    ? '失败 ' + fmt(stats.failures) + ' · 受限 ' + fmt(stats.limited)
-    : '消息请求总计';
-  byId('metric-tokens-label').textContent = stats ? '近 24 小时 Token' : '累计 Token';
+    ? '失敗 ' + fmt(stats.failures) + ' · 受限 ' + fmt(stats.limited)
+    : '消息請求總計';
+  byId('metric-tokens-label').textContent = stats ? '近 24 小時 Token' : '累計 Token';
   const tokens = keys.every(key => key.tokens != null) ? keys.reduce((sum, key) => sum + key.tokens, 0) : null;
   byId('metric-tokens').textContent = fmt(stats?.tokens ?? tokens);
   byId('metric-cost').textContent = usd(snapshot.billing?.cost_nanos);
   byId('metric-tokens-detail').textContent = stats
-    ? '近 1 分钟 ' + fmt(stats.rpm) + ' RPM · ' + fmt(stats.tpm) + ' TPM'
-    : '输入、输出及缓存';
+    ? '近 1 分鐘 ' + fmt(stats.rpm) + ' RPM · ' + fmt(stats.tpm) + ' TPM'
+    : '輸入、輸出及快取';
   byId('metric-queue').textContent = running + ' / ' + fmt(waiting);
   byId('metric-queue-detail').textContent = stats?.average_ms != null
-    ? '近 24 小时平均处理 ' + duration(stats.average_ms)
-    : '并发上限 ' + slotLabel(snapshot);
+    ? '近 24 小時平均處理 ' + duration(stats.average_ms)
+    : '併發上限 ' + slotLabel(snapshot);
   const queue = byId('queue-strip');
   queue.hidden = false;
   const owner = keyQueue?.enabled && keyQueue.key_id && keys.find(key => key.id === keyQueue.key_id);
   const release = owner && keyQueue.release_in;
   queue.dataset.active = String(running > 0 || release > 0);
-  byId('queue-current').textContent = release > 0 ? keyName(owner) + ' · ' + fmt(release) + ' 秒后释放'
-    : running === 1 && current ? '正在处理 · ' + keyName(current)
-    : running ? '正在处理 ' + fmt(running) + ' 个请求' : '网关空闲';
+  byId('queue-current').textContent = release > 0 ? keyName(owner) + ' · ' + fmt(release) + ' 秒後釋放'
+    : running === 1 && current ? '正在處理 · ' + keyName(current)
+    : running ? '正在處理 ' + fmt(running) + ' 個請求' : '網關空閒';
   const unlimited = unlimitedSlots(snapshot);
   const progress = byId('queue-capacity');
   progress.hidden = unlimited;
   progress.max = unlimited ? 1 : slotProgressMaximum(snapshot);
   progress.value = running;
-  byId('queue-waiting').textContent = '并发 ' + running + (unlimited ? '（不限）' : '/' + slotLabel(snapshot)) +
-    ' · 排队 ' + fmt(waiting) + (unlimited || snapshot.queue_limit == null ? '' : '/' + fmt(snapshot.queue_limit));
-  byId('queue-waiting').title = snapshot.wait_limit == null ? '' : '最长排队等待 ' + snapshot.wait_limit + ' 秒';
+  byId('queue-waiting').textContent = '併發 ' + running + (unlimited ? '（不限）' : '/' + slotLabel(snapshot)) +
+    ' · 排隊 ' + fmt(waiting) + (unlimited || snapshot.queue_limit == null ? '' : '/' + fmt(snapshot.queue_limit));
+  byId('queue-waiting').title = snapshot.wait_limit == null ? '' : '最長排隊等待 ' + snapshot.wait_limit + ' 秒';
 }
 function renderKeys() {
   const rows = byId('key-rows');
@@ -180,7 +180,7 @@ function renderKeys() {
   keyPage = Math.min(keyPage, pages - 1);
   const visible = keys.slice(keyPage * keysPerPage, (keyPage + 1) * keysPerPage);
   byId('key-pagination').hidden = !keys.length;
-  byId('key-count').textContent = '共 ' + fmt(keys.length) + ' 把密钥';
+  byId('key-count').textContent = '共 ' + fmt(keys.length) + ' 把密鑰';
   byId('key-page').textContent = (keyPage + 1) + ' / ' + pages;
   byId('previous-keys').disabled = keyPage === 0;
   byId('next-keys').disabled = keyPage === pages - 1;
@@ -192,40 +192,40 @@ function renderKeys() {
     const next = visible.map(key => {
       const row = element('tr');
       row.dataset.keyId = key.id;
-      const name = element('strong', key.note || '未填写备注', 'key-name');
+      const name = element('strong', key.note || '未填寫備註', 'key-name');
       const id = element('code', shortId(key.id) + '…');
       id.title = key.id;
       cell(row, name).append(id);
       const state = pill(keyStates[keyState(key)], keyState(key));
       const stateCell = cell(row, state);
       if (key.active || key.waiting) {
-        const activity = [key.active && '执行中 ' + fmt(activeCount(key)), key.waiting && '排队 ' + fmt(key.waiting)].filter(Boolean).join(' · ');
+        const activity = [key.active && '執行中 ' + fmt(activeCount(key)), key.waiting && '排隊 ' + fmt(key.waiting)].filter(Boolean).join(' · ');
         stateCell.append(element('small', activity, 'key-activity'));
       }
-      const models = cell(row, key.allowed_models ? fmt(key.allowed_models.length) + ' 个模型' : '全部模型');
+      const models = cell(row, key.allowed_models ? fmt(key.allowed_models.length) + ' 個模型' : '全部模型');
       if (key.allowed_models) models.title = key.allowed_models.join('、');
-      models.append(element('small', key.expires_at ? expiryDateTime.format(key.expires_at * 1000) : '永不过期', 'key-policy-detail'));
-      cell(row, key.rpm ? fmt(key.rpm) + ' 次/分' : '不限频', 'number');
+      models.append(element('small', key.expires_at ? expiryDateTime.format(key.expires_at * 1000) : '永不過期', 'key-policy-detail'));
+      cell(row, key.rpm ? fmt(key.rpm) + ' 次/分' : '不限頻', 'number');
       const requests = cell(row, fmt(key.requests), 'number');
-      if (key.failures != null) requests.title = '失败 ' + fmt(key.failures) + ' 次';
+      if (key.failures != null) requests.title = '失敗 ' + fmt(key.failures) + ' 次';
       cell(row, fmt(key.tokens), 'number');
       const cost = cell(row, costLabel(key), 'number');
       if (key.cost_nanos != null) {
         const remaining = key.budget_nanos == null ? null : key.budget_nanos - key.cost_nanos;
-        const balance = element('small', remaining == null ? '不限额' : '余 ' + usd(remaining), 'key-balance');
+        const balance = element('small', remaining == null ? '不限額' : '餘 ' + usd(remaining), 'key-balance');
         balance.dataset.exhausted = String(remaining != null && remaining <= 0);
         cost.append(balance);
       }
       cell(row, timestamp(key.last_used));
       const actions = element('div', null, 'row-actions');
-      actions.append(action('用量详情', () => showUsage(key)));
+      actions.append(action('用量詳情', () => showUsage(key)));
       if (key.bound_device) {
-        actions.append(action('解绑', () => showKeyRemoval(key, 'unbind')));
+        actions.append(action('解綁', () => showKeyRemoval(key, 'unbind')));
       }
       if (key.enabled) {
-        actions.append(action('编辑', () => showEditor(key)), action('撤销', () => showKeyRemoval(key, 'revoke'), 'revoke-link'));
+        actions.append(action('編輯', () => showEditor(key)), action('撤銷', () => showKeyRemoval(key, 'revoke'), 'revoke-link'));
       } else if (snapshot.can_delete_revoked_keys) {
-        actions.append(action('彻底删除', () => showKeyRemoval(key, 'delete'), 'revoke-link'));
+        actions.append(action('徹底刪除', () => showKeyRemoval(key, 'delete'), 'revoke-link'));
       }
       cell(row, actions);
       if (focused?.dataset.keyId === key.id && focusIndex >= 0) {
@@ -238,12 +238,12 @@ function renderKeys() {
     rows.replaceChildren(...next);
   }
   empty.hidden = !snapshot || keys.length > 0;
-  empty.textContent = snapshot?.keys.length ? '没有符合筛选条件的密钥。' : '还没有密钥。点击右上角创建第一把。';
+  empty.textContent = snapshot?.keys.length ? '沒有符合篩選條件的密鑰。' : '還沒有密鑰。點擊右上角建立第一把。';
 }
 
 const trafficChart = createGatewayLineChart(byId('traffic-chart'));
 const errorChart = createGatewayLineChart(byId('error-chart'));
-const periodNames = {'1h': '近 1 小时', '24h': '近 24 小时', '7d': '近 7 天'};
+const periodNames = {'1h': '近 1 小時', '24h': '近 24 小時', '7d': '近 7 天'};
 const clockLabel = new Intl.DateTimeFormat('zh-CN', {hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
 const dayLabel = new Intl.DateTimeFormat('zh-CN', {month: '2-digit', day: '2-digit'});
 
@@ -286,7 +286,7 @@ function renderModels() {
   }));
   const empty = byId('model-empty');
   empty.hidden = models.length > 0;
-  empty.textContent = snapshot ? '暂无模型用量。' : '正在读取模型用量…';
+  empty.textContent = snapshot ? '暫無模型用量。' : '正在讀取模型用量…';
 }
 
 function renderAnalyticsQueue() {
@@ -307,16 +307,16 @@ function renderAnalyticsQueue() {
     .sort((a, b) => activeCount(b) - activeCount(a) || b.waiting - a.waiting);
   const items = queued.slice(0, 4).map(key => {
     const li = element('li');
-    const state = [key.active && '执行中 ' + fmt(activeCount(key)), key.waiting && '排队 ' + fmt(key.waiting)].filter(Boolean).join(' · ');
+    const state = [key.active && '執行中 ' + fmt(activeCount(key)), key.waiting && '排隊 ' + fmt(key.waiting)].filter(Boolean).join(' · ');
     li.append(element('span', keyName(key)), element('span', state));
     return li;
   });
-  if (queued.length > items.length) items.push(element('li', '还有 ' + (queued.length - items.length) + ' 把密钥正在等待'));
+  if (queued.length > items.length) items.push(element('li', '還有 ' + (queued.length - items.length) + ' 把密鑰正在等待'));
   byId('analysis-queue').replaceChildren(...items);
-  byId('analysis-queue-empty').textContent = items.length ? '' : snapshot ? '网关空闲' : '正在读取并发状态…';
+  byId('analysis-queue-empty').textContent = items.length ? '' : snapshot ? '網關空閒' : '正在讀取併發狀態…';
   const policy = byId('analysis-queue-policy');
   policy.hidden = snapshot?.wait_limit == null;
-  if (!policy.hidden) policy.textContent = '最长等待 ' + fmt(snapshot.wait_limit) + ' 秒';
+  if (!policy.hidden) policy.textContent = '最長等待 ' + fmt(snapshot.wait_limit) + ' 秒';
 }
 
 function chartState(contentId, emptyId, visible, message) {
@@ -330,7 +330,7 @@ function renderLatency(data, message) {
   byId('latency-summary').textContent = latency?.samples
     ? '平均 ' + duration(latency.average_ms) + ' · P95 ' + duration(latency.p95_ms)
     : '';
-  chartState('latency-bars', 'latency-empty', latency?.samples > 0, message || '这个时段暂无耗时样本。');
+  chartState('latency-bars', 'latency-empty', latency?.samples > 0, message || '這個時段暫無耗時樣本。');
   if (!latency?.samples) return;
   const edges = data.latency_limits;
   const bucketLabel = ms => ms >= 1000 ? (ms / 1000) + ' 秒' : ms + ' 毫秒';
@@ -355,12 +355,12 @@ function renderOutcomes(data, message) {
   const chart = byId('outcome-chart');
   const resultRows = data?.outcomes ?? [];
   const total = resultRows.reduce((sum, row) => sum + row.requests, 0);
-  chartState('outcome-chart', 'outcome-empty', total > 0, message || '这个时段暂无请求。');
+  chartState('outcome-chart', 'outcome-empty', total > 0, message || '這個時段暫無請求。');
   if (!total) return;
   const parts = Object.entries({success: 'mint', failed: 'rose', limited: 'gold', canceled: 'gray'}).map(([outcome, tone]) => {
     const rows = resultRows.filter(row => row.outcome === outcome);
     return {tone, name: outcomes[outcome], count: rows.reduce((sum, row) => sum + row.requests, 0),
-      detail: rows.filter(row => row.status != null).map(row => 'HTTP ' + row.status + ' · ' + fmt(row.requests) + ' 条').join('；')};
+      detail: rows.filter(row => row.status != null).map(row => 'HTTP ' + row.status + ' · ' + fmt(row.requests) + ' 條').join('；')};
   });
   const percent = new Intl.NumberFormat('zh-CN', {style: 'percent', maximumFractionDigits: 1});
   setDonut(chart.querySelector('.donut'), parts, percent.format(parts[0].count / total));
@@ -377,15 +377,15 @@ function renderAnalysis() {
   renderAnalyticsQueue();
   const ready = snapshot && loadedAnalyticsPeriod === analyticsPeriod;
   const data = ready ? analyticsData : null;
-  const message = ready ? data ? '' : '网关服务升级后可查看此图。' : '正在读取统计…';
+  const message = ready ? data ? '' : '網關服務升級後可查看此圖。' : '正在讀取統計…';
   const buckets = new Map(data?.timeline.map(point => [point.bucket, point]));
   const points = data ? Array.from({length: data.count}, (_, index) =>
     buckets.get(index) ?? {requests: 0, tokens: 0, failed: 0, limited: 0}) : [];
   const totalRequests = points.reduce((sum, point) => sum + point.requests, 0);
   const totalTokens = points.reduce((sum, point) => sum + point.tokens, 0);
   byId('analysis-summary').textContent = data
-    ? fmt(totalRequests) + ' 次请求 · ' + fmt(totalTokens) + ' Token'
-    : ready ? '历史模型用量和实时并发仍可查看' : '正在读取' + periodNames[analyticsPeriod] + '的统计';
+    ? fmt(totalRequests) + ' 次請求 · ' + fmt(totalTokens) + ' Token'
+    : ready ? '歷史模型用量和實時併發仍可查看' : '正在讀取' + periodNames[analyticsPeriod] + '的統計';
   renderLatency(data, message);
   renderOutcomes(data, message);
 
@@ -402,9 +402,9 @@ function renderAnalysis() {
   const haveTraffic = totalRequests > 0 || historical.length > 0;
   const haveErrors = Boolean(data && totalRequests);
   byId('traffic-summary').textContent = data ? periodNames[analyticsPeriod] + ' · 每段 ' +
-    ({300: '5 分钟', 3600: '1 小时', 86400: '1 天'}[data.step]) : historical.length ? '每日汇总 · UTC' : '';
-  chartState('traffic-chart', 'traffic-empty', haveTraffic, message || '这个时段暂无请求。');
-  chartState('error-chart', 'error-empty', haveErrors, message || '这个时段暂无请求。');
+    ({300: '5 分鐘', 3600: '1 小時', 86400: '1 天'}[data.step]) : historical.length ? '每日彙總 · UTC' : '';
+  chartState('traffic-chart', 'traffic-empty', haveTraffic, message || '這個時段暫無請求。');
+  chartState('error-chart', 'error-empty', haveErrors, message || '這個時段暫無請求。');
   if (data && haveTraffic) {
     trafficChart(labels, [{tone: field === 'tokens' ? 'mint' : 'blue', label: unit, area: true, counts: kind === 'total',
       values: points.map(point => point[field] * (kind === 'rate' ? 60 / data.step : 1))}]);
@@ -416,7 +416,7 @@ function renderAnalysis() {
       values: days.map(day => (daily.get(day)?.[field] ?? 0) / (kind === 'rate' ? 1440 : 1))}]);
   }
   if (haveErrors) errorChart(labels, [
-    {tone: 'rose', label: '失败', counts: true, values: points.map(point => point.failed)},
+    {tone: 'rose', label: '失敗', counts: true, values: points.map(point => point.failed)},
     {tone: 'gold', label: '受限', counts: true, values: points.map(point => point.limited)},
   ]);
 }
@@ -432,8 +432,8 @@ function renderRequests() {
   const entries = (data ?? []).filter(entry => !filter || entry.outcome === filter);
   const lookup = new Map((snapshot?.keys ?? []).map(key => [key.id, key]));
   byId('request-caption').textContent = keyHistory
-    ? keyName(keyHistory.key) + ' · 最近 30 条'
-    : '最近 30 条 · 新采集的请求';
+    ? keyName(keyHistory.key) + ' · 最近 30 條'
+    : '最近 30 條 · 新採集的請求';
   byId('clear-key-filter').hidden = !keyHistory;
   byId('request-rows').replaceChildren(...entries.map(entry => {
     const row = element('tr');
@@ -451,8 +451,8 @@ function renderRequests() {
   }));
   const empty = byId('request-empty');
   empty.hidden = entries.length > 0;
-  empty.textContent = !snapshot ? '正在读取请求…' : !data ? '更新服务器上的 Safe Code API 后可查看请求明细。' :
-    data.length ? '没有符合筛选条件的请求。' : '暂无新采集的请求记录。';
+  empty.textContent = !snapshot ? '正在讀取請求…' : !data ? '更新伺服器上的 Safe Code API 後可查看請求明細。' :
+    data.length ? '沒有符合篩選條件的請求。' : '暫無新採集的請求記錄。';
 }
 
 function selectView(view) {
@@ -472,7 +472,7 @@ function refresh(showProgress = true) {
 }
 async function loadSnapshot(showProgress) {
   byId('refresh').disabled = true;
-  if (showProgress) notice('status', '正在读取网关…');
+  if (showProgress) notice('status', '正在讀取網關…');
   try {
     const fetchAnalytics = showProgress || loadedAnalyticsPeriod !== analyticsPeriod || Date.now() - analyticsRefreshedAt >= 10000;
     const period = activeView === 'analytics' && fetchAnalytics ? analyticsPeriod : undefined;
@@ -548,17 +548,17 @@ async function loadModelOptions() {
   const epoch = editorEpoch;
   catalogPending = true;
   byId('reload-models').hidden = true;
-  notice('model-status', '正在读取 CloudCLI 模型…');
+  notice('model-status', '正在讀取 CloudCLI 模型…');
   try {
     const {models} = await manage('model_catalog');
     if (!editor.open || epoch !== editorEpoch) return;
     showModelOptions(models, selectedModels());
     catalogLoaded = models.length > 0;
-    notice('model-status', catalogLoaded ? '' : 'CloudCLI 当前没有返回可用模型。');
+    notice('model-status', catalogLoaded ? '' : 'CloudCLI 當前沒有返回可用模型。');
     byId('reload-models').hidden = catalogLoaded;
   } catch (error) {
     if (!editor.open || epoch !== editorEpoch) return;
-    notice('model-status', '无法读取模型。' + error.message, true);
+    notice('model-status', '無法讀取模型。' + error.message, true);
     byId('reload-models').hidden = false;
   } finally {
     if (epoch === editorEpoch) catalogPending = false;
@@ -586,8 +586,8 @@ function showEditor(key) {
   byId('device-policy-field').hidden = devicePolicy.disabled;
   devicePolicy.value = !key || key.device_access === true ? 'desktop' : 'api';
   byId('device-policy-help').textContent = snapshot.device_service_problem
-    ? '设备服务尚未就绪。请在网关设置中运行故障修复，或先选择普通 API。'
-    : '桌面接入允许设备配对，使用者仍须在本机确认授权。';
+    ? '裝置服務尚未就緒。請在網關設定中執行故障修復，或先選擇普通 API。'
+    : '桌面接入允許裝置配對，使用者仍須在本機確認授權。';
   editorEpoch++;
   catalogLoaded = catalogPending = false;
   const policySupported = snapshot.key_policy_supported === true;
@@ -599,8 +599,8 @@ function showEditor(key) {
   notice('model-status', '');
   byId('reload-models').hidden = true;
   showModelOptions([], key?.allowed_models ?? []);
-  byId('editor-title').textContent = key ? '编辑密钥' : '创建密钥';
-  byId('save-key').textContent = key ? '保存修改' : '创建密钥';
+  byId('editor-title').textContent = key ? '編輯密鑰' : '建立密鑰';
+  byId('save-key').textContent = key ? '儲存修改' : '建立密鑰';
   byId('note').value = key?.note ?? '';
   byId('rpm').value = key?.rpm ?? 0;
   const budget = byId('budget');
@@ -608,8 +608,8 @@ function showEditor(key) {
   byId('budget-field').hidden = budget.disabled;
   budget.value = key?.budget_nanos == null ? '' : (key.budget_nanos / 1e9).toFixed(2);
   byId('budget-detail').textContent = key
-    ? '已用 ' + costLabel(key) + '。提高累计额度可增加余额，留空不限额。'
-    : '余额用完后暂停新请求，留空不限额。';
+    ? '已用 ' + costLabel(key) + '。提高累計額度可增加餘額，留空不限額。'
+    : '餘額用完後暫停新請求，留空不限額。';
   renderActivationField();
   notice('editor-status', '');
   editor.showModal();
@@ -619,14 +619,14 @@ function showEditor(key) {
 function showKeyRemoval(key, operation) {
   keyRemoval = {key, operation};
   const permanent = operation === 'delete';
-  const label = {delete: '彻底删除', unbind: '解绑设备', revoke: '撤销密钥'}[operation];
+  const label = {delete: '徹底刪除', unbind: '解綁裝置', revoke: '撤銷密鑰'}[operation];
   byId('revoke-title').textContent = label;
   byId('revoke-key').textContent = label;
   byId('revoke-message').textContent = permanent
-    ? '将永久删除「' + keyName(key) + '」及其用量和请求记录。此操作无法撤销。'
-    : '撤销「' + keyName(key) + '」后，使用这把密钥的设备将无法发起新请求。';
+    ? '將永久刪除「' + keyName(key) + '」及其用量和請求記錄。此操作無法撤銷。'
+    : '撤銷「' + keyName(key) + '」後，使用這把密鑰的裝置將無法發起新請求。';
   if (operation === 'unbind') {
-    byId('revoke-message').textContent = '解除「' + keyName(key) + '」的设备绑定？该 Key 的余额和用量记录将保留。';
+    byId('revoke-message').textContent = '解除「' + keyName(key) + '」的裝置綁定？該 Key 的餘額和用量記錄將保留。';
   }
   notice('revoke-status', '');
   byId('revoke-dialog').showModal();
@@ -636,7 +636,7 @@ async function changeKey(task, statusId, button) {
   if (operationPending) return;
   operationPending = true;
   button.disabled = true;
-  notice(statusId, '正在保存…');
+  notice(statusId, '正在儲存…');
   try {
     await task();
     await refreshTask;
@@ -647,7 +647,7 @@ async function changeKey(task, statusId, button) {
       const activation = byId('activation-code');
       await refreshTask;
       await refresh(false);
-      if (!activation.disabled && error.message.includes('激活码')) activation.focus();
+      if (!activation.disabled && error.message.includes('啟用碼')) activation.focus();
     }
   } finally {
     operationPending = false;
@@ -661,7 +661,7 @@ async function showUsage(key) {
   rows.replaceChildren();
   byId('usage-key').textContent = keyName(key);
   byId('view-key-requests').disabled = true;
-  notice('usage-status', '正在读取用量…');
+  notice('usage-status', '正在讀取用量…');
   const panel = byId('usage-dialog');
   panel.showModal();
   try {
@@ -669,7 +669,7 @@ async function showUsage(key) {
     if (!panel.open || epoch !== usageEpoch) return;
     usageKey = {...key, recent};
     byId('view-key-requests').disabled = !Array.isArray(recent);
-    notice('usage-status', !models.length ? '这把密钥暂无用量。' : '');
+    notice('usage-status', !models.length ? '這把密鑰暫無用量。' : '');
     rows.replaceChildren(...models.map(model => {
       const row = element('tr');
       cell(row, model.model);
@@ -722,12 +722,12 @@ function renderReviewFields() {
   byId('prompt-review-key-field').hidden = !deepseek;
   reviewKey.disabled = !deepseek;
   reviewKey.required = deepseek && reviewEnabled.checked && !savedKey;
-  reviewKey.placeholder = savedKey ? '已保存 · 粘贴可替换' : '粘贴 DeepSeek API Key';
+  reviewKey.placeholder = savedKey ? '已儲存 · 貼上可替換' : '貼上 DeepSeek API Key';
   const languageSupported = typeof snapshot.prompt_review.language_replacement === 'boolean';
   reviewLanguage.disabled = !languageSupported || !reviewEnabled.checked;
   if (reviewLanguage.disabled) reviewLanguage.checked = false;
-  byId('prompt-review-language-note').textContent = !languageSupported ? '更新 VPS 网关后可使用。'
-    : reviewEnabled.checked ? '由上方模型把通过审查的提示词翻译成英文。' : '开启安全审查后可用。';
+  byId('prompt-review-language-note').textContent = !languageSupported ? '更新 VPS 網關後可使用。'
+    : reviewEnabled.checked ? '由上方模型把通過審查的提示詞翻譯成英文。' : '開啟安全審查後可用。';
 }
 byId('gateway-prompt-review').onclick = () => {
   const settings = snapshot.prompt_review;
@@ -751,7 +751,7 @@ byId('prompt-review-form').onsubmit = async event => {
   if (options.provider === 'deepseek' && reviewKey.value.trim()) options.deepseek_key = reviewKey.value.trim();
   operationPending = true;
   button.disabled = reviewProvider.disabled = reviewModel.disabled = reviewKey.disabled = reviewEnabled.disabled = reviewLanguage.disabled = true;
-  notice('prompt-review-status', '正在保存…');
+  notice('prompt-review-status', '正在儲存…');
   try {
     await refreshTask;
     snapshot.prompt_review = await manage('set_prompt_review', options);
@@ -778,7 +778,7 @@ byId('key-queue-form').onsubmit = async event => {
   if (operationPending) return;
   const save = byId('save-key-queue');
   operationPending = save.disabled = keyQueueEnabled.disabled = true;
-  notice('key-queue-status', '正在保存…');
+  notice('key-queue-status', '正在儲存…');
   try {
     await refreshTask;
     await manage('set_key_queue', {enabled: keyQueueEnabled.checked});
@@ -805,7 +805,7 @@ byId('concurrency-form').onsubmit = async event => {
   const concurrency = input.value;
   operationPending = true;
   button.disabled = input.disabled = true;
-  notice('concurrency-status', '正在保存…');
+  notice('concurrency-status', '正在儲存…');
   try {
     await refreshTask;
     await manage('set_concurrency', {concurrency});
@@ -833,10 +833,10 @@ byId('clear-key-filter').onclick = () => {
   renderRequests();
 };
 function showTicket(result, updated = false) {
-  byId('issued-title').textContent = updated ? 'Key 已更新' : '密钥已创建';
+  byId('issued-title').textContent = updated ? 'Key 已更新' : '密鑰已建立';
   byId('issued-help').textContent = updated
-    ? '请在使用这把 Key 的设备上选择「更换 Key」，粘贴下面的完整 Key。'
-    : '完整密钥仅在这里显示。请复制后回到 Safe Code 主界面的「API Key 接入」粘贴。';
+    ? '請在使用這把 Key 的裝置上選擇「更換 Key」，貼上下面的完整 Key。'
+    : '完整密鑰僅在這裏顯示。請複製後回到 Safe Code 主介面的「API Key 接入」貼上。';
   notice('issued-origin', result.origin ? '接入地址  ' + result.origin : '');
   byId('ticket').value = result.ticket;
   notice('copy-status', '');
@@ -856,7 +856,7 @@ byId('refresh-ticket-form').onsubmit = event => {
     const result = await manage('refresh_ticket', {ticket: oldTicket.value.trim()});
     oldTicket.value = '';
     if (!result.changed) {
-      notice('refresh-ticket-status', '这把 Key 已使用当前网关地址。');
+      notice('refresh-ticket-status', '這把 Key 已使用當前網關地址。');
       return;
     }
     ticketDialog.close();
@@ -870,7 +870,7 @@ byId('key-form').onsubmit = event => {
   if (!modelPolicy.disabled) {
     options.allowed_models = modelPolicy.value === 'selected' ? selectedModels() : null;
     if (options.allowed_models?.length === 0) {
-      notice('editor-status', '请至少选择一个允许使用的模型。', true);
+      notice('editor-status', '請至少選擇一個允許使用的模型。', true);
       return;
     }
     let expiry = null;
@@ -879,7 +879,7 @@ byId('key-form').onsubmit = event => {
       expiry = original && expiryInput.value === localExpiry(original)
         ? original : new Date(expiryInput.value).getTime() / 1000;
       if (!Number.isFinite(expiry) || (expiry !== original && expiry <= Date.now() / 1000)) {
-        notice('editor-status', '请选择晚于现在的失效时间。', true);
+        notice('editor-status', '請選擇晚於現在的失效時間。', true);
         return;
       }
     }
@@ -909,7 +909,7 @@ byId('issued-dialog').addEventListener('close', () => { byId('ticket').value = '
 byId('copy-key').onclick = async () => {
   try {
     await rpc('copy', {text: byId('ticket').value});
-    notice('copy-status', '已复制密钥。');
+    notice('copy-status', '已複製密鑰。');
   } catch (error) {
     notice('copy-status', error.message, true);
   }

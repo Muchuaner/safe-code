@@ -35,7 +35,7 @@ internal sealed class ClientServices : IDisposable
     private const string ReleaseTagPrefix=ReleasesPage+"/tag/";
     private const string ReleasesFeedId="tag:github.com,2008:"+ReleasesPage;
     private const string AtomNamespace="http://www.w3.org/2005/Atom";
-    private const string UnknownUpdateStatus="GitHub 暂时限制了更新查询，且无法从官方发布页确认版本，请稍后重试。";
+    private const string UnknownUpdateStatus="GitHub 暫時限制了更新查詢，且無法從官方發佈頁確認版本，請稍後重試。";
     private const int ExplicitOptInVersion=1;
     private const int CurrentDiagnosticScope=2;
     private readonly string preferencesPath;
@@ -213,7 +213,7 @@ internal sealed class ClientServices : IDisposable
                 if(attempt==0)await Task.Delay(1000,deadline.Token);
             }
         }
-        catch(Exception){} // 诊断发送永远不能改变部署结果或弹出第二个错误。
+        catch(Exception){} // 診斷髮送永遠不能改變部署結果或彈出第二個錯誤。
         finally{deadline?.Dispose();if(acquired)diagnosticSlots.Release();}
     }
     private async Task CountLaunchAsync()
@@ -225,7 +225,7 @@ internal sealed class ClientServices : IDisposable
             if(!Guid.TryParse(preferences.InstallationId,out _)){preferences.InstallationId=Guid.NewGuid().ToString();Save();}
             counted=true;token=reporting.Token;installationId=preferences.InstallationId;
         }
-        // 固定字段白名单：无 VPS 地址、登录名、机器名、密码或项目路径。
+        // 固定欄位白名單：無 VPS 地址、登入名、機器名、密碼或項目路徑。
         var body=new{schema=1,eventId,installationId,version=Version,os=OperatingSystem.IsMacOS()?"macOS":"Windows",eventType="launch"};
         for(int attempt=0;attempt<3;attempt++){
             if(token.IsCancellationRequested||!preferences.Enabled)return;
@@ -236,12 +236,12 @@ internal sealed class ClientServices : IDisposable
     }
     public async Task SendFeedbackAsync(string message,CancellationToken ct)
     {
-        if(endpoint==null)throw new InvalidOperationException("反馈服务尚未启用，请暂时通过 QQ 群反馈。");
-        message=message.Trim();if(message.Length<5||message.Length>4000)throw new ArgumentException("反馈内容须为 5–4000 字。");
+        if(endpoint==null)throw new InvalidOperationException("回饋服務尚未啟用，請暫時透過 QQ 群回饋。");
+        message=message.Trim();if(message.Length<5||message.Length>4000)throw new ArgumentException("回饋內容須為 5–4000 字。");
         FeedbackContext? context;
         lock(diagnosticGate)context=RecentFailure;
         using var response=await http.PostAsJsonAsync(new Uri(endpoint,"v1/feedback"),new{schema=context?.Report.Gateway==null?2:3,eventId=Guid.NewGuid().ToString(),version=Version,message,context},JsonDefaults.Options,ct);
-        if(!response.IsSuccessStatusCode)throw new IOException(response.StatusCode==HttpStatusCode.TooManyRequests?"提交较频繁，请稍后重试。":"反馈暂未送达，请稍后重试。");
+        if(!response.IsSuccessStatusCode)throw new IOException(response.StatusCode==HttpStatusCode.TooManyRequests?"提交較頻繁，請稍後重試。":"回饋暫未送達，請稍後重試。");
     }
     public async Task<UpdateInfo> CheckUpdateAsync(bool force,CancellationToken ct)
     {
@@ -265,7 +265,7 @@ internal sealed class ClientServices : IDisposable
                 else
                 {
                     apiBlockedUntil=DateTimeOffset.MinValue;
-                    if(response.StatusCode==HttpStatusCode.NotFound)return CacheUpdate(new(currentVersion,null,betaChannel?"尚未发布测试版本":"尚未发布正式版本",null));
+                    if(response.StatusCode==HttpStatusCode.NotFound)return CacheUpdate(new(currentVersion,null,betaChannel?"尚未發佈測試版本":"尚未發佈正式版本",null));
                     response.EnsureSuccessStatusCode();using var doc=JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));var root=doc.RootElement;
                     return CacheUpdate(SelectPlatformUpdate(root,betaChannel));
                 }
@@ -294,7 +294,7 @@ internal sealed class ClientServices : IDisposable
             bestNumber=number;
             bestUpdate=update;
         }
-        return bestUpdate??new(currentVersion,null,"未发现适用于此平台的新版本",null);
+        return bestUpdate??new(currentVersion,null,"未發現適用於此平台的新版本",null);
     }
     private UpdateInfo CacheUpdate(UpdateInfo update,bool fromFallback=false)
     {
@@ -332,7 +332,7 @@ internal sealed class ClientServices : IDisposable
                 if(response.StatusCode!=HttpStatusCode.Found||response.Headers.Location is not {} location)return UnknownFallback();
                 var tag=TagFromReleaseLink(new Uri(request.RequestUri!,location).AbsoluteUri);
                 var number=ReleaseNumber.Parse(tag??"");
-                return number is {Beta:false} ? await ConfirmFallbackAssetAsync(FallbackResult(installed,number,tag!,"官方发布页未发现更新"),ct) : UnknownFallback();
+                return number is {Beta:false} ? await ConfirmFallbackAssetAsync(FallbackResult(installed,number,tag!,"官方發佈頁未發現更新"),ct) : UnknownFallback();
             }
             response.EnsureSuccessStatusCode();
             return await ConfirmFallbackAssetAsync(ParseAtomRelease(await response.Content.ReadAsStringAsync(ct),installed),ct);
@@ -371,7 +371,7 @@ internal sealed class ClientServices : IDisposable
             if(number!=null&&number.CompareTo(best)>0){best=number;bestTag=tag;}
         }
         // Atom has no prerelease flag. A newer tag is an advisory link to the official release page.
-        return best==null ? UnknownFallback() : FallbackResult(installed,best,bestTag!,"官方发布订阅未发现更新");
+        return best==null ? UnknownFallback() : FallbackResult(installed,best,bestTag!,"官方發佈訂閱未發現更新");
     }
     private static string? TagFromReleaseLink(string? href) =>
         href?.StartsWith(ReleaseTagPrefix,StringComparison.Ordinal)==true
@@ -382,14 +382,14 @@ internal sealed class ClientServices : IDisposable
         if(comparison<0)return UnknownFallback();
         if(comparison==0)return new(currentVersion,null,sameVersionStatus,ReleasesPage);
         string version=tag.StartsWith('v')?tag[1..]:tag;
-        return new(currentVersion,version,"发现新版本 "+version+"（请前往官方发布页确认并下载）",ReleaseTagPrefix+Uri.EscapeDataString(tag),false);
+        return new(currentVersion,version,"發現新版本 "+version+"（請前往官方發佈頁確認並下載）",ReleaseTagPrefix+Uri.EscapeDataString(tag),false);
     }
     private static string AssetSuffix=>OperatingSystem.IsMacOS()?(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture==System.Runtime.InteropServices.Architecture.Arm64?"macOS-arm64.dmg":"macOS-x64.dmg"):"Setup-x64.exe";
     internal static UpdateInfo ParseRelease(JsonElement root,string current,string assetSuffix="Setup-x64.exe")
     {
         string tag=root.GetProperty("tag_name").GetString()??"";string version=tag.StartsWith('v')?tag[1..]:tag;
         var latest=ReleaseNumber.Parse(version);var installed=ReleaseNumber.Parse(current);
-        if(latest==null||installed==null||root.GetProperty("draft").GetBoolean()||(root.GetProperty("prerelease").GetBoolean()&&(!installed.Beta||!latest.Beta)))throw new IOException("GitHub 返回的版本信息无效。");
+        if(latest==null||installed==null||root.GetProperty("draft").GetBoolean()||(root.GetProperty("prerelease").GetBoolean()&&(!installed.Beta||!latest.Beta)))throw new IOException("GitHub 返回的版本資訊無效。");
         string page="https://github.com/"+Repository+"/releases/tag/"+Uri.EscapeDataString(tag);
         if(latest.CompareTo(installed)<=0)return new(current,null,"已是最新版本",page);
         string name="SafeCode-"+version+"-"+assetSuffix;bool valid=false;
@@ -398,12 +398,12 @@ internal sealed class ClientServices : IDisposable
             string digest=asset.TryGetProperty("digest",out var d)?d.GetString()??"":"";string url=asset.GetProperty("browser_download_url").GetString()??"";
             valid=System.Text.RegularExpressions.Regex.IsMatch(digest,"^sha256:[a-fA-F0-9]{64}$")&&url=="https://github.com/"+Repository+"/releases/download/"+tag+"/"+name&&asset.GetProperty("size").GetInt64() is >0 and <=1073741824;
         }
-        return new(current,version,"发现新版本 "+version,page,valid);
+        return new(current,version,"發現新版本 "+version,page,valid);
     }
     public async Task<DownloadedInstaller> DownloadUpdateAsync(Action<long,long> progress,CancellationToken ct)
     {
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromMinutes(20));var downloadToken=deadline.Token;
-        var item=release??throw new InvalidOperationException("请先检查新版本；没有可验证的安装包时可打开 GitHub 下载页。");
+        var item=release??throw new InvalidOperationException("請先檢查新版本；沒有可驗證的安裝包時可開啟 GitHub 下載頁。");
         string folder=Path.Combine(directory,"Updates",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
         string file=Path.Combine(folder,"SafeCode-"+item.Version+"-"+updateAssetSuffix);
         using var download=downloadTransport==null?new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}):new HttpClient(downloadTransport,false);download.Timeout=TimeSpan.FromMinutes(20);download.DefaultRequestHeaders.UserAgent.ParseAdd("SafeCode/"+currentVersion);
@@ -411,18 +411,18 @@ internal sealed class ClientServices : IDisposable
         try{
             HttpResponseMessage? response=null;
             for(int i=0;i<6;i++){
-                if(uri.Scheme!="https"||uri.UserInfo!=""||!(uri.Host=="github.com"||uri.Host=="release-assets.githubusercontent.com"||uri.Host=="objects.githubusercontent.com"))throw new IOException("安装包跳转到了未允许的下载地址。");
+                if(uri.Scheme!="https"||uri.UserInfo!=""||!(uri.Host=="github.com"||uri.Host=="release-assets.githubusercontent.com"||uri.Host=="objects.githubusercontent.com"))throw new IOException("安裝包跳轉到了未允許的下載地址。");
                 response=await download.GetAsync(uri,HttpCompletionOption.ResponseHeadersRead,downloadToken);
-                if((int)response.StatusCode is >=300 and <400){var location=response.Headers.Location;response.Dispose();response=null;if(location==null)throw new IOException("下载跳转无效。");uri=new Uri(uri,location);continue;}break;
+                if((int)response.StatusCode is >=300 and <400){var location=response.Headers.Location;response.Dispose();response=null;if(location==null)throw new IOException("下載跳轉無效。");uri=new Uri(uri,location);continue;}break;
             }
-            using(response){if(response==null)throw new IOException("下载跳转次数过多。");response.EnsureSuccessStatusCode();await using var source=await response.Content.ReadAsStreamAsync(downloadToken);await using var target=new FileStream(file,FileMode.CreateNew,FileAccess.Write,FileShare.None,81920,true);using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);byte[] buffer=new byte[81920];long total=0;long lastProgress=Environment.TickCount64;int count;while((count=await source.ReadAsync(buffer,downloadToken))>0){total+=count;if(total>item.Size)throw new IOException("下载文件大于发布记录。");hash.AppendData(buffer,0,count);await target.WriteAsync(buffer.AsMemory(0,count),downloadToken);if(Environment.TickCount64-lastProgress>=200||total==item.Size){progress(total,item.Size);lastProgress=Environment.TickCount64;}}if(total!=item.Size||!Convert.ToHexString(hash.GetHashAndReset()).Equals(item.Digest,StringComparison.OrdinalIgnoreCase))throw new IOException("安装包校验失败，已拒绝运行。");}
+            using(response){if(response==null)throw new IOException("下載跳轉次數過多。");response.EnsureSuccessStatusCode();await using var source=await response.Content.ReadAsStreamAsync(downloadToken);await using var target=new FileStream(file,FileMode.CreateNew,FileAccess.Write,FileShare.None,81920,true);using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);byte[] buffer=new byte[81920];long total=0;long lastProgress=Environment.TickCount64;int count;while((count=await source.ReadAsync(buffer,downloadToken))>0){total+=count;if(total>item.Size)throw new IOException("下載檔案大於發佈記錄。");hash.AppendData(buffer,0,count);await target.WriteAsync(buffer.AsMemory(0,count),downloadToken);if(Environment.TickCount64-lastProgress>=200||total==item.Size){progress(total,item.Size);lastProgress=Environment.TickCount64;}}if(total!=item.Size||!Convert.ToHexString(hash.GetHashAndReset()).Equals(item.Digest,StringComparison.OrdinalIgnoreCase))throw new IOException("安裝包校驗失敗，已拒絕執行。");}
             return new(file,item.Digest);
         }catch{File.Delete(file);throw;}
     }
     public static async Task VerifyInstallerAsync(DownloadedInstaller installer,CancellationToken ct)
     {
         await using var file=File.OpenRead(installer.Path);var digest=await SHA256.HashDataAsync(file,ct);
-        if(!Convert.ToHexString(digest).Equals(installer.Digest,StringComparison.OrdinalIgnoreCase))throw new IOException("安装文件已变化，请重新下载。");
+        if(!Convert.ToHexString(digest).Equals(installer.Digest,StringComparison.OrdinalIgnoreCase))throw new IOException("安裝檔案已變化，請重新下載。");
     }
     public void Dispose()
     {

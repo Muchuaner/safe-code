@@ -38,7 +38,7 @@ def execute(*args, timeout=35):
 def download_frps(destination):
     target = ARCHIVES.get(platform.machine())
     if target is None:
-        raise RuntimeError('当前 VPS 架构没有配套的 FRP 安装包。')
+        raise RuntimeError('當前 VPS 架構沒有配套的 FRP 安裝包。')
     arch, digest = target
     name = f'frp_{VERSION}_linux_{arch}'
     archive = None
@@ -56,12 +56,12 @@ def download_frps(destination):
             if package.stat().st_size <= MAX_ARCHIVE:
                 archive = package.read_bytes()
     if archive is None or hashlib.sha256(archive).hexdigest() != digest:
-        raise RuntimeError('FRP 官方安装包摘要校验失败。')
+        raise RuntimeError('FRP 官方安裝包摘要校驗失敗。')
     with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as bundle:
         member = bundle.getmember(name + '/frps')
         license_file = bundle.getmember(name + '/LICENSE')
         if not member.isfile() or not license_file.isfile():
-            raise RuntimeError('FRP 官方安装包缺少服务或许可证。')
+            raise RuntimeError('FRP 官方安裝包缺少服務或許可證。')
         destination.write_bytes(bundle.extractfile(member).read())
         destination.chmod(0o755)
         destination.with_name('LICENSE').write_bytes(bundle.extractfile(license_file).read())
@@ -82,7 +82,7 @@ def select_ports():
             ports.append(port)
             if len(ports) == 2:
                 return ports
-        raise RuntimeError('没有可用的私有网关设备服务端口。')
+        raise RuntimeError('沒有可用的私有網關裝置伺服器端口。')
     finally:
         for probe in sockets:
             probe.close()
@@ -152,17 +152,17 @@ def settle(config):
         if device_service_problem(config) is None:
             return
         time.sleep(.25)
-    raise RuntimeError('私有 FRP 或设备鉴权回调未通过就绪检查。')
+    raise RuntimeError('私有 FRP 或裝置鑑權回調未通過就緒檢查。')
 
 
 def provision(user, app, state):
     if os.geteuid() != 0 or not re.fullmatch(r'[a-z_][a-z0-9_-]*',user) or user == 'root':
-        raise ValueError('设备服务需要管理员安装并使用非 root 工作账户。')
+        raise ValueError('裝置服務需要管理員安裝並使用非 root 工作帳戶。')
     if any(not re.fullmatch(r'/[a-zA-Z0-9/_.-]+',str(path)) for path in (app,state,UNIT_DIRECTORY)):
-        raise ValueError('设备服务安装路径不受支持。')
+        raise ValueError('裝置服務安裝路徑不受支援。')
     for directory in (app,app.parent,UNIT_DIRECTORY):
         if directory.is_symlink() or not directory.is_dir() or directory.stat().st_uid!=0 or directory.stat().st_mode&0o022:
-            raise RuntimeError('设备服务的程序或服务目录权限异常。')
+            raise RuntimeError('裝置服務的程式或服務目錄權限異常。')
     current = state_config(user,state)
     component = app.parent/'desktop-device'
     manifest = component/'managed.json'
@@ -173,28 +173,28 @@ def provision(user, app, state):
     if manifest.is_file():
         if any(path.is_symlink() or path.stat().st_uid!=0 or path.stat().st_mode&0o022
                for path in (component,manifest)):
-            raise RuntimeError('设备服务管理目录权限异常。')
+            raise RuntimeError('裝置服務管理目錄權限異常。')
         saved = json.loads(manifest.read_text())
         if saved['user'] != user or saved['state'] != str(state):
-            raise RuntimeError('设备服务属于不同的网关工作账户。')
+            raise RuntimeError('裝置服務屬於不同的網關工作帳戶。')
         config = saved['config']
         units = saved['units']
         if current.get('managedDeviceService') and any(current.get(key)!=value for key,value in config.items()):
-            raise RuntimeError('设备服务配置已被修改，请核对监听设置。')
+            raise RuntimeError('裝置服務配置已被修改，請核對監聽設定。')
         if any(path.is_symlink() or not path.is_file() or path.read_text()!=units[path.name] for path in (auth,frp)):
-            raise RuntimeError('检测到设备服务单元已被修改，请核对 VPS 服务。')
+            raise RuntimeError('檢測到裝置服務單元已被修改，請核對 VPS 服務。')
         executable = component/'frps'
         frp_config = component/'frps.toml'
         callback = component/'callback'
         if any(path.is_symlink() for path in (executable,frp_config,callback)):
-            raise RuntimeError('设备服务组件路径异常。')
+            raise RuntimeError('裝置服務組件路徑異常。')
         rebuilt = not executable.is_file() or file_digest(executable) != saved['binaryDigest']
         if rebuilt:
             with tempfile.TemporaryDirectory(dir=component) as folder:
                 staged = Path(folder)/'frps'
                 download_frps(staged)
                 if file_digest(staged) != saved['binaryDigest']:
-                    raise RuntimeError('FRP 可执行文件与首次安装的摘要不一致。')
+                    raise RuntimeError('FRP 可執行檔案與首次安裝的摘要不一致。')
                 staged.replace(executable)
         configured = False
         for path,content in ((frp_config,render_frp(config)),(callback,config['deviceAuthCallback']+'\n')):
@@ -219,7 +219,7 @@ def provision(user, app, state):
             state_config(user,state,config)
         return
     if current.get('managedDeviceService') or any(path.exists() or path.is_symlink() for path in (component,auth,frp)):
-        raise RuntimeError('检测到已有的设备服务文件，请核对 VPS 服务归属。')
+        raise RuntimeError('檢測到已有的裝置服務檔案，請核對 VPS 服務歸屬。')
     frp_port, auth_port = select_ports()
     config = dict(deviceFrpPort=frp_port,deviceAuthPort=auth_port,deviceAuthCallback='/'+secrets.token_hex(24),
                   managedDeviceService=True)

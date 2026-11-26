@@ -26,8 +26,8 @@ public sealed partial class SshSession
         await operations.WaitAsync(ct);
         try
         {
-            if(!IsConnected)throw new InvalidOperationException("请先连接服务器。");payload=remoteDirectory+"/codex-bridge-"+Guid.NewGuid().ToString("N")+".zip";
-            using var resource=Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.codex_bridge.zip")??throw new IOException("缺少适配器服务器组件。");
+            if(!IsConnected)throw new InvalidOperationException("請先連接伺服器。");payload=remoteDirectory+"/codex-bridge-"+Guid.NewGuid().ToString("N")+".zip";
+            using var resource=Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.codex_bridge.zip")??throw new IOException("缺少適配器伺服器組件。");
             using var sftp=MakeSftp();await sftp.ConnectAsync(ct);await sftp.UploadFileAsync(resource,payload,ct);sftp.ChangePermissions(payload,600);
         }
         finally{operations.Release();}

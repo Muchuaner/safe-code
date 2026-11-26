@@ -11,7 +11,7 @@ private enum AppError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .message(let text): return text
-        case .keychainCancelled: return "未获得钥匙串授权，仍可手动填写服务器登录信息。"
+        case .keychainCancelled: return "未獲得鑰匙串授權，仍可手動填寫伺服器登入資料。"
         }
     }
 }
@@ -30,7 +30,7 @@ private func keychainSecret(allowPrompt: Bool, allowCreate: Bool) throws -> Data
         var previous = DarwinBoolean(false)
         guard SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess,
               SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
-            throw AppError.message("暂时无法静默访问 macOS 钥匙串。")
+            throw AppError.message("暫時無法靜默訪問 macOS 鑰匙串。")
         }
         defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
         return try readKeychainSecret(allowCreate: allowCreate)
@@ -42,15 +42,15 @@ private func readKeychainSecret(allowCreate: Bool) throws -> Data {
     var result: CFTypeRef?; let status = SecItemCopyMatching(query as CFDictionary, &result)
     if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data }
     if status == errSecItemNotFound && !allowCreate {
-        throw AppError.message("找不到原来的钥匙串密钥，已保留本机加密数据。")
+        throw AppError.message("找不到原來的鑰匙串密鑰，已保留本機加密數據。")
     }
     if status == errSecUserCanceled { throw AppError.keychainCancelled }
-    guard status == errSecItemNotFound else { throw AppError.message("未获得钥匙串授权，仍可手动填写服务器登录信息。") }
+    guard status == errSecItemNotFound else { throw AppError.message("未獲得鑰匙串授權，仍可手動填寫伺服器登入資料。") }
     var data = Data(count:32); let random = data.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
-    guard random == errSecSuccess else { throw AppError.message("无法生成本机加密密钥。") }
+    guard random == errSecSuccess else { throw AppError.message("無法生成本機加密密鑰。") }
     let item: [String:Any] = [kSecClass as String:kSecClassGenericPassword, kSecAttrService as String:bundleID, kSecAttrAccount as String:"local-encryption-v1", kSecValueData as String:data, kSecAttrAccessible as String:kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
     let added = SecItemAdd(item as CFDictionary,nil)
-    guard added == errSecSuccess else { throw AppError.message("无法保存本机钥匙串密钥（\(added)）。") }; return data
+    guard added == errSecSuccess else { throw AppError.message("無法儲存本機鑰匙串密鑰（\(added)）。") }; return data
 }
 
 @MainActor
@@ -136,14 +136,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     private func makeMenu() {
         let main=NSMenu();let app=NSMenu();let root=NSMenuItem();root.submenu=app;main.addItem(root)
-        app.addItem(withTitle:"关于 Safe Code",action:#selector(about),keyEquivalent:"")
-        app.addItem(withTitle:"更新与反馈",action:#selector(openServices),keyEquivalent:"").target=self
-        app.addItem(.separator());app.addItem(withTitle:"显示主界面",action:#selector(showMain),keyEquivalent:"0")
-        app.addItem(withTitle:"关闭窗口",action:#selector(closeKeyWindow),keyEquivalent:"w").target=self
-        app.addItem(withTitle:"隐藏 Safe Code",action:#selector(NSApplication.hide(_:)),keyEquivalent:"h")
+        app.addItem(withTitle:"關於 Safe Code",action:#selector(about),keyEquivalent:"")
+        app.addItem(withTitle:"更新與回饋",action:#selector(openServices),keyEquivalent:"").target=self
+        app.addItem(.separator());app.addItem(withTitle:"顯示主介面",action:#selector(showMain),keyEquivalent:"0")
+        app.addItem(withTitle:"關閉視窗",action:#selector(closeKeyWindow),keyEquivalent:"w").target=self
+        app.addItem(withTitle:"隱藏 Safe Code",action:#selector(NSApplication.hide(_:)),keyEquivalent:"h")
         app.addItem(.separator());app.addItem(withTitle:"安全退出",action:#selector(quit),keyEquivalent:"q").target=self
-        let edit=NSMenu(title:"编辑");let editItem=NSMenuItem(title:"编辑",action:nil,keyEquivalent:"");editItem.submenu=edit;main.addItem(editItem)
-        for (name,selector,key) in [("撤销",Selector(("undo:")),"z"),("剪切",#selector(NSText.cut(_:)),"x"),("复制",#selector(NSText.copy(_:)),"c"),("粘贴",#selector(NSText.paste(_:)),"v"),("全选",#selector(NSText.selectAll(_:)),"a")] {edit.addItem(withTitle:name,action:selector,keyEquivalent:key)}
+        let edit=NSMenu(title:"編輯");let editItem=NSMenuItem(title:"編輯",action:nil,keyEquivalent:"");editItem.submenu=edit;main.addItem(editItem)
+        for (name,selector,key) in [("撤銷",Selector(("undo:")),"z"),("剪切",#selector(NSText.cut(_:)),"x"),("複製",#selector(NSText.copy(_:)),"c"),("貼上",#selector(NSText.paste(_:)),"v"),("全選",#selector(NSText.selectAll(_:)),"a")] {edit.addItem(withTitle:name,action:selector,keyEquivalent:key)}
         NSApp.mainMenu=main
     }
     private var shim: String { """
@@ -151,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         window.chrome={webview:{postMessage:m=>window.webkit.messageHandlers.native.postMessage(m)}};
         if(!crypto.randomUUID)crypto.randomUUID=()=>{const b=new Uint8Array(16);crypto.getRandomValues(b);b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20)};
         document.addEventListener('click',e=>{if(!window.safeCodeNativeReady&&!e.target.closest?.('[data-safe-code-startup-close]')){e.preventDefault();e.stopImmediatePropagation();}},true);
-        document.addEventListener('DOMContentLoaded',()=>{if(!window.safeCodeNativeReady){document.body.innerHTML='<p style="padding:32px;font:14px system-ui">客户端界面未能加载，请检查应用是否完整。</p>';}});
+        document.addEventListener('DOMContentLoaded',()=>{if(!window.safeCodeNativeReady){document.body.innerHTML='<p style="padding:32px;font:14px system-ui">客戶端介面未能載入，請檢查應用是否完整。</p>';}});
         """ }
     private func configuration(services: Bool=false) -> WKWebViewConfiguration {
         let config=WKWebViewConfiguration();config.websiteDataStore = .nonPersistent()
@@ -164,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     private func makeWindow() {
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:360,height:536),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.title=isolated ? "Safe Code · 隔离预览":"Safe Code";window.minSize=NSSize(width:360,height:500);window.center();window.delegate=self;window.isReleasedWhenClosed=false
+        window.title=isolated ? "Safe Code · 隔離預覽":"Safe Code";window.minSize=NSSize(width:360,height:500);window.center();window.delegate=self;window.isReleasedWhenClosed=false
         web=WKWebView(frame:.zero,configuration:configuration());web.navigationDelegate=self;web.uiDelegate=self
         window.contentView=web
     }
@@ -251,13 +251,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             guard let self=self,!self.quitting else{return}
             self.ready=false;self.stdin=nil;self.readBuffer.removeAll()
             let replies=Array(self.completions.values);self.completions.removeAll()
-            for reply in replies{reply(.failure(AppError.message("连接核心已退出，请重新连接服务器。")))}
-            if self.smokeOutput != nil {self.fail("连接核心异常退出，状态码 \(p.terminationStatus)。");self.quitting=true;NSApp.terminate(nil);return}
+            for reply in replies{reply(.failure(AppError.message("連線核心已退出，請重新連接伺服器。")))}
+            if self.smokeOutput != nil {self.fail("連線核心異常退出，狀態碼 \(p.terminationStatus)。");self.quitting=true;NSApp.terminate(nil);return}
             if !self.restarted {
                 self.restarted=true
                 do {try self.startBackend()} catch {self.fail(error.localizedDescription)}
             }
-            self.fail("连接核心已退出，加密通道已断开。已尝试恢复核心并撤销残留本机控制授权；请重新连接服务器，检查挂载状态。")
+            self.fail("連線核心已退出，加密通道已斷開。已嘗試恢復核心並撤銷殘留本機控制授權；請重新連接伺服器，檢查掛載狀態。")
         }}
         try process.run();backend=process
         var boot:[String:Any]=["offline":isolated]
@@ -265,7 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         try stdin?.write(contentsOf:Data((json(boot)+"\n").utf8))
     }
     private func send(_ message:[String:Any]) {
-        do {guard backend?.isRunning==true,let stdin=stdin else{throw AppError.message("客户端核心未运行。")};try stdin.write(contentsOf:Data((json(message)+"\n").utf8))}
+        do {guard backend?.isRunning==true,let stdin=stdin else{throw AppError.message("客戶端核心未執行。")};try stdin.write(contentsOf:Data((json(message)+"\n").utf8))}
         catch {if let id=message["id"] as? String {if let reply=completions.removeValue(forKey:id){reply(.failure(error))}else{answer(id,error:error.localizedDescription)}}}
     }
     private func request(_ op:String,_ args:[String:Any]=[:],deadline:(seconds:TimeInterval,message:String)?=nil,completion:@escaping(Result<Any,Error>)->Void) {
@@ -324,7 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case "account.draft.get" where !isolated && args["interactive"] as? Bool == true && encryptionKey==nil:
             request(op,args){[weak self] result in
                 guard let self=self else{return}
-                if case .failure(let error)=result,error.localizedDescription=="本机加密数据尚未解锁。" {
+                if case .failure(let error)=result,error.localizedDescription=="本機加密數據尚未解鎖。" {
                     self.withUnlockedSecrets(replyID:id,diagnostic:.accountCustomization){self.request(op,args,completion:$0)}
                 }else{self.answer(id,with:result)}
             }
@@ -340,8 +340,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             }else{send(body)}
         case "claudeDesktop.open","claudeDesktop.reopen":
             openClaudeDesktop(replyID:id,restart:op=="claudeDesktop.reopen")
-        case "secrets.initialize":answer(id,error:"仅原生客户端可解锁本机数据。")
-        case "diagnostics.native-failure":answer(id,error:"该操作仅供原生客户端内部调用。")
+        case "secrets.initialize":answer(id,error:"僅原生客戶端可解鎖本機數據。")
+        case "diagnostics.native-failure":answer(id,error:"該操作僅供原生客戶端內部調用。")
         case "window.smoke.dialog" where smokeOutput != nil:
             answer(id,["id":dialogWindows.last?.id ?? "",
                        "title":dialogHost.title,
@@ -398,11 +398,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case "window.close":answer(id,true);window.performClose(nil)
         case "window.quit":answer(id,true);quit()
         case "copy":NSPasteboard.general.clearContents();NSPasteboard.general.setString(args["text"] as? String ?? "",forType:.string);answer(id,true)
-        case "pickFolder":let picker=NSOpenPanel();picker.title="选择要挂载到 VPS 的本机目录";picker.canChooseFiles=false;picker.canChooseDirectories=true;picker.allowsMultipleSelection=false;picker.beginSheetModal(for:dialogHost){[weak self] result in self?.answer(id,result == .OK ? picker.url?.path ?? "":NSNull())}
+        case "pickFolder":let picker=NSOpenPanel();picker.title="選擇要掛載到 VPS 的本機目錄";picker.canChooseFiles=false;picker.canChooseDirectories=true;picker.allowsMultipleSelection=false;picker.beginSheetModal(for:dialogHost){[weak self] result in self?.answer(id,result == .OK ? picker.url?.path ?? "":NSNull())}
         case "services.open":openServices();answer(id,true)
         case "window.gateway.open":openGateway(id)
         case "connect","preview.begin":
-            guard !gatewayMutationPending && !gatewayOpening else{answer(id,error:"请等待当前网关操作完成。");return}
+            guard !gatewayMutationPending && !gatewayOpening else{answer(id,error:"請等待當前網關操作完成。");return}
             gatewayWindow?.close()
             send(body)
         case "services.consent","services.confirm","diagnostics.consent","updates.check":serviceRequest(op,args,id:id,from:web)
@@ -489,44 +489,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         guard let url=candidates.compactMap({$0}).first(where:{Bundle(url:$0)?.bundleIdentifier==bundleID}) else {
             let download=URL(string:"https://claude.com/download")!
             if workspace.open(download) {
-                answer(id,["installationRequired":true,"message":"未找到 Claude Desktop，已打开官方下载页。安装后请回到 SafeCode 再次打开。"])
-            } else {answer(id,error:"未找到 Claude Desktop，请在浏览器打开 https://claude.com/download")}
+                answer(id,["installationRequired":true,"message":"未找到 Claude Desktop，已開啟官方下載頁。安裝後請回到 SafeCode 再次開啟。"])
+            } else {answer(id,error:"未找到 Claude Desktop，請在瀏覽器開啟 https://claude.com/download")}
             return
         }
 
         func launch() {
-            request("claudeDesktop.prepare",deadline:(30,"检查本机网关超时，请确认 SafeCode 接入状态。")){result in
+            request("claudeDesktop.prepare",deadline:(30,"檢查本機網關超時，請確認 SafeCode 接入狀態。")){result in
                 guard case .success(let value)=result,let since=value as? NSNumber else {
                     if case .failure(let error)=result {self.answer(id,error:error.localizedDescription)}
-                    else {self.answer(id,error:"未能确认 SafeCode 网关状态。")}
+                    else {self.answer(id,error:"未能確認 SafeCode 網關狀態。")}
                     return
                 }
                 let ready=Date(timeIntervalSince1970:since.doubleValue/1000)
                 let apps=NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).filter{!$0.isTerminated}
                 if apps.contains(where:{($0.launchDate ?? .distantPast)<ready}) {
-                    self.answer(id,error:"Claude Desktop 在本次网关启用前就已运行。请按 ⌘Q 完全退出，再点击打开以载入当前配置。")
+                    self.answer(id,error:"Claude Desktop 在本次網關啟用前就已執行。請按 ⌘Q 完全退出，再點擊開啟以載入當前配置。")
                     return
                 }
                 workspace.openApplication(at:url,configuration:NSWorkspace.OpenConfiguration()){app,error in
                     DispatchQueue.main.async {
                         guard error==nil,app?.bundleIdentifier==bundleID,app?.isTerminated==false else {
-                            self.answer(id,error:"已找到 Claude Desktop，但 macOS 未能启动它。请在 Finder 中检查应用是否可打开。")
+                            self.answer(id,error:"已找到 Claude Desktop，但 macOS 未能啟動它。請在 Finder 中檢查應用是否可開啟。")
                             return
                         }
-                        self.answer(id,"已打开 Claude Desktop。")
+                        self.answer(id,"已開啟 Claude Desktop。")
                     }
                 }
             }
         }
         let apps=NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).filter{!$0.isTerminated}
         guard restart && !apps.isEmpty else {launch();return}
-        request("claudeDesktop.prepare",deadline:(30,"检查本机网关超时，请确认 SafeCode 接入状态。")){result in
+        request("claudeDesktop.prepare",deadline:(30,"檢查本機網關超時，請確認 SafeCode 接入狀態。")){result in
             guard case .success=result else {self.answer(id,with:result);return}
             for app in apps {_=app.terminate()}
             let deadline=Date().addingTimeInterval(15)
             @MainActor func waitForExit() {
                 if apps.allSatisfy({$0.isTerminated}) {launch()}
-                else if Date()>=deadline {self.answer(id,error:"请按 ⌘Q 完全退出 Claude Desktop，再点击「打开 Claude Desktop」。")}
+                else if Date()>=deadline {self.answer(id,error:"請按 ⌘Q 完全退出 Claude Desktop，再點擊「開啟 Claude Desktop」。")}
                 else {DispatchQueue.main.asyncAfter(deadline:.now()+0.25){waitForExit()}}
             }
             waitForExit()
@@ -549,17 +549,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         withUnlockedSecrets(diagnostic:diagnostic,reply:{ [weak self] in self?.answer(replyID,with:$0) },perform:perform)
     }
     private func withUnlockedSecrets(diagnostic: NativeDiagnosticOperation,reply:@escaping (Result<Any,Error>)->Void,perform: @escaping (@escaping (Result<Any,Error>)->Void)->Void) {
-        guard !isolated else {reply(.failure(AppError.message("隔离预览不会访问钥匙串。")));return}
+        guard !isolated else {reply(.failure(AppError.message("隔離預覽不會訪問鑰匙串。")));return}
         let replyToUnlockFailure: (Error)->Void = { [weak self] error in
             guard let self=self else{return}
             let cancelled: Bool
             if case .keychainCancelled = error as? AppError {cancelled=true}else{cancelled=false}
             self.reportNativeFailure(diagnostic,cancelled:cancelled){ issue in
-                reply(.failure(AppError.message(error.localizedDescription+(issue.map{"\n问题编号："+$0} ?? ""))))
+                reply(.failure(AppError.message(error.localizedDescription+(issue.map{"\n問題編號："+$0} ?? ""))))
             }
         }
         if encryptionKey != nil {perform(reply);return}
-        guard !unlockingSecrets else {reply(.failure(AppError.message("正在等待钥匙串授权。")));return}
+        guard !unlockingSecrets else {reply(.failure(AppError.message("正在等待鑰匙串授權。")));return}
         do {
             unlockingSecrets=true
             let key=try keychainSecret(allowPrompt:true,allowCreate:!hasEncryptedData)
@@ -595,15 +595,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     private func openGateway(_ id:String) {
         if let panel=gatewayWindow {panel.makeKeyAndOrderFront(nil);answer(id,true);return}
-        guard !gatewayOpening else{answer(id,error:"网关管理正在打开，请稍候。");return}
+        guard !gatewayOpening else{answer(id,error:"網關管理正在開啟，請稍候。");return}
         if smokeOutput != nil {presentGateway(context:nil);answer(id,true);return}
         gatewayOpening=true
-        request("safeCodeApi.context",deadline:(33,"打开网关管理超时。")){[weak self] result in
+        request("safeCodeApi.context",deadline:(33,"開啟網關管理超時。")){[weak self] result in
             guard let self=self else{return}
             self.gatewayOpening=false
             switch result {
             case .success(let value):
-                guard let context=value as? String else{self.answer(id,error:"无法绑定当前 SSH 会话。");return}
+                guard let context=value as? String else{self.answer(id,error:"無法綁定當前 SSH 會話。");return}
                 self.presentGateway(context:context)
                 self.answer(id,true)
             case .failure(let error):self.answer(id,error:error.localizedDescription)
@@ -615,7 +615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let width=min(1100,visible.width-24)
         let size=NSSize(width:width,height:min(670,visible.height-36,width * 0.72))
         let panel=NSWindow(contentRect:NSRect(origin:.zero,size:size),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        panel.title="Safe Code API · 网关管理"
+        panel.title="Safe Code API · 網關管理"
         panel.contentMinSize=NSSize(width:min(805,size.width),height:min(400,size.height))
         panel.isReleasedWhenClosed=false
         panel.delegate=self
@@ -636,7 +636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         if smokeOutput != nil {
             switch action {
             case "list":
-                let key: [String: Any] = ["id":String(repeating:"a",count:64),"note":"工作笔记本","enabled":true,"rpm":0,
+                let key: [String: Any] = ["id":String(repeating:"a",count:64),"note":"工作筆記本","enabled":true,"rpm":0,
                     "requests":42,"tokens":243810,"cost_nanos":104_300_000,"last_used":1795225500]
                 let event: [String: Any] = ["key_id":key["id"] ?? "", "model":"claude-example", "at":1795225500,
                     "outcome":"success", "status":200, "wait_ms":82, "duration_ms":1600, "tokens":18]
@@ -658,12 +658,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 }
                 reply(.success(fixture))
             case "refresh_subscription": reply(.success(["state":"available","windows":["five_hour":["used":20],"seven_day":["used":36]]]))
-            default: reply(.failure(AppError.message("未提供该预览操作。")))
+            default: reply(.failure(AppError.message("未提供該預覽操作。")))
             }
             return
         }
-        guard let context=gatewayContext else{reply(.failure(AppError.message("SSH 会话已变更，请重新打开网关管理。")));return}
-        guard !gatewayMutationPending else{reply(.failure(AppError.message("请等待当前网关操作完成。")));return}
+        guard let context=gatewayContext else{reply(.failure(AppError.message("SSH 會話已變更，請重新開啟網關管理。")));return}
+        guard !gatewayMutationPending else{reply(.failure(AppError.message("請等待當前網關操作完成。")));return}
         let modifies=["issue","update","unbind","revoke","delete","set_port","set_origin","set_concurrency","set_prompt_review","refresh_ticket"].contains(action)
         if modifies {gatewayMutationPending=true}
         var options=args
@@ -694,7 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             return
         }
         let panel=NSWindow(contentRect:NSRect(x:0,y:0,width:440,height:565),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        panel.title="更新与反馈"
+        panel.title="更新與回饋"
         panel.minSize=NSSize(width:360,height:400)
         panel.isReleasedWhenClosed=false
         panel.delegate=self
@@ -715,7 +715,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
     private func openFile(_ path:String) {
         let url=URL(fileURLWithPath:path).standardizedFileURL;let root=directory.standardizedFileURL.path+"/"
-        guard url.path.hasPrefix(root),["rdp","dmg"].contains(url.pathExtension.lowercased()),FileManager.default.fileExists(atPath:url.path) else{fail("拒绝打开非客户端生成的文件。");return}
+        guard url.path.hasPrefix(root),["rdp","dmg"].contains(url.pathExtension.lowercased()),FileManager.default.fileExists(atPath:url.path) else{fail("拒絕開啟非客戶端生成的檔案。");return}
         if url.pathExtension=="rdp" {openRemoteDesktop(url);return}
         NSWorkspace.shared.open(url)
     }
@@ -729,17 +729,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             .first{Bundle(url:$0)?.bundleIdentifier==bundleID}
         let showLaunchError: (String)->Void = {[weak self] message in
             self?.reportNativeFailure(.desktopLaunch){[weak self] issue in
-                self?.fail(message+(issue.map{"\n问题编号："+$0} ?? ""))
+                self?.fail(message+(issue.map{"\n問題編號："+$0} ?? ""))
             }
         }
         if let client=explicitClient {
             workspace.open([document],withApplicationAt:client,configuration:NSWorkspace.OpenConfiguration()){_,error in
-                if error != nil {DispatchQueue.main.async {showLaunchError("无法打开 Windows App，请确认应用仍可运行。")}}
+                if error != nil {DispatchQueue.main.async {showLaunchError("無法開啟 Windows App，請確認應用仍可執行。")}}
             }
         }else if let handler=workspace.urlForApplication(toOpen:document),Bundle(url:handler) != nil {
-            if !workspace.open(document) {showLaunchError("无法打开远程桌面配置，请检查默认 RDP 客户端。")}
+            if !workspace.open(document) {showLaunchError("無法開啟遠端桌面配置，請檢查預設 RDP 客戶端。")}
         }else {
-            showLaunchError("请先安装支持 RDP 的 macOS 客户端（例如 Windows App），再打开远程桌面。工作用户密码需在远程桌面客户端自行输入。")
+            showLaunchError("請先安裝支援 RDP 的 macOS 客戶端（例如 Windows App），再開啟遠端桌面。工作用戶密碼需在遠端桌面客戶端自行輸入。")
         }
     }
     func windowShouldClose(_ sender:NSWindow) -> Bool {
@@ -754,8 +754,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         guard sender === window else { return true }
         window.orderOut(nil)
         if !isolated {
-            notifications.post(id:"main-window-hidden", title:"Safe Code 已转入后台",
-                               body:"点击菜单栏中的 Safe Code 图标，可查看状态或打开主界面。")
+            notifications.post(id:"main-window-hidden", title:"Safe Code 已轉入背景",
+                               body:"點擊選單列中的 Safe Code 圖示，可查看狀態或開啟主介面。")
         }
         return false
     }
@@ -781,7 +781,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
     }
     @objc private func reconnect(){request("mount.reconnect"){[weak self] result in if case .failure(let error)=result{self?.fail(error.localizedDescription)}}}
-    @objc private func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Safe Code",.applicationVersion:safeCodeVersion,.credits:NSAttributedString(string:"macOS 客户端 · SSH、部署与目录挂载\n第三方适配器保持关闭")])}
+    @objc private func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Safe Code",.applicationVersion:safeCodeVersion,.credits:NSAttributedString(string:"macOS 客戶端 · SSH、部署與目錄掛載\n第三方適配器保持關閉")])}
     @objc private func quit(){
         guard !quitting && !shutdownPending else{return}
         if gatewayMutationPending {gatewayWindow?.makeKeyAndOrderFront(nil);return}
@@ -795,7 +795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         trayState=["mount":mount,"host":["enabled":host["enabled"] as? Bool ?? false],
                   "running":message["desktopKeyRunning"] as? Bool ?? false,"apiMode":apiMode,"connection":message["connection"] ?? NSNull(),
                   "startedAt":message["startedAt"] ?? NSNull(),"exiting":shutdownPending]
-        statusItem.button?.toolTip=apiMode ? "Safe Code · API Key 接入":"Safe Code · "+(mount["message"] as? String ?? "未挂载目录")
+        statusItem.button?.toolTip=apiMode ? "Safe Code · API Key 接入":"Safe Code · "+(mount["message"] as? String ?? "未掛載目錄")
         renderTray()
         web.evaluateJavaScript("window.safeCodeMountStatus?.("+json(mount)+")",completionHandler:nil)
     }
@@ -878,12 +878,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func runSmoke() {
         window.performClose(nil)
         guard !window.isVisible, !shutdownPending, backend?.isRunning == true, let button = statusItem.button else {
-            fail("关闭主窗口后未保留菜单栏或后台核心。"); quit(); return
+            fail("關閉主視窗後未保留選單列或背景核心。"); quit(); return
         }
         button.performClick(nil)
-        guard popover.isShown else { fail("菜单栏面板未打开。"); quit(); return }
+        guard popover.isShown else { fail("選單列面板未開啟。"); quit(); return }
         showMain()
-        guard window.isVisible else { fail("未能从菜单栏恢复主窗口。"); quit(); return }
+        guard window.isVisible else { fail("未能從選單列恢復主視窗。"); quit(); return }
         let script="""
         if(!window.safeCodeNativeReady)throw Error('Native bridge did not load');
         const rpc=(op,args={})=>new Promise((resolve,reject)=>{const id=crypto.randomUUID();const original=window.safeCodeNativeResponse;window.safeCodeNativeResponse=m=>{if(m.id===id){window.safeCodeNativeResponse=original;m.error?reject(Error(m.error)):resolve(m.result)}else original(m)};chrome.webview.postMessage({id,op,args})});
@@ -922,7 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         if(capture)await rpc('window.smoke.screenshot',{name:'dialog-desktop-key'});
         const keyField=document.querySelector('#desktop-key-input');
         keyField.value='fixture';
-        const confirmation=showAppMessage('离线确认测试',{cancel:'取消'});
+        const confirmation=showAppMessage('離線確認測試',{cancel:'取消'});
         await waitPanel('app-message-dialog',2);
         if(capture)await rpc('window.smoke.screenshot',{name:'dialog-app-message'});
         const message=document.querySelector('#app-message-dialog');
@@ -959,7 +959,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           document.querySelector('#resource-memory').textContent='1.2 / 1.9 G';
           document.querySelector('#resource-disk').textContent='18.3 / 29.4 G';
           document.querySelector('#update-login-password').hidden=false;
-          document.querySelector('#host-state').textContent='已连接';
+          document.querySelector('#host-state').textContent='已連線';
           document.querySelector('#claude-desktop-state').textContent='已接入';
           document.querySelector('#claude-gateway-status').textContent='Claude 已接入';
           document.querySelector('#claude-gateway-status').classList.remove('inactive');
@@ -976,12 +976,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         const desktopDialog=document.querySelector('#claude-desktop-dialog');
         const gatewayForm=document.querySelector('#safe-code-api-form');
         const gatewayButtons=[...gatewayForm.querySelectorAll('.config-footer button')];
-        if(gatewayButtons.map(button=>button.textContent.trim()).join(',')!=='故障修复,启用,管理网关')
+        if(gatewayButtons.map(button=>button.textContent.trim()).join(',')!=='故障修復,啟用,管理網關')
           throw Error('Unexpected gateway actions');
         if(capture){
-          gatewayForm.querySelector('#claude-desktop-dialog-state').textContent='公网已启用';
-          gatewayForm.querySelector('#safe-code-api-progress').textContent='点击「管理网关」创建 API Key，再回到主界面粘贴。';
-          gatewayButtons[1].textContent='已启用';
+          gatewayForm.querySelector('#claude-desktop-dialog-state').textContent='公網已啟用';
+          gatewayForm.querySelector('#safe-code-api-progress').textContent='點擊「管理網關」建立 API Key，再回到主介面貼上。';
+          gatewayButtons[1].textContent='已啟用';
           gatewayButtons[1].disabled=true;
           gatewayButtons[2].disabled=false;
         }
@@ -1031,7 +1031,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         if(!document.querySelector('#developer-preview'))throw Error('Preview was not explicitly labeled');
         if(!document.querySelector('#codex-launch').disabled||!document.querySelector('#bridge-start').disabled)throw Error('Windows adapter enabled on Mac');
         if(document.querySelector('.host-risk small').textContent.includes('Windows'))throw Error('Windows permission copy retained');
-        if(document.body.innerText.includes('客户端核心模块加载失败'))throw Error('Startup fallback displayed');
+        if(document.body.innerText.includes('客戶端核心模組載入失敗'))throw Error('Startup fallback displayed');
         if(capture){
           await rpc('window.smoke.screenshot',{name:'status'});
           await rpc('window.smoke.screenshot',{name:'status-key'});
@@ -1042,7 +1042,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             guard let self=self,let output=self.smokeOutput else{return}
             switch result {
             case .success(let value):
-                guard let view=self.servicesWeb,self.servicesWindow?.title=="更新与反馈" else{
+                guard let view=self.servicesWeb,self.servicesWindow?.title=="更新與回饋" else{
                     self.fail("Services native window did not open");self.quit();return
                 }
                 let check="""
@@ -1050,7 +1050,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 const dialog=document.querySelector('#services-dialog');
                 if(!dialog.open||getComputedStyle(dialog.querySelector('.titlebar')).display!=='none')throw Error('Services native title layout failed');
                 if(document.querySelector('#settings-usage-consent').checked||document.querySelector('#settings-diagnostics-consent').checked)throw Error('Unexpected default checkmarks');
-                if(!document.querySelector('#usage-recipient').textContent.includes('目前不会上传'))throw Error('Recipient status unavailable');
+                if(!document.querySelector('#usage-recipient').textContent.includes('目前不會上載'))throw Error('Recipient status unavailable');
                 if(!document.querySelector('#feedback-send').disabled)throw Error('Isolated feedback must remain disabled');
                 return true;
                 """

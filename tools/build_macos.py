@@ -19,7 +19,7 @@ def run(args,**kwargs):subprocess.run([str(x) for x in args],check=True,cwd=root
 run([a.dotnet,'publish','src/SafeCode.MacBackend','-c','Release','-r','osx-'+a.arch,'--self-contained','true','-o',core,'--nologo'])
 frp_download=work/frp_archive
 with urllib.request.urlopen(frp_url,timeout=120) as response:frp_data=response.read(32*1024*1024)
-if hashlib.sha256(frp_data).hexdigest()!=frp_sha256:raise RuntimeError('Mac FRP 安装包与固定的官方 SHA-256 不一致。')
+if hashlib.sha256(frp_data).hexdigest()!=frp_sha256:raise RuntimeError('Mac FRP 安裝包與固定的官方 SHA-256 不一致。')
 frp_download.write_bytes(frp_data)
 frp_payload=core/'Payloads'/'frp';frp_payload.mkdir(parents=True,exist_ok=True)
 frp_license=work/'frp-LICENSE'
@@ -31,7 +31,7 @@ with tarfile.open(frp_download,'r:gz') as package:
    if source is None:continue
    (frp_payload/'frpc' if name=='frpc' else frp_license).write_bytes(source.read())
 frp_download.unlink()
-if not (frp_payload/'frpc').is_file() or not frp_license.is_file():raise RuntimeError('官方 FRP 安装包中缺少 Mac frpc 或许可证。')
+if not (frp_payload/'frpc').is_file() or not frp_license.is_file():raise RuntimeError('官方 FRP 安裝包中缺少 Mac frpc 或許可證。')
 (frp_payload/'frpc').chmod(0o755)
 for path in core.glob('*.pdb'):path.unlink()
 run(['swiftc','-swift-version','5','-parse-as-library','-O','-target','arm64-apple-macos15.0',*sorted((root/'macos').glob('*.swift')),'-o',macos/'SafeCode','-framework','AppKit','-framework','WebKit','-framework','Security'])
@@ -43,11 +43,11 @@ with tempfile.TemporaryDirectory(prefix='safecode-icon-') as temp:
  for size in [16,32,128,256,512]:
   for scale in [1,2]:run(['sips','-z',str(size*scale),str(size*scale),root/'assets/icons/safe-code-shortcut.png','--out',iconset/('icon_'+str(size)+'x'+str(size)+('@2x' if scale==2 else '')+'.png')],stdout=subprocess.DEVNULL)
  run(['iconutil','-c','icns',iconset,'-o',resources/'AppIcon.icns'])
-info={'CFBundleIdentifier':'org.safecode.desktop','CFBundleName':'Safe Code','CFBundleDisplayName':'Safe Code','CFBundleExecutable':'SafeCode','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.4.9','CFBundleVersion':'0.4.9','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'15.0','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'用系统 Terminal 打开已核验服务器的 SSH 终端；不向终端传递密码。','NSHumanReadableCopyright':'Safe Code contributors. MIT License.'}
+info={'CFBundleIdentifier':'org.safecode.desktop','CFBundleName':'Safe Code','CFBundleDisplayName':'Safe Code','CFBundleExecutable':'SafeCode','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.4.9','CFBundleVersion':'0.4.9','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'15.0','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'用系統 Terminal 開啟已核驗伺服器的 SSH 終端機；不向終端機傳遞密碼。','NSHumanReadableCopyright':'Safe Code contributors. MIT License.'}
 (contents/'Info.plist').write_bytes(plistlib.dumps(info))
 shutil.copy2(root/'LICENSE',resources/'LICENSE')
 shutil.copy2(root/'third_party'/'THIRD_PARTY_NOTICES.md',resources/'THIRD_PARTY_NOTICES.md')
-shutil.copy2(root/'docs/MACOS.md',resources/'使用说明.md')
+shutil.copy2(root/'docs/MACOS.md',resources/'使用說明.md')
 legal=resources/'licenses';legal.mkdir();shutil.copy2(frp_license,legal/'FRP-0.65.0-LICENSE')
 # Preserve the license documents from the exact restored packages and bundled runtime.
 cache=Path(os.environ.get('NUGET_PACKAGES',str(Path.home()/'.nuget/packages')))

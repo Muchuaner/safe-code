@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成两行文字快捷方式图标的矢量母版；不设置程序或界面图标。"""
+"""生成兩行文字捷徑圖示的矢量母版；不設定程式或介面圖示。"""
 import argparse
 from pathlib import Path
 from fontTools.ttLib import TTFont
@@ -16,7 +16,7 @@ for word,baseline in [('SAFE',216),('CODE',410)]:
     for name in names:
         pen=SVGPathPen(glyphs);glyphs[name].draw(TransformPen(pen,(sx,0,0,-sy,x,baseline)));paths.append(pen.getCommands());x+=font['hmtx'][name][0]*sx
 shape=' '.join(paths)
-svg=f'''<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Safe Code 桌面快捷方式图标">
+svg=f'''<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Safe Code 桌面捷徑圖示">
 <defs>
  <linearGradient id="wine" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#70233f"/><stop offset=".55" stop-color="#4c142d"/><stop offset="1" stop-color="#2b0c21"/></linearGradient>
  <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff2bd"/><stop offset=".52" stop-color="#f6c775"/><stop offset="1" stop-color="#dd8738"/></linearGradient>

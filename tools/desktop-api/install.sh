@@ -62,7 +62,7 @@ app=/opt/safe-code/desktop-api
 state="$home/.local/state/safe-code-desktop-api"
 if [[ ${SAFECODE_INITIAL_API_INSTALL:-} == 1 ]]; then
     runuser -u "$user" -- test ! -e "$state/public-enabled" || {
-        printf '检测到已启用过的公网网关配置，请在 VPS 恢复原服务。\n' >&2
+        printf '檢測到已啟用過的公網網關配置，請在 VPS 恢復原服務。\n' >&2
         exit 1
     }
 fi
@@ -82,9 +82,9 @@ config=json.loads(config_path.read_text()) if config_path.exists() else {}
 if initial == '1' and config:
     saved_port = config.get('port')
     if config.get('bind') != bind or type(saved_port) is not int or not 1024 <= saved_port <= 65535:
-        raise ValueError('检测到保留的监听配置，请在 VPS 恢复原服务。')
+        raise ValueError('檢測到保留的監聽配置，請在 VPS 恢復原服務。')
     if saved_port != int(port) and config.get('autoPort') != saved_port:
-        raise ValueError('检测到保留的监听配置，请在 VPS 恢复原服务。')
+        raise ValueError('檢測到保留的監聽配置，請在 VPS 恢復原服務。')
     port = saved_port
 config.update(bind=str(ipaddress.ip_address(bind)),port=int(port))
 if initial == '1':
@@ -101,7 +101,7 @@ if [[ ! -e "$state/key.pem" && ! -e "$state/cert.pem" ]]; then
     runuser -u "$user" -- openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 730 -subj '/CN=SafeCode Desktop API' -keyout "$state/key.pem" -out "$state/cert.pem"
 fi
 if ! /usr/bin/python3 -B "$app/device_service.py" "$user" "$app" "$state"; then
-    printf '私有设备服务尚未就绪，继续安装普通 API。请在网关设置中运行故障修复后签发桌面接入 Key。\n' >&2
+    printf '私有裝置服務尚未就緒，繼續安裝普通 API。請在網關設定中執行故障修復後簽發桌面接入 Key。\n' >&2
 fi
 write_unit /etc/systemd/system/safe-code-desktop-api.service
 systemctl daemon-reload

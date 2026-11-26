@@ -28,7 +28,7 @@ window.chrome={webview:{postMessage({id,op,args}){
   if(op.startsWith('socks.'))window.socksOperations.push(op);
   if(op==='socks.probe'){
     if(window.failUdp){
-      result={tcp:true,udp:false,observedIp:'198.18.46.1',udpMessage:'等待代理转发超时。'};
+      result={tcp:true,udp:false,observedIp:'198.18.46.1',udpMessage:'等待代理轉發超時。'};
     }else{
       result={tcp:true,udp:true,observedIp:'198.18.46.1'};
     }
@@ -75,7 +75,7 @@ with sync_playwright() as playwright:
     page.locator('#connect').click()
     page.locator('#maintenance-mode').click()
     card = page.locator('.advanced-card').filter(has=page.locator('#change-ips'))
-    assert card.locator('button').all_text_contents() == ['更换IP', '开发模式']
+    assert card.locator('button').all_text_contents() == ['更換IP', '開發模式']
     card.screenshot(path=str(output / 'ip-card.png'))
 
     page.locator('#change-ips').click()
@@ -86,7 +86,7 @@ with sync_playwright() as playwright:
     page.locator('#socks-experimental').click()
     dialog = page.locator('#socks-dialog')
     expect(dialog).to_be_visible()
-    expect(dialog.get_by_text('开发功能，谨慎使用')).to_be_visible()
+    expect(dialog.get_by_text('開發功能，謹慎使用')).to_be_visible()
     expect(page.locator('#socks-enable')).to_be_disabled()
     expect(page.locator('#socks-test')).to_be_disabled()
     field = page.locator('#socks-url')
@@ -96,19 +96,19 @@ with sync_playwright() as playwright:
 
     page.evaluate('window.failUdp=true')
     page.locator('#socks-test').click()
-    expect(page.locator('#socks-tcp')).to_have_text('通过')
-    expect(page.locator('#socks-udp')).to_have_text('未通过')
+    expect(page.locator('#socks-tcp')).to_have_text('通過')
+    expect(page.locator('#socks-udp')).to_have_text('未通過')
     expect(page.locator('#socks-enable')).to_be_disabled()
 
     page.evaluate('window.failUdp=false')
     page.locator('#socks-test').click()
-    expect(page.locator('#socks-udp')).to_have_text('通过')
+    expect(page.locator('#socks-udp')).to_have_text('通過')
     expect(page.locator('#socks-observed')).to_have_text('198.18.46.1')
     expect(page.locator('#socks-enable')).to_be_disabled()
     page.locator('#socks-confirm').check()
     field.fill(field.input_value() + '/')
     expect(page.locator('#socks-enable')).to_be_disabled()
-    expect(page.locator('#socks-udp')).to_have_text('待检测')
+    expect(page.locator('#socks-udp')).to_have_text('待檢測')
     page.locator('#socks-test').click()
     page.locator('#socks-confirm').check()
     expect(page.locator('#socks-enable')).to_be_enabled()
@@ -116,7 +116,7 @@ with sync_playwright() as playwright:
 
     page.locator('#socks-enable').click()
     expect(page.locator('#socks-disable')).to_be_visible()
-    expect(page.locator('#ip-policy-state')).to_have_text('SOCKS5 开发模式')
+    expect(page.locator('#ip-policy-state')).to_have_text('SOCKS5 開發模式')
     expect(page.locator('#server-address')).to_have_text('198.18.46.1')
     expect(field).to_have_value('')
     dialog.screenshot(path=str(output / 'socks5-enabled.png'))
@@ -140,7 +140,7 @@ with sync_playwright() as playwright:
     page.locator('#maintenance-mode').click()
     page.locator('#socks-experimental').click()
     expect(field).to_be_disabled()
-    expect(page.locator('#socks-status')).to_contain_text('连接 Ubuntu 服务器')
+    expect(page.locator('#socks-status')).to_contain_text('連接 Ubuntu 伺服器')
     assert not page.evaluate('window.socksOperations')
     assert not errors, errors
     browser.close()

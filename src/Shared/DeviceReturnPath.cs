@@ -25,11 +25,11 @@ internal sealed class DeviceReturnPath(Func<CancellationToken,Task<JsonElement>>
     {
         get
         {
-            if(processExited())return "设备隧道进程已退出，请在 SafeCode 停用后重新启用设备接入。";
+            if(processExited())return "裝置隧道進程已退出，請在 SafeCode 停用後重新啟用裝置接入。";
             if(failure is {} reason)return reason;
-            if(!transportReady())return "设备隧道正在重连，请检查本机网络和网关连接。";
+            if(!transportReady())return "裝置隧道正在重連，請檢查本機網絡和網關連線。";
             return Volatile.Read(ref verifiedGeneration)==Volatile.Read(ref generation) && Recent(Interlocked.Read(ref lastLease),45000)
-                ? null : "正在重新确认设备租约和网关到本机的 SSH 回连，请稍后重试。";
+                ? null : "正在重新確認裝置租約和網關到本機的 SSH 回連，請稍後重試。";
         }
     }
 
@@ -71,7 +71,7 @@ internal sealed class DeviceReturnPath(Func<CancellationToken,Task<JsonElement>>
         }
         catch(OperationCanceledException) when(!ct.IsCancellationRequested && !lifetime.IsCancellationRequested)
         {
-            failure="设备回连验证超时，请检查本机网络及网关。";
+            failure="裝置回連驗證超時，請檢查本機網絡及網關。";
             Invalidate();
             throw new InvalidOperationException(failure);
         }
@@ -86,12 +86,12 @@ internal sealed class DeviceReturnPath(Func<CancellationToken,Task<JsonElement>>
             int epoch=Volatile.Read(ref generation);
             bool verifyAgain=force || Problem!=null || !Recent(Interlocked.Read(ref lastVerification),120000);
             // Renew even when FRP is reconnecting: the gateway requires a current lease to accept it.
-            if(processExited())throw new InvalidOperationException("设备隧道进程已退出，请重新启用设备接入。");
+            if(processExited())throw new InvalidOperationException("裝置隧道進程已退出，請重新啟用裝置接入。");
             var lease=await renew(ct).ConfigureAwait(false);
-            if(!transportReady())throw new InvalidOperationException("设备租约已续期，FRP 隧道尚未连回网关，请检查网络后稍候。");
+            if(!transportReady())throw new InvalidOperationException("裝置租約已續期，FRP 隧道尚未連回網關，請檢查網絡後稍候。");
             if(lease.ValueKind!=JsonValueKind.Object || !lease.TryGetProperty("ready",out var ready) ||
                 ready.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                throw new IOException("无效的设备续租响应。");
+                throw new IOException("無效的裝置續租響應。");
             if(ready.ValueKind==JsonValueKind.False)verifyAgain=true;
             if(verifyAgain)
             {
@@ -99,7 +99,7 @@ internal sealed class DeviceReturnPath(Func<CancellationToken,Task<JsonElement>>
                 Interlocked.Exchange(ref lastVerification,Now);
             }
             if(!transportReady()||epoch!=Volatile.Read(ref generation))
-                throw new InvalidOperationException("验证期间网络发生变化，正在重新确认设备回连。");
+                throw new InvalidOperationException("驗證期間網絡發生變化，正在重新確認裝置回連。");
             Volatile.Write(ref verifiedGeneration,epoch);
             Interlocked.Exchange(ref lastLease,Now);
             failure=null;
@@ -109,10 +109,10 @@ internal sealed class DeviceReturnPath(Func<CancellationToken,Task<JsonElement>>
             ct.ThrowIfCancellationRequested();
             failure=error switch {
                 InvalidOperationException => error.Message,
-                OperationCanceledException => "设备回连验证超时，请检查本机网络及网关。",
-                HttpRequestException {HttpRequestError:HttpRequestError.SecureConnectionError} => "与设备网关的 TLS 握手未完成。请先检查网络，若持续失败再核对网关证书。",
-                HttpRequestException => "无法联系设备授权网关，请检查网络和网关证书。",
-                _ => "设备网关没有返回有效的续租或 SSH 验证结果，请检查网关服务。"
+                OperationCanceledException => "裝置回連驗證超時，請檢查本機網絡及網關。",
+                HttpRequestException {HttpRequestError:HttpRequestError.SecureConnectionError} => "與裝置網關的 TLS 握手未完成。請先檢查網絡，若持續失敗再核對網關證書。",
+                HttpRequestException => "無法聯繫裝置授權網關，請檢查網絡和網關證書。",
+                _ => "裝置網關沒有返回有效的續租或 SSH 驗證結果，請檢查網關服務。"
             };
             Invalidate();
             throw new InvalidOperationException(failure,error);

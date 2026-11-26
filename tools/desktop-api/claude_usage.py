@@ -64,10 +64,10 @@ def read_subscription(timeout=12):
         'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
         'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY',
     )):
-        raise UsageUnavailable('当前 Claude Code 使用 API 或第三方认证。')
+        raise UsageUnavailable('當前 Claude Code 使用 API 或第三方認證。')
     cli = Path.home()/'.local/bin/claude'
     if not os.access(cli, os.X_OK):
-        raise UsageUnavailable('VPS 工作账户尚未安装 Claude Code。')
+        raise UsageUnavailable('VPS 工作帳戶尚未安裝 Claude Code。')
 
     deadline = time.monotonic() + timeout
     env = {**os.environ, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8', 'DISABLE_AUTOUPDATER': '1'}
@@ -80,11 +80,11 @@ def read_subscription(timeout=12):
         except ValueError:
             account = {}
         if auth.returncode or not isinstance(account, dict) or account.get('loggedIn') is not True:
-            raise UsageUnavailable('请先在 VPS 工作账户的 Claude Code 中登录订阅账户。')
+            raise UsageUnavailable('請先在 VPS 工作帳戶的 Claude Code 中登入訂閱帳戶。')
         if account.get('authMethod') != 'claude.ai' and not (
             account.get('apiProvider') == 'firstParty' and account.get('subscriptionType')
         ):
-            raise UsageUnavailable('VPS 工作账户未使用 Claude 订阅登录。')
+            raise UsageUnavailable('VPS 工作帳戶未使用 Claude 訂閱登入。')
 
         command = [str(cli), '--safe-mode', '--setting-sources', '', '--tools', '',
                    '--strict-mcp-config', '--permission-mode', 'dontAsk']
@@ -166,10 +166,10 @@ def query_usage(terminal, deadline, workspace):
     if phase == 'usage' and (windows := usage_windows(output.decode('utf-8', errors='replace'))):
         return windows
     if phase == 'startup':
-        raise UsageUnavailable('Claude Code 未进入交互界面。请检查 VPS 上的登录或首次启动提示。')
+        raise UsageUnavailable('Claude Code 未進入互動介面。請檢查 VPS 上的登入或首次啟動提示。')
     if phase == 'preview':
-        raise UsageUnavailable('Claude Code 未显示内置 /usage 命令。请检查 VPS 上的 Claude Code 版本。')
-    raise UsageUnavailable('Claude Code /usage 未返回订阅额度，请稍后手动刷新。')
+        raise UsageUnavailable('Claude Code 未顯示內置 /usage 命令。請檢查 VPS 上的 Claude Code 版本。')
+    raise UsageUnavailable('Claude Code /usage 未返回訂閱額度，請稍後手動重新整理。')
 
 
 if __name__ == '__main__':
@@ -179,4 +179,4 @@ if __name__ == '__main__':
     except UsageUnavailable as error:
         print(json.dumps({'state': 'unavailable', 'windows': {}, 'reason': str(error)}))
     except (OSError, subprocess.SubprocessError):
-        print(json.dumps({'state': 'unavailable', 'windows': {}, 'reason': 'VPS 上的 Claude Code 用量查询未完成。'}))
+        print(json.dumps({'state': 'unavailable', 'windows': {}, 'reason': 'VPS 上的 Claude Code 用量查詢未完成。'}))

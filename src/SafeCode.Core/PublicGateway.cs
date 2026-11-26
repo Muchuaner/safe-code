@@ -167,7 +167,7 @@ public sealed partial class SshSession
                      .Concat(["SafeCode.Core.Remote.desktop_gateway.py", "SafeCode.Core.Remote.codex_bridge.zip"]))
         {
             using var stream = assembly.GetManifestResourceStream(resource)
-                ?? throw new IOException("缺少 Safe Code API 安装组件。");
+                ?? throw new IOException("缺少 Safe Code API 安裝組件。");
             using var buffer = new MemoryStream();
             await stream.CopyToAsync(buffer, ct);
             int prefix = resource.StartsWith(api, StringComparison.Ordinal) ? api.Length : "SafeCode.Core.Remote.".Length;
@@ -211,7 +211,7 @@ public sealed partial class SshSession
         catch (SshAuthenticationException) when (!mountTrustFailed)
         {
             gatewayAuthenticationFailed = true;
-            throw new InvalidOperationException("SSH 认证失败，请在主窗口更新登录密码。");
+            throw new InvalidOperationException("SSH 認證失敗，請在主視窗更新登入密碼。");
         }
         finally { gatewayControl.Release(); }
     }
@@ -219,9 +219,9 @@ public sealed partial class SshSession
     private async Task EnsureGatewayControlAsync(CancellationToken ct)
     {
         if (mountTrustFailed)
-            throw new InvalidOperationException("服务器身份已变化，请返回登录并核对服务器指纹。");
+            throw new InvalidOperationException("伺服器身份已變化，請返回登入並核對伺服器指紋。");
         if (gatewayAuthenticationFailed)
-            throw new InvalidOperationException("SSH 认证失败，请在主窗口更新登录密码。");
+            throw new InvalidOperationException("SSH 認證失敗，請在主視窗更新登入密碼。");
         if (IsConnected && lastGatewayCheck != 0 && Stopwatch.GetElapsedTime(lastGatewayCheck) < TimeSpan.FromSeconds(12))
             return;
         try
@@ -232,11 +232,11 @@ public sealed partial class SshSession
         catch (SshAuthenticationException) when (!mountTrustFailed)
         {
             gatewayAuthenticationFailed = true;
-            throw new InvalidOperationException("SSH 认证失败，请在主窗口更新登录密码。");
+            throw new InvalidOperationException("SSH 認證失敗，請在主視窗更新登入密碼。");
         }
         catch (Exception) when (mountTrustFailed)
         {
-            throw new InvalidOperationException("服务器身份已变化，请返回登录并核对服务器指纹。");
+            throw new InvalidOperationException("伺服器身份已變化，請返回登入並核對伺服器指紋。");
         }
     }
 

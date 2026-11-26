@@ -4,7 +4,7 @@ function renderClaudeSubscription(container, subscription) {
   const state = subscription?.state;
   container.dataset.state = state ?? 'unavailable';
   const details = [];
-  for (const [name, label] of [['five_hour', '5 小时'], ['seven_day', '7 天']]) {
+  for (const [name, label] of [['five_hour', '5 小時'], ['seven_day', '7 天']]) {
     const usage = subscription?.windows?.[name];
     const reset = usage?.resets_at;
     const percent = Number.isFinite(usage?.used) && (!reset || reset * 1000 > Date.now())
@@ -16,11 +16,11 @@ function renderClaudeSubscription(container, subscription) {
     value.textContent = display;
     value.dataset.low = String(percent <= 15);
     const at = reset ? new Date(reset * 1000).toLocaleString('zh-CN', {hour12: false}) : '';
-    details.push(label + '剩余 ' + display + (at ? '，重置于 ' + at : ''));
+    details.push(label + '剩餘 ' + display + (at ? '，重設於 ' + at : ''));
   }
   container.title = details.length
-    ? (state === 'stale' ? '上次读取 · ' : '') + details.join(' · ')
-    : '点击刷新查询网关所用 Claude 账户的订阅用量';
+    ? (state === 'stale' ? '上次讀取 · ' : '') + details.join(' · ')
+    : '點擊重新整理查詢網關所用 Claude 帳戶的訂閱用量';
 }
 
 function bindClaudeUsageRefresh(container, lookup, accept) {
@@ -28,14 +28,14 @@ function bindClaudeUsageRefresh(container, lookup, accept) {
   async function refresh() {
     if (button.disabled) return;
     button.disabled = true;
-    button.title = '正在查询…';
+    button.title = '正在查詢…';
     try {
       const value = await lookup();
       accept(value);
       if (value?.state !== 'available') {
-        button.title = value?.reason || 'Claude Code 未返回最新额度，请稍后重试';
+        button.title = value?.reason || 'Claude Code 未返回最新額度，請稍後重試';
       } else {
-        button.title = '查询 Claude 用量';
+        button.title = '查詢 Claude 用量';
       }
     } catch (error) {
       button.title = error.message;

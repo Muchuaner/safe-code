@@ -35,14 +35,14 @@ window.chrome = {webview: {postMessage({id, op, args}) {
     result = true;
   }
   if (op === 'deployment.locale.save') {
-    if (window.failLocaleSave) error = '测试保存失败';
+    if (window.failLocaleSave) error = '測試儲存失敗';
     else {
       settings().localeRegion = args.region;
       result = {...settings()};
     }
   }
   if (op === 'ip.info') {
-    result = {location: '美国 · 纽约', regionCode: 'us', city: 'New York', score: 80, geoSource: '测试'};
+    result = {location: '美國 · 紐約', regionCode: 'us', city: 'New York', score: 80, geoSource: '測試'};
   }
   if (op === 'ip.apply') {
     window.server.observedEgressIp = args.egressIp;
@@ -93,7 +93,7 @@ def test_manual_deployment():
                     page.locator('#username').fill('root')
                     page.locator('#password').fill('fixture-password-only')
                     page.locator('#connect').click()
-                    expect(page.locator('#ip-location')).to_have_text('美国 · 纽约')
+                    expect(page.locator('#ip-location')).to_have_text('美國 · 紐約')
 
                 def assert_all_locked():
                     row_deployments = page.locator('#steps .deploy-button:not(.locale-settings-button)')
@@ -101,19 +101,19 @@ def test_manual_deployment():
                     assert row_deployments.evaluate_all('(buttons) => buttons.every(button => button.disabled)')
                     expect(page.locator('#deploy-all')).to_be_disabled()
 
-                locale_button = page.get_by_role('button', name='自定义本土化', exact=True)
-                account_button = page.get_by_role('button', name='自定义工作用户和机器名称', exact=True)
+                locale_button = page.get_by_role('button', name='自訂本土化', exact=True)
+                account_button = page.get_by_role('button', name='自訂工作用戶和機器名稱', exact=True)
                 locale = page.locator('#locale-region')
                 locale_save = page.locator('#localization-form [type=submit]')
                 batch = page.locator('#deploy-all')
                 connect('1.1.1.1')
                 assert_all_locked()
                 expect(page.locator('#overall-status')).to_have_text('2 / 7 已完成')
-                expect(page.locator('#overall-detail')).to_have_text('请先分别打开前两项「自定义」并保存设置。')
+                expect(page.locator('#overall-detail')).to_have_text('請先分別開啟前兩項「自訂」並儲存設定。')
                 locale_button.click()
                 expect(locale).to_have_value('')
                 expect(locale_save).to_be_disabled()
-                assert '自动' not in locale.inner_text()
+                assert '自動' not in locale.inner_text()
                 locale.select_option('us_ny')
                 page.locator('#close-localization').click()
                 locale_button.click()
@@ -123,7 +123,7 @@ def test_manual_deployment():
                 account_button.click()
                 expect(page.locator('#custom-hostname')).to_have_value('existing-host')
                 page.locator('#account-settings-form [type=submit]').click()
-                page.get_by_role('button', name='确认并保存参数', exact=True).click()
+                page.get_by_role('button', name='確認並儲存參數', exact=True).click()
                 expect(page.locator('#account-settings')).to_be_hidden()
                 assert_all_locked()
 
@@ -131,7 +131,7 @@ def test_manual_deployment():
                 locale_button.click()
                 locale.select_option('jp')
                 locale_save.click()
-                expect(page.locator('#app-message-body')).to_have_text('测试保存失败')
+                expect(page.locator('#app-message-body')).to_have_text('測試儲存失敗')
                 page.locator('#app-message-confirm').click()
                 expect(locale).to_have_value('jp')
                 expect(locale_save).to_be_enabled()
@@ -144,18 +144,18 @@ def test_manual_deployment():
                 assert not page.evaluate("window.calls.some(call => call.op === 'deploy')")
 
                 batch.click()
-                expect(page.get_by_role('checkbox', name='选择更新系统并设置工作用户')).to_be_disabled()
-                page.get_by_role('checkbox', name='选择本土化设置').check()
-                page.get_by_role('checkbox', name='选择安装 Chrome').check()
-                expect(batch).to_have_text('开始部署（2 项）')
+                expect(page.get_by_role('checkbox', name='選擇更新系統並設定工作用戶')).to_be_disabled()
+                page.get_by_role('checkbox', name='選擇本土化設定').check()
+                page.get_by_role('checkbox', name='選擇安裝 Chrome').check()
+                expect(batch).to_have_text('開始部署（2 項）')
                 batch.click()
                 page.wait_for_function("window.calls.filter(call => call.op === 'deploy').length === 2")
                 assert page.evaluate("window.calls.filter(call => call.op === 'deploy').map(call => call.args.step)") == [
                     'localization', 'chrome',
                 ]
                 expect(page.locator('#steps .step-copy p').nth(1)).to_contain_text('部署完成')
-                page.get_by_role('button', name='更新系统并设置工作用户：更新', exact=True).click()
-                expect(page.get_by_role('button', name='更新系统并设置工作用户：已完成', exact=True)).to_be_disabled()
+                page.get_by_role('button', name='更新系統並設定工作用戶：更新', exact=True).click()
+                expect(page.get_by_role('button', name='更新系統並設定工作用戶：已完成', exact=True)).to_be_disabled()
 
                 page.locator('#maintenance-mode').click()
                 page.locator('#change-ips').click()

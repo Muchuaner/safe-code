@@ -23,7 +23,7 @@ internal sealed class ClientPreferences(string directory)
     }
     public DeploymentChoices SaveDeploymentLocale(SshSession session,string region)
     {
-        if(DeploymentCatalog.FindLocale(region)==null)throw new ArgumentException("请选择有效的时区和系统语言。");
+        if(DeploymentCatalog.FindLocale(region)==null)throw new ArgumentException("請選擇有效的時區和系統語言。");
         string path=DeploymentLocalePath(session);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string temporary=path+"."+Guid.NewGuid().ToString("N")+".new";
@@ -35,7 +35,7 @@ internal sealed class ClientPreferences(string directory)
     {
         var settings=ReadDeploymentChoices(session);
         if(!settings.AccountSaved||settings.LocaleRegion==null)
-            throw new InvalidOperationException("请先打开两个「自定义」，分别保存工作账户和本土化设置，再开始部署。");
+            throw new InvalidOperationException("請先開啟兩個「自訂」，分別儲存工作帳戶和本土化設定，再開始部署。");
         return DeploymentCatalog.FindLocale(settings.LocaleRegion)!;
     }
     public bool RequiresAccountConfirmation(SshSession session)=>session.Server?.Statuses.GetValueOrDefault("account")==true||File.Exists(DraftPath(session)+".configured");
@@ -47,15 +47,15 @@ internal sealed class ClientPreferences(string directory)
     }
     public void SaveDraft(SshSession session,AccountDraft draft)
     {
-        if(!Regex.IsMatch(draft.Username,"^[a-z][a-z0-9_-]{1,30}$"))throw new ArgumentException("用户名须为 2–31 位小写字母、数字、下划线或短横线，以小写字母开头。");
-        if(!Regex.IsMatch(draft.Hostname,"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"))throw new ArgumentException("机器名称须为 1–63 位字母、数字或短横线，首尾须为字母或数字。");
-        if(draft.Password.Length>0&&(draft.Password.Length<12||draft.Password.Length>256||draft.Password.IndexOfAny(['\r','\n','\0'])>=0))throw new ArgumentException("工作密码须为 12–256 位，不能包含换行或空字符。");
+        if(!Regex.IsMatch(draft.Username,"^[a-z][a-z0-9_-]{1,30}$"))throw new ArgumentException("用戶名須為 2–31 位小寫字母、數字、下劃線或短橫線，以小寫字母開頭。");
+        if(!Regex.IsMatch(draft.Hostname,"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"))throw new ArgumentException("機器名稱須為 1–63 位字母、數字或短橫線，首尾須為字母或數字。");
+        if(draft.Password.Length>0&&(draft.Password.Length<12||draft.Password.Length>256||draft.Password.IndexOfAny(['\r','\n','\0'])>=0))throw new ArgumentException("工作密碼須為 12–256 位，不能包含換行或空字符。");
         string path=DraftPath(session);Directory.CreateDirectory(Path.GetDirectoryName(path)!);byte[] data=JsonSerializer.SerializeToUtf8Bytes(draft,JsonDefaults.Options);
         try{File.WriteAllBytes(path+".new",LocalSecrets.Protect(data));File.Move(path+".new",path,true);File.WriteAllText(path+".configured","1");}finally{CryptographicOperations.ZeroMemory(data);}
     }
     public void ClearDraft(SshSession session)
     {
-        // 使用默认账户参数时不会创建草稿目录，部署成功后的清理应直接跳过。
+        // 使用預設帳戶參數時不會建立草稿目錄，部署成功後的清理應直接跳過。
         try{File.Delete(DraftPath(session));}catch(DirectoryNotFoundException){}
     }
     private string ApiAccessModePath => Path.Combine(directory,"api-access-mode");
@@ -75,7 +75,7 @@ internal sealed class ClientPreferences(string directory)
     }
     public void SaveResolution(DesktopResolution resolution)
     {
-        if(!Resolutions.Contains(resolution))throw new ArgumentException("请选择支持的分辨率。");
+        if(!Resolutions.Contains(resolution))throw new ArgumentException("請選擇支援的解像度。");
         Directory.CreateDirectory(directory);string path=Path.Combine(directory,"desktop-resolution.json");File.WriteAllText(path+".new",JsonSerializer.Serialize(resolution,JsonDefaults.Options));File.Move(path+".new",path,true);
     }
 }

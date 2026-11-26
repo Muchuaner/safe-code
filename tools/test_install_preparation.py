@@ -1,4 +1,4 @@
-"""检查更新阶段与下载错误分类，避免依赖真实网络或修改本机软件包。"""
+"""檢查更新階段與下載錯誤分類，避免依賴真實網絡或修改本機軟件包。"""
 import hashlib,importlib.util,io,json,socket,subprocess,tempfile,unittest,urllib.error
 from pathlib import Path
 from unittest.mock import patch,Mock
@@ -17,7 +17,7 @@ class Installation(unittest.TestCase):
     def test_password_changed_but_record_failed_is_reported_explicitly(self):
         previous={'username':'workspace','password':'old-fixture','hostname':'old-host'}
         with patch.object(a,'read_config',return_value=previous),patch.object(a,'run',return_value=Mock(returncode=0)) as run,patch.object(a,'write',side_effect=OSError('fixture full disk')):
-            with self.assertRaisesRegex(RuntimeError,'密码已更新，但账户记录保存失败'):a.setup_account({'password':'new-fixture-password','hostname':'new-host'})
+            with self.assertRaisesRegex(RuntimeError,'密碼已更新，但帳戶記錄儲存失敗'):a.setup_account({'password':'new-fixture-password','hostname':'new-host'})
             calls=[c.args[0][0] for c in run.call_args_list];self.assertLess(calls.index('hostnamectl'),calls.index('chpasswd'))
     def claude_download(self,target,content=b'official fixture',digest=None,architecture='aarch64'):
         digest=digest or hashlib.sha256(content).hexdigest()
@@ -44,7 +44,7 @@ class Installation(unittest.TestCase):
                 self.assertEqual(release,'2.1.311')
     def test_vps_download_bad_digest_removes_file(self):
         with tempfile.TemporaryDirectory() as folder:
-            with self.assertRaisesRegex(RuntimeError,'校验失败'):
+            with self.assertRaisesRegex(RuntimeError,'校驗失敗'):
                 self.claude_download(Path(folder)/'download',digest='0'*64)
             self.assertEqual(list(Path(folder).iterdir()),[])
     def test_vps_dns_failure_returns_stable_code(self):
@@ -94,7 +94,7 @@ class Installation(unittest.TestCase):
         p=subprocess.CompletedProcess([],6,'','curl: (6) Could not resolve host: claude.ai\n'*4)
         with patch.object(a.subprocess,'run',return_value=p):
             with self.assertRaises(a.OperationError) as error:a.run(['curl','-fsSL','https://claude.ai/install.sh'])
-        self.assertEqual(error.exception.code,'dns_failure');self.assertIn('claude.ai',str(error.exception));self.assertIn('DNS 域名解析失败',str(error.exception));self.assertNotIn('curl:',str(error.exception))
+        self.assertEqual(error.exception.code,'dns_failure');self.assertIn('claude.ai',str(error.exception));self.assertIn('DNS 域名解析失敗',str(error.exception));self.assertNotIn('curl:',str(error.exception))
     def test_download_denial_is_not_mislabeled_as_dns(self):
         with patch.object(a.subprocess,'run',return_value=subprocess.CompletedProcess([],22,'','curl: (22) 403')):
             with self.assertRaises(a.OperationError) as error:a.run(['curl','https://claude.ai/install.sh'])

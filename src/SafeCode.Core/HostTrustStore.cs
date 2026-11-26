@@ -1,7 +1,7 @@
 using System.Text.Json;
 namespace SafeCode.Core;
 
-public sealed class HostTrustRequiredException(HostKeyInfo key):Exception("需要确认服务器身份。")
+public sealed class HostTrustRequiredException(HostKeyInfo key):Exception("需要確認伺服器身份。")
 { public HostKeyInfo Key {get;}=key; }
 public sealed class HostTrustStore(string directory)
 {
@@ -12,10 +12,10 @@ public sealed class HostTrustStore(string directory)
     public void Accept(HostKeyInfo key)
     {
         var pins=Read();string name=key.Host+":"+key.Port;
-        if(pins.GetValueOrDefault(name)!=key.PreviousFingerprint)throw new InvalidOperationException("服务器信任记录已变化，请重新连接并核对。");
+        if(pins.GetValueOrDefault(name)!=key.PreviousFingerprint)throw new InvalidOperationException("伺服器信任記錄已變化，請重新連線並核對。");
         pins[name]=key.Fingerprint;Directory.CreateDirectory(directory);string temp=PathName+".new";
         File.WriteAllText(temp,JsonSerializer.Serialize(pins,JsonDefaults.Options));File.Move(temp,PathName,true);
-        // 仅移除该端点的旧公钥；重连核对新指纹后再写入实际公钥。
+        // 僅移除該端點的舊公鑰；重連核對新指紋後再寫入實際公鑰。
         string known=Path.Combine(directory,"known_hosts");string endpoint=key.Port==22?key.Host:$"[{key.Host}]:{key.Port}";
         if(File.Exists(known))File.WriteAllLines(known,File.ReadAllLines(known).Where(line=>!line.StartsWith(endpoint+" ",StringComparison.Ordinal)));
     }

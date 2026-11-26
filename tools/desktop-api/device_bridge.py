@@ -80,7 +80,7 @@ def paired_device(state, owner, db=None):
 
 def require_paired_device(state, owner, device):
     if paired_device(state, owner) != device:
-        raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
+        raise DeviceAlreadyBound('這把 Key 已綁定其他 Safe Code 裝置，請先解除原裝置綁定。')
 
 
 def write_file(path, content):
@@ -167,7 +167,7 @@ class OwnerHosts:
             target = self.path(owner, device)
             current = paired_device(self.state, owner)
             if current not in (None, device):
-                raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
+                raise DeviceAlreadyBound('這把 Key 已綁定其他 Safe Code 裝置，請先解除原裝置綁定。')
             target.parent.mkdir(mode=0o700, exist_ok=True)
             write_file(target, json.dumps({'proof':digest(proof),'identity':identity,'hostname':hostname.strip()}))
         return {'deviceId':device,'deviceProof':proof,'alias':alias}
@@ -266,7 +266,7 @@ class Devices:
             if row is None or not self.proof_matches(row, proof):
                 raise DeviceError('Unknown device pairing')
             if require_current and paired_device(self.state, owner, db) != device:
-                raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
+                raise DeviceAlreadyBound('這把 Key 已綁定其他 Safe Code 裝置，請先解除原裝置綁定。')
         return row
 
     def prepare(self, owner, platform, hostname):
@@ -289,7 +289,7 @@ class Devices:
                 self.remove_identity(row['id'])
                 db.execute('DELETE FROM devices WHERE id=?', (row['id'],))
             if paired_device(self.state, owner, db) is not None:
-                raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
+                raise DeviceAlreadyBound('這把 Key 已綁定其他 Safe Code 裝置，請先解除原裝置綁定。')
             occupied = {row[0] for row in db.execute('SELECT port FROM devices')}
             port = next((p for p in PORTS if p not in occupied), None)
             if port is None:

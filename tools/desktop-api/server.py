@@ -37,7 +37,7 @@ PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
 GATEWAY_REVISION = 23
 PUBLIC_KEY_QUEUE = 'public-key-queue'
-PUBLIC_DISABLED_MESSAGE = '请先在 Safe Code 中启用公网网关。'
+PUBLIC_DISABLED_MESSAGE = '請先在 Safe Code 中啟用公網網關。'
 # A shared promotional code, checked only at the gateway.
 ACTIVATION_CODE_SHA256 = bytes.fromhex('89debb851e3fc69c8e163a3b6462a3493e93d38ae8cf0132e419bd9e0b32d2b9')
 # Shared with DesktopKeyAccess. These bundled keys deter casual inspection only.
@@ -128,7 +128,7 @@ class AdminHandler(socketserver.StreamRequestHandler):
         except (ValueError, KeyError, TypeError) as error:
             result={'error':str(error)}
         except (OSError, sqlite3.Error):
-            result={'error':'Safe Code API 无法读取或保存本机管理数据。'}
+            result={'error':'Safe Code API 無法讀取或儲存本機管理數據。'}
         self.wfile.write(json.dumps(result,ensure_ascii=False).encode()+b'\n')
 
 
@@ -274,7 +274,7 @@ class PublicHandler(Handler):
         device = self.headers.get('X-SafeCode-Device')
         proof = self.headers.get('X-SafeCode-Device-Proof')
         if not self.authorized():
-            return self.reject_device_message(401, 'SafeCode API Key 无效或已停用。', 'key_rejected')
+            return self.reject_device_message(401, 'SafeCode API Key 無效或已停用。', 'key_rejected')
         if self.server.config['cloudcli'] is None:
             return self.reject_device_message(503, CLOUDCLI_REQUIRED)
         if self.headers.get('X-SafeCode-Diagnostics') == '1':
@@ -286,27 +286,27 @@ class PublicHandler(Handler):
             try:
                 required = self.requires_device()
             except (OSError, sqlite3.Error):
-                return self.reject_device_message(503, '暂时无法检查本机设备状态，请稍后重试。', 'device_state_unavailable')
+                return self.reject_device_message(503, '暫時無法檢查本機裝置狀態，請稍後重試。', 'device_state_unavailable')
             if required:
-                return self.reject_device_message(403, '请先在 Safe Code 完成本机设备配对。', 'device_pairing_required')
+                return self.reject_device_message(403, '請先在 Safe Code 完成本機裝置配對。', 'device_pairing_required')
         else:
             diagnostic(stage='device_check')
             binding = self.server.owner_hosts if SSH_DEVICE.fullmatch(device or '') else self.server.devices
             if binding is None:
-                return self.reject_device_message(503, '网关的本机连接服务尚未就绪，请联系管理员。',
+                return self.reject_device_message(503, '網關的本機連線服務尚未就緒，請聯繫管理員。',
                                                   'device_service_unavailable')
             try:
                 self.device = binding.chat_binding(self.digest, self.platform, device, proof)
             except DeviceOffline:
-                return self.reject_device_message(503, '本机连接暂不可用。请在 Safe Code 恢复设备连接后继续。',
+                return self.reject_device_message(503, '本機連線暫不可用。請在 Safe Code 恢復裝置連線後繼續。',
                                                   'device_offline')
             except DeviceAlreadyBound as error:
                 return self.reject_device_message(409, str(error), 'device_already_bound')
             except DeviceError:
-                return self.reject_device_message(403, '本机设备授权无效。请在 Safe Code 重新验证设备。',
+                return self.reject_device_message(403, '本機裝置授權無效。請在 Safe Code 重新驗證裝置。',
                                                   'device_pairing_rejected')
             except (OSError, sqlite3.Error):
-                return self.reject_device_message(503, '暂时无法检查本机设备状态，请稍后重试。',
+                return self.reject_device_message(503, '暫時無法檢查本機裝置狀態，請稍後重試。',
                                                   'device_state_unavailable')
         super().handle_messages()
 
@@ -319,23 +319,23 @@ class PublicHandler(Handler):
     def verify_admitted_device(self):
         if not self.device:
             if self.requires_device():
-                raise GatewayError('这把 Key 已绑定设备，请从原设备发起请求。', 403)
+                raise GatewayError('這把 Key 已綁定裝置，請從原裝置發起請求。', 403)
             return
         device = self.device['id']
         proof = self.headers.get('X-SafeCode-Device-Proof')
         try:
             if SSH_DEVICE.fullmatch(device):
                 if paired_device(self.server.root, self.digest) != device:
-                    raise DeviceAlreadyBound('设备绑定已变更')
+                    raise DeviceAlreadyBound('裝置綁定已變更')
                 self.server.owner_hosts.authenticate(self.digest, self.platform, device, proof)
             else:
                 row = self.server.devices.enrolled(self.digest, self.platform, device, proof)
                 if row['expires'] <= time.time():
-                    raise DeviceOffline('设备连接已超时')
+                    raise DeviceOffline('裝置連線已超時')
         except DeviceOffline as error:
             raise GatewayError(str(error), 503) from None
         except DeviceError:
-            raise GatewayError('设备授权已失效，请在 Safe Code 重新验证设备。', 403) from None
+            raise GatewayError('裝置授權已失效，請在 Safe Code 重新驗證裝置。', 403) from None
 
     def reject_device_message(self, status, message, code=None):
         # Read a bounded request before closing TLS so the rejection body reaches the relay.
@@ -602,7 +602,7 @@ class PublicServer(ThreadingHTTPServer):
     @staticmethod
     def subscription_snapshot(sample):
         if not isinstance(sample, dict) or type(sample.get('sampled_at')) is not int or not isinstance(sample.get('windows'), dict):
-            raise ValueError('无效的额度快照。')
+            raise ValueError('無效的額度快照。')
         windows = {}
         for key in ('five_hour', 'seven_day'):
             window = sample['windows'].get(key)
@@ -615,7 +615,7 @@ class PublicServer(ThreadingHTTPServer):
             if type(window.get('resets_at')) is int:
                 windows[key]['resets_at'] = window['resets_at']
         if not windows:
-            raise ValueError('额度快照缺少有效窗口。')
+            raise ValueError('額度快照缺少有效視窗。')
         return {'state': 'available', 'windows': windows, 'sampled_at': sample['sampled_at']}
 
     def remember_subscription(self, sample):
@@ -628,13 +628,13 @@ class PublicServer(ThreadingHTTPServer):
     def account_footer(self, digest, model, usage):
         # The response is saved for replay before the handler posts the charge.
         # Include this turn once, using the same prices as the ledger.
-        amount = '暂不可用'
+        amount = '暫不可用'
         try:
             balance = self.registry.balance(digest)
             if balance is not None:
                 remaining = balance['remaining_nanos']
                 if remaining is None:
-                    amount = '不限额'
+                    amount = '不限額'
                 else:
                     cost, _ = usage_price(model, usage)
                     nanos = max(0, remaining - cost)
@@ -645,16 +645,16 @@ class PublicServer(ThreadingHTTPServer):
         sample = self.subscription
         windows = sample['windows']
         values = []
-        for key, label in (('five_hour', '5 小时'), ('seven_day', '7 天')):
+        for key, label in (('five_hour', '5 小時'), ('seven_day', '7 天')):
             window = windows.get(key, {})
             used = window.get('used')
             reset = window.get('resets_at')
             if type(used) in (int, float) and 0 <= used <= 100 and (not reset or reset > time.time()):
-                values.append(f'{label}剩余 {int(100 - used + 0.5)}%')
+                values.append(f'{label}剩餘 {int(100 - used + 0.5)}%')
             else:
-                values.append(f'{label}暂无记录')
-        quota = ' · '.join(values) if windows else '暂无记录'
-        return (f'Key 余额 {amount}', f'账户额度（上次查询） · {quota}')
+                values.append(f'{label}暫無記錄')
+        quota = ' · '.join(values) if windows else '暫無記錄'
+        return (f'Key 餘額 {amount}', f'帳戶額度（上次查詢） · {quota}')
 
     def manage(self, request):
         operation = request.get('action')
@@ -679,7 +679,7 @@ class PublicServer(ThreadingHTTPServer):
         if operation == 'set_key_queue':
             enabled = request.get('enabled')
             if type(enabled) is not bool:
-                raise ValueError('请选择是否开启 API 排队。')
+                raise ValueError('請選擇是否開啟 API 排隊。')
             with self.lock:
                 if enabled:
                     atomic_write(self.root/PUBLIC_KEY_QUEUE, '1\n')
@@ -725,7 +725,7 @@ class PublicServer(ThreadingHTTPServer):
                 if type(concurrency) is not int or concurrency < 0:
                     raise ValueError()
             except ValueError:
-                raise ValueError('处理槽位必须是非负整数，0 表示不限。') from None
+                raise ValueError('處理槽位必須是非負整數，0 表示不限。') from None
             with self.lock:
                 atomic_write(self.root/PUBLIC_CONCURRENCY, str(concurrency))
                 self.queue.resize(concurrency)
@@ -772,27 +772,27 @@ class PublicServer(ThreadingHTTPServer):
         if operation in ('issue','update'):
             note, rpm = request.get('note',''), request.get('rpm',0)
             if not isinstance(note,str) or len(note)>120 or type(rpm) is not int or not 0<=rpm<=600:
-                raise ValueError('备注限 120 字，请求频率应为 0 到 600 次/分。')
+                raise ValueError('備註限 120 字，請求頻率應為 0 到 600 次/分。')
             budget = request.get('budget_cents')
             if budget is not None and (type(budget) is not int or not 0 <= budget <= 100_000_000):
-                raise ValueError('累计额度应为 0 到 1,000,000 美元，最多两位小数。')
+                raise ValueError('累計額度應為 0 到 1,000,000 美元，最多兩位小數。')
             device_access = request.get('device_access')
             if 'device_access' in request and type(device_access) is not bool:
-                raise ValueError('请选择有效的设备配对权限。')
+                raise ValueError('請選擇有效的裝置配對權限。')
             if device_access is True and (self.devices is None or device_service_problem(self.config)):
-                raise ValueError('私有设备服务尚未就绪，请在网关设置中安装或修复服务。')
+                raise ValueError('私有裝置服務尚未就緒，請在網關設定中安裝或修復服務。')
             settings = {'budget_nanos': None if budget is None else budget * 10_000_000} if 'budget_cents' in request else {}
             if 'expires_at' in request:
                 expiry = request['expires_at']
                 if expiry is not None and (type(expiry) is not int or not 1 <= expiry <= 253402300799):
-                    raise ValueError('请选择有效的失效时间。')
+                    raise ValueError('請選擇有效的失效時間。')
                 settings['expires_at'] = expiry
             if 'allowed_models' in request:
                 models = request['allowed_models']
                 if models is not None:
                     if (not isinstance(models, list) or not models or
                             any(not isinstance(model, str) or not CLOUDCLI_MODEL_ID.fullmatch(model) for model in models)):
-                        raise ValueError('请至少选择一个允许使用的模型。')
+                        raise ValueError('請至少選擇一個允許使用的模型。')
                     models = json.dumps(list(dict.fromkeys(models)), separators=(',', ':'))
                 settings['allowed_models'] = models
             if operation=='issue':
@@ -800,7 +800,7 @@ class PublicServer(ThreadingHTTPServer):
                     raise ValueError(CLOUDCLI_REQUIRED)
                 origin = self.public_origin or request.get('origin')
                 if not origin:
-                    raise ValueError('无法识别 VPS 的公网 IP，请从 Safe Code 的 SSH 会话创建密钥。')
+                    raise ValueError('無法識別 VPS 的公網 IP，請從 Safe Code 的 SSH 會話建立密鑰。')
                 ticket, key_id = make_key(self.root,origin)
                 self.registry.issue(key_id, note.strip(), rpm, activated=valid_activation_code(request.get('activation_code')), **settings)
                 if device_access:
@@ -809,11 +809,11 @@ class PublicServer(ThreadingHTTPServer):
                     except OSError:
                         self.registry.revoke(key_id)
                         self.registry.delete(key_id)
-                        raise ValueError('无法保存 Key 的设备配对权限。') from None
+                        raise ValueError('無法儲存 Key 的裝置配對權限。') from None
                 return {'id':key_id,'ticket':ticket}
         key_id = request.get('id','')
         if not isinstance(key_id,str) or not KEY_ID.fullmatch(key_id):
-            raise ValueError('Key ID 无效。')
+            raise ValueError('Key ID 無效。')
         if operation=='usage':
             return {'models':self.registry.usage(key_id), 'recent':self.registry.recent_requests(key_id)}
         if operation=='update':
@@ -826,11 +826,11 @@ class PublicServer(ThreadingHTTPServer):
         elif operation == 'unbind':
             expected = request.get('deviceId')
             if not isinstance(expected, str) or not expected:
-                raise ValueError('请刷新列表后选择要解绑的设备。')
+                raise ValueError('請重新整理列表後選擇要解綁的裝置。')
             with pairing_lock(self.root, key_id):
                 current = paired_device(self.root, key_id)
                 if current is not None and current != expected:
-                    raise ValueError('设备绑定已变更，请刷新列表后重试。')
+                    raise ValueError('裝置綁定已變更，請重新整理列表後重試。')
                 if current is not None:
                     # Continue to require device proof while the administrator changes devices.
                     policy = self.root/'pairing-enforced'
@@ -893,18 +893,18 @@ def open_public_server(root, config):
 
 def configure_port(root, expected_port, port, *, check_available=True):
     if not 1024 <= port <= 65535:
-        raise ValueError('监听端口必须是 1024 到 65535 之间的整数。')
+        raise ValueError('監聽連接埠必須是 1024 到 65535 之間的整數。')
     path = root/'config.json'
     config = json.loads(path.read_text())
     if config['port'] != expected_port:
-        raise ValueError('监听端口已变更，请重新读取网关状态。')
+        raise ValueError('監聽連接埠已變更，請重新讀取網關狀態。')
     if check_available:
         try:
             with socket.socket() as probe:
                 probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind((config['bind'], port))
         except OSError as error:
-            raise ValueError('新端口无法监听，可能已被其他服务占用。') from error
+            raise ValueError('新連接埠無法監聽，可能已被其他服務佔用。') from error
     config['port'] = port
     atomic_write(path, json.dumps(config))
 
@@ -929,7 +929,7 @@ def validate_origin(origin):
         if not url.hostname or url.port == 0 or url.netloc.endswith(':'):
             raise ValueError()
     except ValueError:
-        raise ValueError('请输入 HTTPS 公网地址及端口，地址中不能包含路径或凭据。')
+        raise ValueError('請輸入 HTTPS 公網地址及連接埠，地址中不能包含路徑或憑據。')
     return origin.rstrip('/')
 
 
@@ -947,7 +947,7 @@ def make_key(root, origin):
             input=payload, capture_output=True, check=True, timeout=5,
         ).stdout
     except (OSError, subprocess.SubprocessError) as error:
-        raise ValueError('无法加密接入 Key，请检查 VPS 的 OpenSSL。') from error
+        raise ValueError('無法加密接入 Key，請檢查 VPS 的 OpenSSL。') from error
     body = iv + cipher
     tag = hmac.digest(TICKET_AUTH_KEY, b'sc2.' + body, 'sha256')
     return 'sc2.' + base64.urlsafe_b64encode(body + tag).decode().rstrip('='), digest
@@ -995,7 +995,7 @@ if __name__=='__main__':
     if args.command=='issue':
         try:
             from getpass import getpass
-            code = getpass('激活码：') if args.prompt_activation else None
+            code = getpass('啟用碼：') if args.prompt_activation else None
             issue(args.state,args.origin,args.output,code)
         except ValueError as error:
             parser.exit(1, str(error)+'\n')
@@ -1011,7 +1011,7 @@ if __name__=='__main__':
         except DeviceAlreadyBound as error:
             print(json.dumps({'error':str(error)},ensure_ascii=False))
         except (OSError, ValueError, KeyError, TypeError):
-            print(json.dumps({'error':'无法将 Key 绑定到已验证的本机远程控制，请重新验证该设备。'}))
+            print(json.dumps({'error':'無法將 Key 綁定到已驗證的本機遠端控制，請重新驗證該裝置。'}))
     elif args.command=='admin':
         import sys
         try:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""使用真实 SSH 握手验证：非 Ubuntu 在任何部署写入命令前被拒绝。"""
+"""使用真實 SSH 握手驗證：非 Ubuntu 在任何部署寫入命令前被拒絕。"""
 import base64,hashlib,json,socket,subprocess,tempfile,threading,time
 from pathlib import Path
 import paramiko
@@ -29,6 +29,6 @@ with tempfile.TemporaryDirectory() as folder:
     cfg=Path(folder)/'target.json';cfg.write_text(json.dumps({'host':'127.0.0.1','username':'root','password':'fixture-only','port':port,'fingerprint':'SHA256:'+base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip('=')}));cfg.chmod(0o600)
     p=subprocess.run([str(root/'.local/dotnet/dotnet'),str(root/'src/SafeCode.Verify/bin/Debug/net10.0/SafeCode.Verify.dll'),str(cfg),'inspect'],capture_output=True,text=True,timeout=45)
     assert p.returncode==1,(p.returncode,p.stdout,p.stderr)
-    assert '仅支持 Ubuntu' in p.stderr,(p.stdout,p.stderr)
+    assert '僅支援 Ubuntu' in p.stderr,(p.stdout,p.stderr)
     assert commands==['cat /etc/os-release'],commands
     print(json.dumps({'passed':True,'system':'Debian SSH fixture','commands':commands,'writes':0},ensure_ascii=False))

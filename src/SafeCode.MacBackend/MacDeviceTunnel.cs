@@ -53,8 +53,8 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
     internal void Invalidate()=>returnPath?.Invalidate();
     internal string Command => returnPath?.Command ?? "";
     internal string? ConnectionProblem(bool localSshReady) => !localSshReady
-        ? "本机 SSH 服务未就绪，请在 SafeCode 恢复本机远程控制。"
-        : returnPath==null ? "正在建立设备回连。" : returnPath.Problem;
+        ? "本機 SSH 服務未就緒，請在 SafeCode 恢復本機遠端控制。"
+        : returnPath==null ? "正在建立裝置回連。" : returnPath.Problem;
     internal async Task CheckReturnAsync(bool force,bool localSshReady,CancellationToken ct)
     {
         if(!localSshReady || returnPath==null)throw new InvalidOperationException(ConnectionProblem(localSshReady));
@@ -65,7 +65,7 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
     {
         var reason=ConnectionProblem(localSshReady);
         return new(true,reason==null?"connected":"reconnecting",device.Alias,Command,
-            reason??"已验证 Key 网关到本机的 SSH 连接。");
+            reason??"已驗證 Key 網關到本機的 SSH 連線。");
     }
 
     internal static async Task<DeviceBinding> PrepareAsync(Ticket ticket, CancellationToken ct)
@@ -73,12 +73,12 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
         var response = await DeviceControlAsync(ticket,
             new { action = "prepare", accepted = true, hostname = Environment.MachineName }, ct);
         var device = response.Deserialize<DeviceBinding>(new JsonSerializerOptions(JsonSerializerDefaults.Web))
-            ?? throw new IOException("网关返回的设备信息无效。");
+            ?? throw new IOException("網關返回的裝置資訊無效。");
         if (!Regex.IsMatch(device.DeviceId, @"\A[a-f0-9]{20}\z") ||
             !Regex.IsMatch(device.DeviceProof, @"\A[A-Za-z0-9_-]{43}\z") ||
             device.Alias != "mac-" + device.DeviceId || device.Port is < 1024 or > 65535 ||
             !Regex.IsMatch(device.PublicKey, @"\Assh-ed25519 [A-Za-z0-9+/=]{40,128}\z"))
-            throw new IOException("网关返回的设备信息无效。");
+            throw new IOException("網關返回的裝置資訊無效。");
         return device;
     }
 
@@ -87,7 +87,7 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
         var binary = Path.Combine(AppContext.BaseDirectory, "Payloads", "frp", "frpc");
         var info = new FileInfo(binary);
         if (!info.Exists || info.LinkTarget != null)
-            throw new IOException("当前安装包未包含有效的 Mac FRP 组件。");
+            throw new IOException("當前安裝包未包含有效的 Mac FRP 組件。");
         await RenewAsync(ct);
         listener.Start(2);
         relay = RelayAsync(lifetime.Token);
@@ -127,12 +127,12 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
                 ready.TrySetResult();
         };
         process.ErrorDataReceived += (_, _) => { };
-        process.Exited += (_, _) => ready.TrySetException(new IOException("FRP 客户端已退出。"));
-        if (!process.Start()) throw new IOException("未能启动 FRP 客户端。");
+        process.Exited += (_, _) => ready.TrySetException(new IOException("FRP 客戶端已退出。"));
+        if (!process.Start()) throw new IOException("未能啟動 FRP 客戶端。");
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         try { await ready.Task.WaitAsync(TimeSpan.FromSeconds(25), ct); }
-        catch (TimeoutException) { throw new IOException("FRP 通道未能连到 Key 网关。请检查网关的 HTTPS 转发及 FRP 服务。"); }
+        catch (TimeoutException) { throw new IOException("FRP 通道未能連到 Key 網關。請檢查網關的 HTTPS 轉發及 FRP 服務。"); }
         File.Delete(configPath);
         configPath = "";
 
@@ -146,7 +146,7 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
             var result=await DeviceControlAsync(ticket,new {action="verify",device.DeviceId,device.DeviceProof,ssh.Username,hostKey},token);
             if(result.ValueKind!=JsonValueKind.Object || !result.TryGetProperty("command",out var value) ||
                 value.ValueKind!=JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
-                throw new IOException("网关未确认 SSH 连接。");
+                throw new IOException("網關未確認 SSH 連線。");
             return value.GetString()!;
         }
         returnPath=new DeviceReturnPath(RenewAsync,Verify,()=>connected,()=>lifetime.IsCancellationRequested || process?.HasExited!=false,lifetime.Token);
@@ -215,7 +215,7 @@ internal sealed class MacDeviceTunnel : IAsyncDisposable
             if (response.StartsWith("HTTP/1.1 200 "u8) || response.StartsWith("HTTP/1.0 200 "u8)) return;
             break;
         }
-        throw new IOException("网关未接受 FRP 隧道。");
+        throw new IOException("網關未接受 FRP 隧道。");
     }
 
     public async ValueTask DisposeAsync()

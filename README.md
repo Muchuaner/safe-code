@@ -3,40 +3,40 @@
 </p>
 
 <p align="center">
-  <b>一个安装包，把 Ubuntu VPS 配成顺手的开发环境</b>
+  <b>一個安裝包，把 Ubuntu VPS 配成順手的開發環境</b>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.4.2"><img src="https://img.shields.io/badge/下载-Beta--0.4.4.2-c2566f?style=for-the-badge" alt="下载 Beta-0.4.4.2"></a>
+  <a href="https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.4.2"><img src="https://img.shields.io/badge/下載-Beta--0.4.4.2-c2566f?style=for-the-badge" alt="下載 Beta-0.4.4.2"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-e07b2a?style=for-the-badge" alt="Windows 10 / 11">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-6b4a3a?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-macOS 版支持 Apple Silicon（arm64），安装、构建与验证范围见 [Mac 使用说明](docs/MACOS.md)。
+macOS 版支援 Apple Silicon（arm64），安裝、構建與驗證範圍見 [Mac 使用說明](docs/MACOS.md)。
 
 ## ✨ 功能
 
-| | 功能 | 说明 |
+| | 功能 | 說明 |
 |:--:|:---|:---|
-| 🚀 | **一键部署** | 工作用户、中文环境、XFCE 桌面、Chrome、拼音输入法、Claude Code / Git / tmux、SSH 密钥，可单选或批量安装 |
-| 🔄 | **断线不中断** | 安装任务在 VPS 上独立运行，重新连接后继续查看进度 |
-| 🖥️ | **远程连接** | 一键打开远程桌面和 SSH 终端 |
-| 📂 | **目录挂载** | 多组映射、大文件传输、断线守护、新建目录与紧凑托盘；自动联动 CloudCLI 项目 |
-| 🔐 | **本机远程控制** | 经权限确认建立专用 SSH 通道，让服务器 AI 连接本机命令行；默认关闭 |
-| 🧩 | **Codex接入** | 可选第三方适配器，提供独立供应商配置；默认关闭，真实模型兼容性尚未验收 |
-| 🌐 | **CloudCLI** | 安装 CloudCLI，并通过 SSH 隧道一键打开网页 |
-| 🛡️ | **IP 管理** | 只选择服务器检测到的 IP，独立应用并验证出口，失败自动回退 |
-| 🧭 | **时区与语言** | 手动选择时区和系统语言 |
-| ⬆️ | **在线更新** | 标题与底部醒目提示新版本，校验安装包后由你确认安装 |
-| 🧰 | **故障诊断** | 默认关闭，主动开启后仅上报固定步骤与错误类型，不上传原始日志、凭据或路径 |
+| 🚀 | **一鍵部署** | 工作用戶、中文環境、XFCE 桌面、Chrome、拼音輸入法、Claude Code / Git / tmux、SSH 密鑰，可單選或批次安裝 |
+| 🔄 | **斷線不中斷** | 安裝任務在 VPS 上獨立執行，重新連線後繼續查看進度 |
+| 🖥️ | **遠端連線** | 一鍵開啟遠端桌面和 SSH 終端機 |
+| 📂 | **目錄掛載** | 多組映射、大檔案傳輸、斷線守護、新建目錄與精簡系統匣；自動聯動 CloudCLI 項目 |
+| 🔐 | **本機遠端控制** | 經權限確認建立專用 SSH 通道，讓伺服器 AI 連接本機命令列；預設關閉 |
+| 🧩 | **Codex接入** | 可選第三方適配器，提供獨立供應商配置；預設關閉，真實模型相容性尚未驗收 |
+| 🌐 | **CloudCLI** | 安裝 CloudCLI，並透過 SSH 隧道一鍵開啟網頁 |
+| 🛡️ | **IP 管理** | 只選擇伺服器檢測到的 IP，獨立應用並驗證出口，失敗自動回退 |
+| 🧭 | **時區與語言** | 手動選擇時區和系統語言 |
+| ⬆️ | **網上更新** | 標題與底部醒目提示新版本，校驗安裝包後由你確認安裝 |
+| 🧰 | **故障診斷** | 預設關閉，主動開啟後僅上報固定步驟與錯誤類型，不上載原始日誌、憑據或路徑 |
 
-## 贡献者
+## 貢獻者
 
-- [yziyan123](https://github.com/yziyan123) 提供 Windows 远程桌面动态分辨率、全屏和固定分辨率下的等比缩放方案，见 [#4](https://github.com/Muchuaner/safe-code/pull/4) 和 [#8](https://github.com/Muchuaner/safe-code/pull/8)。
-- [SuperGh2233](https://github.com/SuperGh2233) 提供 macOS 远程桌面的 SSH 隧道复用、稳定入口、RDP 探活和客户端检测方案，见 [#5](https://github.com/Muchuaner/safe-code/pull/5)。
+- [yziyan123](https://github.com/yziyan123) 提供 Windows 遠端桌面動態解像度、全螢幕和固定解像度下的等比縮放方案，見 [#4](https://github.com/Muchuaner/safe-code/pull/4) 和 [#8](https://github.com/Muchuaner/safe-code/pull/8)。
+- [SuperGh2233](https://github.com/SuperGh2233) 提供 macOS 遠端桌面的 SSH 隧道複用、穩定入口、RDP 探活和客戶端檢測方案，見 [#5](https://github.com/Muchuaner/safe-code/pull/5)。
 
 ---
 
 <p align="center">
-  <a href="docs/WINDOWS.md">使用说明</a> · <a href="https://qm.qq.com/q/cyUWAwYKQg">QQ 群</a> · <a href="https://www.rainyun.com/Agentom_">VPS 推荐</a>
+  <a href="docs/WINDOWS.md">使用說明</a> · <a href="https://qm.qq.com/q/cyUWAwYKQg">QQ 群</a> · <a href="https://www.rainyun.com/Agentom_">VPS 推薦</a>
 </p>

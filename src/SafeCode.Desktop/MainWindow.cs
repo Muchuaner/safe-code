@@ -61,9 +61,9 @@ public sealed class MainWindow : Window
         if(arguments.Contains("--connection-acceptance")){dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Connection-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;}
         if(arguments.Contains("--maintenance-acceptance")){
             using var testConfig=JsonDocument.Parse(File.ReadAllText(arguments[1]));var target=testConfig.RootElement;supportSettings=LocalSecrets.Load();
-            if(supportSettings==null||supportSettings.Host!=target.GetProperty("allowedHost").GetString()||!target.GetProperty("allowMaintenance").GetBoolean())throw new InvalidOperationException("维护验收需要明确指定已授权的测试目标。");
+            if(supportSettings==null||supportSettings.Host!=target.GetProperty("allowedHost").GetString()||!target.GetProperty("allowMaintenance").GetBoolean())throw new InvalidOperationException("維護驗收需要明確指定已授權的測試目標。");
             supportFingerprint=new HostTrustStore(dataDirectory).Describe(supportSettings.Host,supportSettings.Port,"").PreviousFingerprint;
-            if(string.IsNullOrEmpty(supportFingerprint)||supportFingerprint!=target.GetProperty("expectedFingerprint").GetString())throw new InvalidOperationException("验收目标指纹未匹配已确认记录。");
+            if(string.IsNullOrEmpty(supportFingerprint)||supportFingerprint!=target.GetProperty("expectedFingerprint").GetString())throw new InvalidOperationException("驗收目標指紋未匹配已確認記錄。");
             dataDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SafeCode-Maintenance-Acceptance");LocalSecrets.DirectoryOverride=dataDirectory;
         }
         if(arguments.Length>=1&&arguments[0] is "--ip-acceptance" or "--ip-manual")
@@ -72,7 +72,7 @@ public sealed class MainWindow : Window
             if(arguments[0]=="--ip-acceptance")
             {
                 using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));
-                if(!cfg.RootElement.GetProperty("allowNetworkChanges").GetBoolean()||cfg.RootElement.GetProperty("host").GetString()!=cfg.RootElement.GetProperty("ingressIp").GetString())throw new InvalidOperationException("IP 验收需要明确授权并指定目标入口。");
+                if(!cfg.RootElement.GetProperty("allowNetworkChanges").GetBoolean()||cfg.RootElement.GetProperty("host").GetString()!=cfg.RootElement.GetProperty("ingressIp").GetString())throw new InvalidOperationException("IP 驗收需要明確授權並指定目標入口。");
                 acceptanceFingerprint=cfg.RootElement.GetProperty("fingerprint").GetString();
             }
         }
@@ -121,7 +121,7 @@ public sealed class MainWindow : Window
                 finally{integrationSampling=false;}
             };
             integrationTimer.Start();
-            mountTray=new MountTray(this,()=>session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),ShowMainWindow,ReconnectMountsFromTrayAsync,()=>{exitRequested=true;Close();},PublishMountStatus,TrayStatus,()=>KeyAccess.ListKeysAsync(lifetime.Token),
+            mountTray=new MountTray(this,()=>session?.GetMountStatus()??new(0,"idle","未掛載目錄",0,0,0,0,0),ShowMainWindow,ReconnectMountsFromTrayAsync,()=>{exitRequested=true;Close();},PublishMountStatus,TrayStatus,()=>KeyAccess.ListKeysAsync(lifetime.Token),
                 async id=>await KeyAccess.SavedBalanceAsync(id,lifetime.Token),dataDirectory);
             StateChanged+=(_,_)=>{if(WindowState==WindowState.Minimized){ShowInTaskbar=false;Hide();}};
         }
@@ -131,7 +131,7 @@ public sealed class MainWindow : Window
             if(!closingApproved&&!IsAcceptance&&!exitRequested&&(session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true||keyAccess?.Running==true||deploying))
             {e.Cancel=true;ShowInTaskbar=false;Hide();mountTray?.NotifyHidden();return;}
             if(!closingApproved&&(connectionPending||deploying||maintenanceOperations>0||gatewayWindow?.Busy==true))
-            {e.Cancel=true;exitRequested=false;ShowMainWindow();MessageBox.Show(this,"任务正在执行，请等待完成后退出。","Safe Code");return;}
+            {e.Cancel=true;exitRequested=false;ShowMainWindow();MessageBox.Show(this,"任務正在執行，請等待完成後退出。","Safe Code");return;}
             if(!closingApproved)
             {
                 e.Cancel=true;
@@ -153,7 +153,7 @@ public sealed class MainWindow : Window
                 {
                     exitRequested=false;
                     ShowMainWindow();
-                    MessageBox.Show(this,error.Message,"暂未退出",MessageBoxButton.OK,MessageBoxImage.Warning);
+                    MessageBox.Show(this,error.Message,"暫未退出",MessageBoxButton.OK,MessageBoxImage.Warning);
                 }
                 finally
                 {
@@ -179,7 +179,7 @@ public sealed class MainWindow : Window
             if(status.State is "reconnecting" or "attention")failure=status.AuthenticationRequired
                 ? new Renci.SshNet.Common.SshAuthenticationException("Mount authentication required.") : new IOException();
         }
-        catch(Exception error){failure=error;MessageBox.Show(this,error.Message,"挂载守护");}
+        catch(Exception error){failure=error;MessageBox.Show(this,error.Message,"掛載守護");}
         finally{if(trace!=null)_=services.SendDiagnosticAsync(trace,failure,lifetime.Token);}
     }
 
@@ -229,13 +229,13 @@ public sealed class MainWindow : Window
     {
         try
         {
-            if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","窗口已加载\n");
+            if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","視窗已載入\n");
             Directory.CreateDirectory(dataDirectory);
             var options = new CoreWebView2EnvironmentOptions();
             if(IsAcceptance)options.AdditionalBrowserArguments="--disable-gpu";
             var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataDirectory, "WebView"), options);
             await browser.EnsureCoreWebView2Async(environment);
-            if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","WebView 已就绪\n");
+            if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","WebView 已就緒\n");
             if (arguments.Length>=3&&arguments[0]=="--acceptance")
             { using var cfg = JsonDocument.Parse(File.ReadAllText(arguments[1])); acceptanceFingerprint = cfg.RootElement.GetProperty("fingerprint").GetString(); }
             browser.CoreWebView2.SetVirtualHostNameToFolderMapping("safe-code.local", Path.Combine(AppContext.BaseDirectory, "Web"), CoreWebView2HostResourceAccessKind.DenyCors);
@@ -248,7 +248,7 @@ public sealed class MainWindow : Window
                   if(window.safeCodeNativeReady)return;
                   document.querySelector('main')?.setAttribute('inert','');
                   const panel=document.createElement('div');panel.style.cssText='position:fixed;inset:0;background:white;display:grid;place-content:center;padding:35px;font:14px system-ui,sans-serif;color:#4b6654;text-align:center';
-                  const message=document.createElement('p');message.textContent='客户端核心模块加载失败，已停止运行。请检查软件包是否完整。';
+                  const message=document.createElement('p');message.textContent='客戶端核心模組載入失敗，已停止執行。請檢查軟件包是否完整。';
                   const close=document.createElement('button');close.setAttribute('data-safe-code-startup-close','');close.textContent='退出';close.onclick=()=>window.chrome.webview.postMessage({id:'failed-startup-close',op:'window.close',args:{}});panel.append(message,close);document.body.append(panel);
                 });
                 """);
@@ -274,7 +274,7 @@ public sealed class MainWindow : Window
         catch (Exception error)
         {
             if(IsAcceptance)File.WriteAllText(arguments[2]+".error.txt",error.ToString());
-            MessageBox.Show(this, "客户端初始化失败。请安装 Microsoft Edge WebView2 Runtime。\n\n" + error.Message, "Safe Code", MessageBoxButton.OK, MessageBoxImage.Warning); Close();
+            MessageBox.Show(this, "客戶端初始化失敗。請安裝 Microsoft Edge WebView2 Runtime。\n\n" + error.Message, "Safe Code", MessageBoxButton.OK, MessageBoxImage.Warning); Close();
         }
     }
     private async void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -288,11 +288,11 @@ public sealed class MainWindow : Window
             id = root.GetProperty("id").GetString() ?? ""; operation = root.GetProperty("op").GetString() ?? "";
             if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","RPC "+operation+"\n");
             var args = root.TryGetProperty("args", out var value) ? value : default;
-            if(exitInProgress)throw new InvalidOperationException("正在安全退出，请稍候。");
-            if(installingUpdate)throw new InvalidOperationException("正在准备安装更新，请稍候。");
+            if(exitInProgress)throw new InvalidOperationException("正在安全退出，請稍候。");
+            if(installingUpdate)throw new InvalidOperationException("正在準備安裝更新，請稍候。");
             bool maintenance=operation is "cloud.install" or "cloud.expose" or "mount.install" or "mount.apply" or "ip.apply" or "terminal" or "host.enable" or "host.disable" or "bridge.start" or "bridge.stop" or "safeCodeApi.enablePublic" or "safeCodeApi.repair" or "desktopKey.enable" or "desktopKey.authorizeDevice" or "desktopKey.refreshModels" or "desktopKey.disable" or "connection.reauthenticate";
             bool keyChange=operation is "desktopKey.enable" or "desktopKey.authorizeDevice" or "desktopKey.disable" or "desktopKey.cancelDevice";
-            if(keyChange&&maintenanceOperations>0)throw new InvalidOperationException("请等待当前操作完成。");
+            if(keyChange&&maintenanceOperations>0)throw new InvalidOperationException("請等待當前操作完成。");
             if(maintenance)maintenanceOperations++;
             if(CanReportDiagnostics)
             {
@@ -305,7 +305,7 @@ public sealed class MainWindow : Window
             await FlushLogsAsync();
             await RespondAsync(id, answer, null);
         }
-        catch (Exception error) { diagnosticError=error;string? issue=diagnostic==null?null:services.RecordFailure(diagnostic,error);await RespondAsync(id, null, ConnectionErrors.DescribeOperation(error)+(issue==null?"":"\n问题编号："+issue)); }
+        catch (Exception error) { diagnosticError=error;string? issue=diagnostic==null?null:services.RecordFailure(diagnostic,error);await RespondAsync(id, null, ConnectionErrors.DescribeOperation(error)+(issue==null?"":"\n問題編號："+issue)); }
         finally
         {
             if(diagnostic!=null)
@@ -320,20 +320,20 @@ public sealed class MainWindow : Window
 
     private async Task<object> AuthorizeKeyDeviceAsync(CancellationToken ct)
     {
-        var setup=pendingKeyDevice??throw new InvalidOperationException("请重新验证接入 Key。");
-        if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+        var setup=pendingKeyDevice??throw new InvalidOperationException("請重新驗證接入 Key。");
+        if(deploying)throw new InvalidOperationException("請等待當前操作完成。");
         if(setup.Switching)
         {
             try{await KeyAccess.DisableAsync(ct);}
             finally{await StopKeyDeviceAsync();}
-            if(KeyAccess.Configured)throw new InvalidOperationException("原网关尚未确认解绑，请先点击「重试解绑」查看结果。");
+            if(KeyAccess.Configured)throw new InvalidOperationException("原網關尚未確認解綁，請先點擊「重試解綁」查看結果。");
             setup=setup with {Switching=false};
             pendingKeyDevice=setup;
         }
         var control=hostControl??=new WindowsHostControl(dataDirectory);
         if(setup.HostSession is { } target)
             return await AuthorizeKeyHostControlAsync(setup,target,control,ct);
-        if(control.Enabled)throw new InvalidOperationException("本机已有控制通道，请先停用后再部署 Key 接入。");
+        if(control.Enabled)throw new InvalidOperationException("本機已有控制通道，請先停用後再部署 Key 接入。");
         await StopKeyDeviceAsync();
         deploying=true;
         activeStep="host_enable";
@@ -375,16 +375,16 @@ public sealed class MainWindow : Window
         WindowsHostControl control,CancellationToken ct)
     {
         if(!ReferenceEquals(RequireSession(),target))
-            throw new InvalidOperationException("SSH 会话已变更，请重新验证接入 Key。");
+            throw new InvalidOperationException("SSH 會話已變更，請重新驗證接入 Key。");
         if(control.Enabled&&!control.IsEnabledFor(target))
-            throw new InvalidOperationException("现有本机远程控制属于另一台 VPS。请先在本机远程控制中停用它。");
+            throw new InvalidOperationException("現有本機遠端控制屬於另一台 VPS。請先在本機遠端控制中停用它。");
         deploying=true;
         activeStep="host_enable";
         bool startedHere=false;
         try
         {
             if(!await target.CanReuseHostControlForKeyAsync(setup.Remote,ct))
-                throw new InvalidOperationException("该 Key 或网关的设备授权已变更，请重新验证接入 Key。");
+                throw new InvalidOperationException("該 Key 或網關的裝置授權已變更，請重新驗證接入 Key。");
             if(!control.Enabled)
             {
                 await control.EnableAsync(target,control.DefaultAlias,ct);
@@ -399,7 +399,7 @@ public sealed class MainWindow : Window
             var device=new DesktopKeyAccess.DeviceBinding(binding.GetProperty("deviceId").GetString()!,
                 binding.GetProperty("deviceProof").GetString()!,binding.GetProperty("alias").GetString()!,0,"");
             var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device,hostReady:HostReady,
-                devicePath:new(()=>HostReady()?null:target.HostControlStatus.State=="connected"?"本次授权的 SSH 会话已断开，请重新启用接入。":target.HostControlStatus.Message,
+                devicePath:new(()=>HostReady()?null:target.HostControlStatus.State=="connected"?"本次授權的 SSH 會話已斷開，請重新啟用接入。":target.HostControlStatus.Message,
                     (force,token)=>target.MaintainHostControlForChatAsync(token,force),()=>target.HostNetworkGeneration));
             if(startedHere)keyStartedHost=target;
             pendingKeyDevice=null;
@@ -435,13 +435,13 @@ public sealed class MainWindow : Window
         {
             case "bridge.status": claudeBridge??=new ClaudeCodexBridge(dataDirectory);return await claudeBridge.RefreshAsync(lifetime.Token);
             case "bridge.start":
-                if(!args.TryGetProperty("thirdPartyAccepted",out var accepted)||!accepted.GetBoolean())throw new InvalidOperationException("请先确认第三方适配器和数据处理说明。");
-                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                if(!args.TryGetProperty("thirdPartyAccepted",out var accepted)||!accepted.GetBoolean())throw new InvalidOperationException("請先確認第三方適配器和數據處理說明。");
+                if(deploying)throw new InvalidOperationException("請等待當前操作完成。");
                 claudeBridge??=new ClaudeCodexBridge(dataDirectory);deploying=true;activeStep="codex_bridge";
                 try{return await claudeBridge.StartAsync(RequireSession(),args.GetProperty("port").GetInt32(),Read("model").Trim(),args.TryGetProperty("writable",out var writable)&&writable.GetBoolean(),lifetime.Token);}finally{deploying=false;activeStep="";}
             case "bridge.stop":
-                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");deploying=true;activeStep="codex_bridge";
-                try{return claudeBridge==null?new ClaudeCodexStatus(false,false,false,18797,"sonnet",false,"未启动"):await claudeBridge.StopAsync(lifetime.Token);}finally{deploying=false;activeStep="";}
+                if(deploying)throw new InvalidOperationException("請等待當前操作完成。");deploying=true;activeStep="codex_bridge";
+                try{return claudeBridge==null?new ClaudeCodexStatus(false,false,false,18797,"sonnet",false,"未啟動"):await claudeBridge.StopAsync(lifetime.Token);}finally{deploying=false;activeStep="";}
             case "desktopKey.connection":return keyAccess?.ConnectionStatus;
             case "desktopKey.mode":
                 if (args.ValueKind==JsonValueKind.Object && args.TryGetProperty("enabled",out var apiMode))
@@ -463,7 +463,7 @@ public sealed class MainWindow : Window
             case "desktopKey.savedBalance": return await KeyAccess.SavedBalanceAsync(Read("id"),lifetime.Token);
             case "desktopKey.enable":
                 if(Read("savedId")==""&&keyDeviceTunnel!=null&&hostControl?.Enabled==true)
-                    throw new InvalidOperationException("请先停用当前 Key 接入，再更换 Key。");
+                    throw new InvalidOperationException("請先停用當前 Key 接入，再更換 Key。");
                 pendingKeyDevice=null;
                 var keyResult=await KeyAccess.EnableAsync(Read("key"),lifetime.Token,
                     replace:args.TryGetProperty("replace",out var replaceKey)&&replaceKey.ValueKind==JsonValueKind.True,
@@ -479,7 +479,7 @@ public sealed class MainWindow : Window
                     alias=existingControl?keyHost!.HostControlStatus.Alias:setup.Existing?.Alias };
             case "desktopKey.authorizeDevice":
                 if(!args.TryGetProperty("riskAccepted",out var deviceConsent)||deviceConsent.ValueKind!=JsonValueKind.True)
-                    throw new InvalidOperationException("请先阅读并同意本机远程控制权限说明。");
+                    throw new InvalidOperationException("請先閱讀並同意本機遠端控制權限說明。");
                 return await AuthorizeKeyDeviceAsync(lifetime.Token);
             case "desktopKey.refreshModels": return await KeyAccess.RefreshModelsAsync(lifetime.Token);
             case "desktopKey.balance": return await KeyAccess.ReadBalanceAsync(lifetime.Token);
@@ -498,8 +498,8 @@ public sealed class MainWindow : Window
                 return await ReadGatewayStatusAsync(RequireGatewaySession());
             case "safeCodeApi.install":
                 if (!args.TryGetProperty("accepted", out var installAccepted) || installAccepted.ValueKind != JsonValueKind.True)
-                    throw new InvalidOperationException("请先确认安装 Safe Code API 服务。");
-                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                    throw new InvalidOperationException("請先確認安裝 Safe Code API 服務。");
+                if(deploying)throw new InvalidOperationException("請等待當前操作完成。");
                 var installSession=RequireGatewaySession();
                 deploying=true;activeStep="gateway_install";
                 try{return await installSession.InstallPublicGatewayAsync(lifetime.Token,
@@ -507,8 +507,8 @@ public sealed class MainWindow : Window
                 finally{deploying=false;activeStep="";}
             case "safeCodeApi.repair":
                 if (!args.TryGetProperty("accepted",out var repairAccepted) || repairAccepted.ValueKind!=JsonValueKind.True)
-                    throw new InvalidOperationException("请先确认故障修复范围。");
-                if(deploying||gatewayWindow?.Busy==true)throw new InvalidOperationException("请等待当前操作完成。");
+                    throw new InvalidOperationException("請先確認故障修復範圍。");
+                if(deploying||gatewayWindow?.Busy==true)throw new InvalidOperationException("請等待當前操作完成。");
                 var repairSession=RequireGatewaySession();
                 deploying=true;activeStep="gateway_repair";
                 try{return await repairSession.RepairPublicGatewayAsync(
@@ -516,21 +516,21 @@ public sealed class MainWindow : Window
                 finally{deploying=false;activeStep="";}
             case "safeCodeApi.enablePublic":
                 if (!args.TryGetProperty("accepted", out var publicAccepted) || publicAccepted.ValueKind != JsonValueKind.True)
-                    throw new InvalidOperationException("请先点击公网网关的「启用」。");
-                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                    throw new InvalidOperationException("請先點擊公網網關的「啟用」。");
+                if(deploying)throw new InvalidOperationException("請等待當前操作完成。");
                 return await RequireGatewaySession().EnablePublicGatewayAsync(lifetime.Token);
             case "window.gateway.open":
                 var gatewaySession=RequireGatewaySession();
                 await gatewaySession.RequirePublicGatewayAsync(lifetime.Token);
                     if(exitInProgress||installingUpdate||!ReferenceEquals(gatewaySession,RequireGatewaySession()))
-                    throw new InvalidOperationException("SSH 会话已变更，请重新打开网关管理。");
+                    throw new InvalidOperationException("SSH 會話已變更，請重新開啟網關管理。");
                 if(gatewayWindow!=null){gatewayWindow.Activate();return true;}
                 var gateway=new GatewayWindow(browser.CoreWebView2.Environment, options=>
                 {
                     Task<JsonElement> ManageAsync()
                     {
                         if(installingUpdate||!ReferenceEquals(gatewaySession,RequireGatewaySession()))
-                            throw new InvalidOperationException("SSH 会话已变更，请重新打开网关管理。");
+                            throw new InvalidOperationException("SSH 會話已變更，請重新開啟網關管理。");
                         var request=options.Deserialize<Dictionary<string,JsonElement>>()!;
                         request.Remove("background");
                         return gatewaySession.ManagePublicGatewayAsync(request,lifetime.Token);
@@ -545,16 +545,16 @@ public sealed class MainWindow : Window
             case "claudeDesktop.reopen": return await WindowsClaudeDesktop.OpenAsync(KeyAccess,true,lifetime.Token);
             case "claudeDesktop.open": return await WindowsClaudeDesktop.OpenAsync(KeyAccess,false,lifetime.Token);
             case "codex.open": return WindowsClients.OpenCodex();
-            case "bridge.copy-config": if(claudeBridge==null)throw new InvalidOperationException("请先启动适配器。");Clipboard.SetText(claudeBridge.Configuration);return true;
-            case "bridge.copy-key": if(claudeBridge==null)throw new InvalidOperationException("请先启动适配器。");Clipboard.SetText(claudeBridge.Token);return true;
+            case "bridge.copy-config": if(claudeBridge==null)throw new InvalidOperationException("請先啟動適配器。");Clipboard.SetText(claudeBridge.Configuration);return true;
+            case "bridge.copy-key": if(claudeBridge==null)throw new InvalidOperationException("請先啟動適配器。");Clipboard.SetText(claudeBridge.Token);return true;
             case "host.status": hostControl??=new WindowsHostControl(dataDirectory);return keyDeviceTunnel?.Status(hostControl.Enabled)??hostControl.Status;
             case "host.enable":
-                if(!args.TryGetProperty("riskAccepted",out var risk)||!risk.GetBoolean())throw new InvalidOperationException("请先阅读并确认本机远程控制权限说明。");
-                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                if(!args.TryGetProperty("riskAccepted",out var risk)||!risk.GetBoolean())throw new InvalidOperationException("請先閱讀並確認本機遠端控制權限說明。");
+                if(deploying)throw new InvalidOperationException("請等待當前操作完成。");
                 hostControl??=new WindowsHostControl(dataDirectory);deploying=true;activeStep="host_enable";
                 try{return await hostControl.EnableAsync(RequireSession(),Read("alias"),lifetime.Token);}finally{deploying=false;activeStep="";}
             case "host.disable":
-                if(deploying)throw new InvalidOperationException("请等待当前操作完成。");
+                if(deploying)throw new InvalidOperationException("請等待當前操作完成。");
                 if(keyDeviceTunnel!=null)
                 {
                     try{await KeyAccess.DisableAsync(lifetime.Token);}
@@ -565,10 +565,10 @@ public sealed class MainWindow : Window
                     await keyAccess.StopAsync();
                     keyStartedHost=null;
                 }
-                return hostControl==null?new HostControlStatus(false,"disabled","","","未启用"):await hostControl.DisableAsync(lifetime.Token);
+                return hostControl==null?new HostControlStatus(false,"disabled","","","未啟用"):await hostControl.DisableAsync(lifetime.Token);
             case "preview.begin":
-                if(connectionPending||deploying||maintenanceOperations>0||session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true)throw new InvalidOperationException("请先结束当前操作并卸载目录，再进入开发预览。");
-                if(gatewayWindow?.Busy==true)throw new InvalidOperationException("请等待当前密钥操作完成。");
+                if(connectionPending||deploying||maintenanceOperations>0||session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true)throw new InvalidOperationException("請先結束當前操作並卸載目錄，再進入開發預覽。");
+                if(gatewayWindow?.Busy==true)throw new InvalidOperationException("請等待當前密鑰操作完成。");
                 gatewayWindow?.Close();
                 connecting?.Cancel();pendingHostTrust=null;clients.Dispose();session?.Dispose();session=null;return true;
             case "window.resize":
@@ -592,8 +592,8 @@ public sealed class MainWindow : Window
             case "updates.download":
                 downloadedUpdate=await services.DownloadUpdateAsync((done,total)=>{_ = Dispatcher.BeginInvoke(async()=>{if(browser.CoreWebView2!=null&&!lifetime.IsCancellationRequested)await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeUpdateProgress?.("+done+","+total+")");});},lifetime.Token);return true;
             case "updates.install":
-                if(deploying||maintenanceOperations>0)throw new InvalidOperationException("请等待当前操作完成后安装更新。");
-                if(downloadedUpdate==null||!File.Exists(downloadedUpdate.Path))throw new InvalidOperationException("请先下载并校验安装包。");
+                if(deploying||maintenanceOperations>0)throw new InvalidOperationException("請等待當前操作完成後安裝更新。");
+                if(downloadedUpdate==null||!File.Exists(downloadedUpdate.Path))throw new InvalidOperationException("請先下載並校驗安裝包。");
                 installingUpdate=true;
                 try{await ClientServices.VerifyInstallerAsync(downloadedUpdate,lifetime.Token);LocalSecrets.CheckpointLogin();if(claudeBridge?.Running==true)await claudeBridge.StopAsync(suspend:true);if(hostControl?.Enabled==true)await hostControl.DisableAsync();if(session?.HasMounts==true)await session.UnmountAsync();await StopKeyDeviceAsync();if(keyAccess!=null)await keyAccess.StopAsync();
                 Process.Start(new ProcessStartInfo(downloadedUpdate.Path){UseShellExecute=true});closingApproved=true;Close();return true;}
@@ -606,38 +606,38 @@ public sealed class MainWindow : Window
             case "login.load": case "login.restoreSaved": return LocalSecrets.Load();
             case "connection.info": return session==null?null:new{host=session.Host,port=session.Port,username=session.LoginUsername};
             case "connection.reauthenticate":
-                if(deploying||connectionPending||maintenanceOperations>1)throw new InvalidOperationException("请等待当前操作完成后更新登录密码。");
-                var recovering=session??throw new InvalidOperationException("请先登录服务器。");deploying=true;
+                if(deploying||connectionPending||maintenanceOperations>1)throw new InvalidOperationException("請等待當前操作完成後更新登入密碼。");
+                var recovering=session??throw new InvalidOperationException("請先登入伺服器。");deploying=true;
                 try
                 {
                     using var recoveryTimeout=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);recoveryTimeout.CancelAfter(TimeSpan.FromSeconds(90));
                     await Task.Run(()=>recovering.ReauthenticateAsync(Read("password"),recoveryTimeout.Token));
-                    try{LocalSecrets.Save(new(recovering.Host,recovering.LoginUsername,Read("password"),recovering.Port));}catch{QueueLog("connection","新密码已验证，但登录记忆未能保存，下次请重新填写。");}
+                    try{LocalSecrets.Save(new(recovering.Host,recovering.LoginUsername,Read("password"),recovering.Port));}catch{QueueLog("connection","新密碼已驗證，但登入記憶未能儲存，下次請重新填寫。");}
                     return new{ready=true,mount=recovering.GetMountStatus()};
                 }
                 catch(Exception error){throw new InvalidOperationException(ConnectionErrors.Describe(error),error);}
                 finally{deploying=false;}
-            case "pickFolder": var dialog = new OpenFolderDialog { Title = "选择要挂载到 VPS 的本地目录", InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+            case "pickFolder": var dialog = new OpenFolderDialog { Title = "選擇要掛載到 VPS 的本地目錄", InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }; return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
             case "acceptance.capture":
-                if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
-                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services"&&tag!="loading"&&tag!="error"&&tag!="advanced"&&tag!="trust"&&tag!="resolution"&&tag!="draft"&&tag!="install"&&tag!="folder"&&tag!="maintenance"&&tag!="ip"&&tag!="update")throw new ArgumentException("截图标识无效。");
+                if(!IsAcceptance)throw new InvalidOperationException("未啟用驗收模式。");
+                string tag=Read("tag");if(tag!="login"&&tag!="notice"&&tag!="deployment"&&tag!="mount"&&tag!="custom"&&tag!="services"&&tag!="loading"&&tag!="error"&&tag!="advanced"&&tag!="trust"&&tag!="resolution"&&tag!="draft"&&tag!="install"&&tag!="folder"&&tag!="maintenance"&&tag!="ip"&&tag!="update")throw new ArgumentException("截圖示識無效。");
                 await Task.Delay(200);using(var image=File.Create(arguments[2]+"."+tag+".png"))await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);return true;
             case "acceptance.window-sizes":
-                if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
-                using(var window=new RdpDesktop(new(1024,768))){window.Show();await Task.Delay(150);var small=new{width=window.Width,height=window.Height};window.ApplyResolution(new(1600,900));var large=new{width=window.Width,height=window.Height};if(large.width<=small.width)throw new InvalidOperationException("分辨率增加后窗口未变大。");window.ApplyResolution(new(1024,768));if(window.Width!=small.width||window.Height!=small.height)throw new InvalidOperationException("分辨率减小后窗口未还原。");window.ApplyResolution(new(1920,1080));var area=System.Windows.Forms.Screen.FromControl(window).WorkingArea;if(!area.Contains(window.Bounds))throw new InvalidOperationException("桌面窗口超出工作区。");window.Close();return new{success=true,small,large,screenBoundsRespected=true};}
+                if(!IsAcceptance)throw new InvalidOperationException("未啟用驗收模式。");
+                using(var window=new RdpDesktop(new(1024,768))){window.Show();await Task.Delay(150);var small=new{width=window.Width,height=window.Height};window.ApplyResolution(new(1600,900));var large=new{width=window.Width,height=window.Height};if(large.width<=small.width)throw new InvalidOperationException("解像度增加後視窗未變大。");window.ApplyResolution(new(1024,768));if(window.Width!=small.width||window.Height!=small.height)throw new InvalidOperationException("解像度減小後視窗未還原。");window.ApplyResolution(new(1920,1080));var area=System.Windows.Forms.Screen.FromControl(window).WorkingArea;if(!area.Contains(window.Bounds))throw new InvalidOperationException("桌面視窗超出工作區。");window.Close();return new{success=true,small,large,screenBoundsRespected=true};}
             case "acceptance.connect-current":
-                if(!IsAcceptance||arguments[0]!="--maintenance-acceptance"||supportSettings==null)throw new InvalidOperationException("未启用维护验收。");
+                if(!IsAcceptance||arguments[0]!="--maintenance-acceptance"||supportSettings==null)throw new InvalidOperationException("未啟用維護驗收。");
                 session=new SshSession(dataDirectory);session.Log+=text=>QueueLog(activeStep,text);session.DirectoryLog+=text=>QueueLog("folder",text);
                 var inspected=await Task.Run(()=>session.ConnectAsync(supportSettings,key=>key.Fingerprint==supportFingerprint,lifetime.Token));return new{server=inspected,username=supportSettings.Username};
             case "acceptance.hostname":
-                if(!IsAcceptance||arguments[0]!="--maintenance-acceptance")throw new InvalidOperationException("未启用维护验收。");return (await RequireSession().ExecuteTextAsync("hostname",lifetime.Token)).Trim();
+                if(!IsAcceptance||arguments[0]!="--maintenance-acceptance")throw new InvalidOperationException("未啟用維護驗收。");return (await RequireSession().ExecuteTextAsync("hostname",lifetime.Token)).Trim();
             case "acceptance.cloud-http":
-                if(!IsAcceptance||arguments[0]!="--maintenance-acceptance")throw new InvalidOperationException("未启用维护验收。");uint preview=await RequireSession().ForwardAsync(3001,lifetime.Token);using(var http=new System.Net.Http.HttpClient{Timeout=TimeSpan.FromSeconds(15)}){using var reply=await http.GetAsync("http://127.0.0.1:"+preview,lifetime.Token);return new{status=(int)reply.StatusCode};}
+                if(!IsAcceptance||arguments[0]!="--maintenance-acceptance")throw new InvalidOperationException("未啟用維護驗收。");uint preview=await RequireSession().ForwardAsync(3001,lifetime.Token);using(var http=new System.Net.Http.HttpClient{Timeout=TimeSpan.FromSeconds(15)}){using var reply=await http.GetAsync("http://127.0.0.1:"+preview,lifetime.Token);return new{status=(int)reply.StatusCode};}
             case "client.verify":
-                if(!IsAcceptance)throw new InvalidOperationException("未启用验收模式。");
+                if(!IsAcceptance)throw new InvalidOperationException("未啟用驗收模式。");
                 return new{nativeSsh=await clients.VerifyNativeSshAsync(RequireSession(),lifetime.Token),desktopLogin=await clients.VerifyDesktopLoginAsync(RequireSession(),lifetime.Token),savedLogin=LocalSecrets.Load()?.Host==RequireSession().Host};
             case "acceptance.done":
-                if (!IsAcceptance) throw new InvalidOperationException("当前未启用验收模式。");
+                if (!IsAcceptance) throw new InvalidOperationException("當前未啟用驗收模式。");
                 string output = arguments[2]; Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
                 File.WriteAllText(output + ".json", args.GetRawText());
                 await Task.Delay(400);
@@ -646,15 +646,15 @@ public sealed class MainWindow : Window
                 _ = Dispatcher.BeginInvoke(() => Close()); return true;
             case "connection.cancel": connecting?.Cancel();pendingHostTrust=null;return true;
             case "host.trust":
-                if(pendingHostTrust is not {} challenge||challenge.Token!=Read("token"))throw new InvalidOperationException("服务器身份确认已失效，请重新连接。");
+                if(pendingHostTrust is not {} challenge||challenge.Token!=Read("token"))throw new InvalidOperationException("伺服器身份確認已失效，請重新連線。");
                 new HostTrustStore(dataDirectory).Accept(challenge.Key);pendingHostTrust=null;return true;
             case "notice.state":
                 string noticePath=Path.Combine(dataDirectory,"notice-accepted-v2");bool noticeAccepted=File.Exists(noticePath)||services.NoticeWasConfirmed;if(noticeAccepted&&!File.Exists(noticePath))File.WriteAllText(noticePath,DateTimeOffset.UtcNow.ToString("O"));return new{accepted=noticeAccepted};
             case "notice.accept": File.WriteAllText(Path.Combine(dataDirectory,"notice-accepted-v2"),DateTimeOffset.UtcNow.ToString("O"));return true;
             case "connect":
-                if(session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true)throw new InvalidOperationException("正在保护挂载目录或本机控制通道，请先停用并安全卸载再更换连接。");
-                if(connectionPending)throw new InvalidOperationException("连接正在处理中，请稍候。");
-                if(gatewayWindow?.Busy==true)throw new InvalidOperationException("请等待当前密钥操作完成。");
+                if(session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true)throw new InvalidOperationException("正在保護掛載目錄或本機控制通道，請先停用並安全卸載再更換連線。");
+                if(connectionPending)throw new InvalidOperationException("連線正在處理中，請稍候。");
+                if(gatewayWindow?.Busy==true)throw new InvalidOperationException("請等待當前密鑰操作完成。");
                 gatewayWindow?.Close();
                 connectionPending=true;try{connecting?.Dispose();connecting=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);connecting.CancelAfter(TimeSpan.FromSeconds(90));
                 session?.Dispose(); session = new SshSession(dataDirectory);
@@ -667,7 +667,7 @@ public sealed class MainWindow : Window
                     try{LocalSecrets.Save(settings);}
                     catch(Exception error) when(error is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
                     {
-                        gatewayWarnings.Add("连接已成功，但无法保存本机登录信息。");
+                        gatewayWarnings.Add("連線已成功，但無法儲存本機登入資料。");
                     }
                     if(!IsAcceptance)
                     {
@@ -675,7 +675,7 @@ public sealed class MainWindow : Window
                         try
                         {
                             if(claudeBridge?.Preference is {} bridgePreference&&bridgePreference.Matches(current))
-                                try{await RunWithDiagnosticAsync("codex_bridge_restore",()=>claudeBridge.StartAsync(current,bridgePreference.LocalPort,bridgePreference.Model,bridgePreference.Writable,connecting.Token),background:true);}catch(Exception error){gatewayWarnings.Add("Codex 网关恢复失败："+error.Message);}
+                                try{await RunWithDiagnosticAsync("codex_bridge_restore",()=>claudeBridge.StartAsync(current,bridgePreference.LocalPort,bridgePreference.Model,bridgePreference.Writable,connecting.Token),background:true);}catch(Exception error){gatewayWarnings.Add("Codex 網關恢復失敗："+error.Message);}
                         }
                         finally{deploying=false;}
                     }
@@ -692,7 +692,7 @@ public sealed class MainWindow : Window
                 finally{connectionPending=false;}
 
             case "job.resume":
-                if(deploying)throw new InvalidOperationException("已有任务正在监控。");deploying=true;activeStep=Read("operation");
+                if(deploying)throw new InvalidOperationException("已有任務正在監控。");deploying=true;activeStep=Read("operation");
                 try{return await RequireSession().ResumeJobAsync(Read("jobId"),lifetime.Token);}finally{deploying=false;activeStep="";}
             case "inspect": return await RequireSession().RequestAsync<ServerInfo>("inspect", null, lifetime.Token);
             case "ip.info": return await IpIntelligenceService.QueryAsync(Read("ip"),lifetime.Token);
@@ -700,14 +700,14 @@ public sealed class MainWindow : Window
             case "resources": return await RequireSession().ReadResourceStatsAsync(lifetime.Token);
             case "environment.assess": return await RequireSession().AssessEnvironmentAsync(lifetime.Token);
             case "deploy":
-                if(Read("step")=="account"&&claudeBridge?.Running==true)throw new InvalidOperationException("请先停止 Codex 模型适配器，再更新工作账户。");
-                if (deploying) throw new InvalidOperationException("另一个任务正在执行，请等待。");
+                if(Read("step")=="account"&&claudeBridge?.Running==true)throw new InvalidOperationException("請先停止 Codex 模型適配器，再更新工作帳戶。");
+                if (deploying) throw new InvalidOperationException("另一個任務正在執行，請等待。");
                 deploying = true; activeStep = Read("step");
                 try
                 {
                     var target = RequireSession();
                     var locale = preferences.RequireDeploymentChoices(target);
-                    var draft = activeStep=="account" ? preferences.ReadDraft(target) ?? throw new InvalidOperationException("请先保存工作账户设置。") : null;
+                    var draft = activeStep=="account" ? preferences.ReadDraft(target) ?? throw new InvalidOperationException("請先儲存工作帳戶設定。") : null;
                     var result = await target.DeployAsync(activeStep, locale, draft?.Username??"workspace", lifetime.Token, draft?.Password??"", draft?.Hostname??"");
                     if(activeStep=="account"&&result.Statuses.GetValueOrDefault("account"))preferences.ClearDraft(target);
                     if (activeStep == "ssh") await target.VerifyWorkspaceKeyAsync(lifetime.Token);
@@ -718,7 +718,7 @@ public sealed class MainWindow : Window
             case "folder.cancel": try{browsing?.Cancel();}catch(ObjectDisposedException){}return true;
             case "folder.list":
                 try{browsing?.Cancel();}catch(ObjectDisposedException){}browsing=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                using(var timeout=browsing){timeout.CancelAfter(TimeSpan.FromSeconds(12));try{return await RequireSession().ListDirectoriesAsync(Read("path"),timeout.Token);}catch(Exception error)when(error is OperationCanceledException or Renci.SshNet.Common.SshOperationTimeoutException){throw new TimeoutException("读取目录超时，请检查网络或挂载目录，稍后重试。",error);}}
+                using(var timeout=browsing){timeout.CancelAfter(TimeSpan.FromSeconds(12));try{return await RequireSession().ListDirectoriesAsync(Read("path"),timeout.Token);}catch(Exception error)when(error is OperationCanceledException or Renci.SshNet.Common.SshOperationTimeoutException){throw new TimeoutException("讀取目錄超時，請檢查網絡或掛載目錄，稍後重試。",error);}}
             case "account.draft.get": return preferences.ReadDraft(RequireSession());
             case "account.change.status": return new{requiresConfirmation=preferences.RequiresAccountConfirmation(RequireSession())};
             case "account.draft.save": preferences.SaveDraft(RequireSession(),new(Read("username"),Read("hostname"),Read("password")));return true;
@@ -730,16 +730,16 @@ public sealed class MainWindow : Window
             case "desktop": await clients.OpenDesktopAsync(RequireSession(), lifetime.Token,preferences.ReadResolution()); return true;
             case "terminal": await clients.OpenTerminalAsync(RequireSession(), lifetime.Token); return RequireSession().Server;
             case "cloud.install":
-                if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="cloud";
+                if(deploying)throw new InvalidOperationException("已有任務正在執行，請等待完成。");deploying=true;activeStep="cloud";
                 try{return await Task.Run(()=>RequireSession().RequestAsync<ServerInfo>("cloud",null,lifetime.Token));}finally{deploying=false;activeStep="";}
             case "cloud.open":
-                if (RequireSession().Server?.CloudReady != true) throw new InvalidOperationException("请先安装 CloudCLI。");
-                if(deploying)throw new InvalidOperationException("请等待当前部署完成后打开 CloudCLI。");
+                if (RequireSession().Server?.CloudReady != true) throw new InvalidOperationException("請先安裝 CloudCLI。");
+                if(deploying)throw new InvalidOperationException("請等待當前部署完成後開啟 CloudCLI。");
                 await RequireSession().RequestAsync<ServerInfo>("cloud_setup",null,lifetime.Token);
                 uint cloudPort = await RequireSession().ForwardAsync(3001, lifetime.Token); WindowsClients.OpenUrl("http://127.0.0.1:" + cloudPort); return true;
             case "cloud.expose":
-                if (RequireSession().Server?.CloudReady != true) throw new InvalidOperationException("请先安装 CloudCLI。");
-                if (deploying) throw new InvalidOperationException("已有任务正在执行，请等待完成。");
+                if (RequireSession().Server?.CloudReady != true) throw new InvalidOperationException("請先安裝 CloudCLI。");
+                if (deploying) throw new InvalidOperationException("已有任務正在執行，請等待完成。");
                 deploying = true; activeStep = "cloud_public";
                 try
                 {
@@ -749,20 +749,20 @@ public sealed class MainWindow : Window
                 finally { deploying = false; activeStep = ""; }
             case "mount.settings": return RequireSession().ReadMountMappings();
             case "mount.install":
-                if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="mount_install";
+                if(deploying)throw new InvalidOperationException("已有任務正在執行，請等待完成。");deploying=true;activeStep="mount_install";
                 try{return await Task.Run(()=>RequireSession().RequestAsync<ServerInfo>("mount_install",null,lifetime.Token));}finally{deploying=false;activeStep="";}
-            case "mount.status": return session?.GetMountStatus()??new MountStatus(0,"idle","未挂载目录",0,0,0,0,0);
+            case "mount.status": return session?.GetMountStatus()??new MountStatus(0,"idle","未掛載目錄",0,0,0,0,0);
             case "mount.status.open": mountTray?.Open(); return true;
             case "mount.apply":
                 var mappings=JsonSerializer.Deserialize<List<MountMapping>>(args.GetProperty("mappings"), JsonDefaults.Options) ?? [];
-                if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="mount_apply";
+                if(deploying)throw new InvalidOperationException("已有任務正在執行，請等待完成。");deploying=true;activeStep="mount_apply";
                 try{return await Task.Run(()=>RequireSession().ApplyMountsAsync(mappings,lifetime.Token));}finally{deploying=false;activeStep="";}
             case "ip.apply":
-                if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="ip_policy";
+                if(deploying)throw new InvalidOperationException("已有任務正在執行，請等待完成。");deploying=true;activeStep="ip_policy";
                 try
                 {
-                    var changed=await RequireSession().ApplyIpPolicyAsync(JsonSerializer.Deserialize<IpPolicySettings>(args,JsonDefaults.Options)??throw new ArgumentException("缺少 IP 设置。"),lifetime.Token);
-                    try{var saved=LocalSecrets.Load();if(saved!=null)LocalSecrets.Save(saved with{Host=RequireSession().Host,Port=RequireSession().Port});}catch(Exception){QueueLog(activeStep,"服务器设置已保存；本机连接记忆未能更新，下次请填写新入口。");}
+                    var changed=await RequireSession().ApplyIpPolicyAsync(JsonSerializer.Deserialize<IpPolicySettings>(args,JsonDefaults.Options)??throw new ArgumentException("缺少 IP 設定。"),lifetime.Token);
+                    try{var saved=LocalSecrets.Load();if(saved!=null)LocalSecrets.Save(saved with{Host=RequireSession().Host,Port=RequireSession().Port});}catch(Exception){QueueLog(activeStep,"伺服器設定已儲存；本機連線記憶未能更新，下次請填寫新入口。");}
                     return changed;
                 }
                 finally{deploying=false;activeStep="";}
@@ -771,18 +771,18 @@ public sealed class MainWindow : Window
             case "socks.probe":
             case "socks.enable":
             case "socks.disable":
-                if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");
+                if(deploying)throw new InvalidOperationException("已有任務正在執行，請等待完成。");
                 deploying=true;
                 try
                 {
                     var target=RequireSession();
                     if(operation=="socks.probe")return await target.ProbeSocksEgressAsync(Read("proxyUrl"),lifetime.Token);
                     if(operation=="socks.enable"&&(!args.TryGetProperty("accepted",out var acceptedSocks)||acceptedSocks.ValueKind!=JsonValueKind.True))
-                        throw new InvalidOperationException("请先确认整机代理的影响。");
+                        throw new InvalidOperationException("請先確認整機代理的影響。");
                     return await target.SetSocksEgressAsync(operation=="socks.enable"?Read("proxyUrl"):null,lifetime.Token);
                 }
                 finally{deploying=false;}
-            default: throw new InvalidOperationException("未知客户端操作。");
+            default: throw new InvalidOperationException("未知客戶端操作。");
         }
     }
     private async Task FlushLogsAsync()
@@ -802,8 +802,8 @@ public sealed class MainWindow : Window
         }
     }
     private SshSession RequireGatewaySession() => !connectionPending && session?.Server != null
-        ? session : throw new InvalidOperationException("请先连接服务器。");
-    private SshSession RequireSession() => !connectionPending&&session?.IsConnected == true&&session.Server!=null ? session : throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
+        ? session : throw new InvalidOperationException("請先連接伺服器。");
+    private SshSession RequireSession() => !connectionPending&&session?.IsConnected == true&&session.Server!=null ? session : throw new InvalidOperationException("SSH 連線已斷開，請重新連線。");
     private async Task RespondAsync(string id, object? result, string? error)
     {
         if (lifetime.IsCancellationRequested || browser.CoreWebView2 == null) return;
@@ -820,11 +820,11 @@ public sealed class MainWindow : Window
         try
         {
             string ready=await browser.CoreWebView2.ExecuteScriptAsync("Boolean(window.safeCodeNativeReady)");
-            if(ready!="true")throw new InvalidOperationException("核心模块未加载，已阻止概念稿模拟逻辑。");
+            if(ready!="true")throw new InvalidOperationException("核心模組未載入，已阻止概念稿模擬邏輯。");
             var config = JsonDocument.Parse(File.ReadAllText(configPath));
             string result = await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunAcceptance(" + config.RootElement.GetRawText() + ")");
             File.WriteAllText(output + ".bootstrap.json", result);
-            // 页面通过后续消息完成连接，截图由命令驱动的验收代码触发，凭据不写入图片或结果。
+            // 頁面透過後續消息完成連線，截圖由命令驅動的驗收程式碼觸發，憑據不寫入圖片或結果。
         }
         catch (Exception error) { File.WriteAllText(output + ".error.txt", error.Message); Environment.ExitCode=1; Close(); }
     }

@@ -96,7 +96,7 @@ def select_host(home, requested):
                 continue
             active.append(path.name)
     if len(active) != 1:
-        raise ValueError('Enable SafeCode 本机远程控制. If several clients are configured, use --client-id to select one.')
+        raise ValueError('Enable SafeCode 本機遠端控制. If several clients are configured, use --client-id to select one.')
     return active[0]
 
 
@@ -114,7 +114,7 @@ def cloudcli_auth_request(path, payload=None, token=None, *, port=3001):
                 raise ValueError()
             return value
     except (OSError, HTTPException, ValueError):
-        raise ValueError('CloudCLI 未能完成账户授权，请检查服务状态后重试。') from None
+        raise ValueError('CloudCLI 未能完成帳戶授權，請檢查服務狀態後重試。') from None
     finally:
         connection.close()
 
@@ -122,7 +122,7 @@ def cloudcli_auth_request(path, payload=None, token=None, *, port=3001):
 def cloudcli_needs_setup(port=3001):
     status = cloudcli_auth_request('/api/auth/status', port=port)
     if type(status.get('needsSetup')) is not bool:
-        raise ValueError('CloudCLI 未返回有效的首次配置状态。')
+        raise ValueError('CloudCLI 未返回有效的首次配置狀態。')
     return status['needsSetup']
 
 
@@ -139,7 +139,7 @@ def provision_cloudcli_key(pending_path, needs_setup):
         token = login.get('token')
         if (login.get('success') is not True or not isinstance(token, str)
                 or login.get('user', {}).get('username') != credentials['username']):
-            raise ValueError('CloudCLI 未确认新账户，请重试网关安装。')
+            raise ValueError('CloudCLI 未確認新帳戶，請重試網關安裝。')
     else:
         token = cloudcli_web_login(3001, credentials)
     key = record.get('apiKey')
@@ -147,7 +147,7 @@ def provision_cloudcli_key(pending_path, needs_setup):
         created = cloudcli_auth_request('/api/settings/api-keys', {'keyName': 'Safe Code Gateway'}, token)
         key = created.get('apiKey', {}).get('apiKey')
         if not isinstance(key, str) or not key:
-            raise ValueError('CloudCLI 未返回新建的 API Key，请重试网关安装。')
+            raise ValueError('CloudCLI 未返回新建的 API Key，請重試網關安裝。')
         atomic_settings(pending_path, {**credentials, 'apiKey': key}, original)
     return key, credentials
 
@@ -176,7 +176,7 @@ def prepare_public_gateway(home, state, options):
                 key, generated = provision_cloudcli_key(pending_path, needs_setup)
             project = home/DEFAULT_CLOUDCLI_PROJECT
             if not project.resolve().is_relative_to(home):
-                raise ValueError('CloudCLI 项目目录必须位于 VPS 工作账户的主目录内。')
+                raise ValueError('CloudCLI 項目目錄必須位於 VPS 工作帳戶的主目錄內。')
             project.mkdir(mode=0o700, parents=True, exist_ok=True)
             config = {
                 'apiKey': key, 'projectPath': str(project), 'port': 3001,
@@ -187,13 +187,13 @@ def prepare_public_gateway(home, state, options):
             try:
                 config = cloudcli_config(config)
             except ValueError:
-                raise ValueError('CloudCLI API Key 格式无效。') from None
+                raise ValueError('CloudCLI API Key 格式無效。') from None
             verify_cloudcli_agent(config)
             atomic_settings(config_path, config, None)
             created = hashlib.sha256(config_path.read_bytes()).hexdigest()
         else:
             if direct and trusted_ingress:
-                raise ValueError('公网直连需要启用 Desktop 工具审批，且不能绑定共享的工作站。已有工作站配置可沿用回环监听及 HTTPS 入口。')
+                raise ValueError('公網直連需要啟用 Desktop 工具審批，且不能綁定共享的工作站。已有工作站配置可沿用迴環監聽及 HTTPS 入口。')
             verify_cloudcli_agent(config)
             if direct and config['desktopToolApprovals']:
                 cloudcli_web_login(config['port'], config['desktopQuestions'])
@@ -422,6 +422,6 @@ if __name__ == '__main__':
         except (ValueError, GatewayError) as error:
             print(json.dumps({'error': str(error)}))
         except (OSError, KeyError, TypeError, AttributeError):
-            print(json.dumps({'error': '无法准备 CloudCLI 网关，请检查工作账户和配置文件的权限。'}))
+            print(json.dumps({'error': '無法準備 CloudCLI 網關，請檢查工作帳戶和設定檔的權限。'}))
     else:
         main()

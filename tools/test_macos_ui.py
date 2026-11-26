@@ -25,7 +25,7 @@ with sync_playwright() as p:
      m.op==='notice.state'?{accepted:false}:
      m.op==='login.restoreAvailable'?true:
      m.op==='login.restoreSaved'?{host:'192.0.2.42',username:'fixture',password:'fixture-only',port:22}:
-     ['host.status','host.enable'].includes(m.op)?{enabled:window.hostEnabled,state:window.hostEnabled?'connected':'disabled',alias:'mac',command:'',message:'未启用'}:
+     ['host.status','host.enable'].includes(m.op)?{enabled:window.hostEnabled,state:window.hostEnabled?'connected':'disabled',alias:'mac',command:'',message:'未啟用'}:
      m.op==='bridge.status'?{running:false}:
      needsKey?{cloudcliKeyRequired:true}:
      generatesAccount?{...window.publicGatewayFixture,cloudcliAccount:{username:'generated-fixture',password:'generated-fixture-password'}}:
@@ -34,7 +34,7 @@ with sync_playwright() as p:
      m.op==='window.gateway.open'?true:
      m.op==='connect'?{server:{statuses:{account:true,claude:window.claudeInstalled},cloudReady:window.cloudInstalled,assignedIps:[],osVersion:'24.04'}}:
      m.op==='cloud.install'?{statuses:{account:true},cloudReady:true,assignedIps:[],osVersion:'24.04'}:null;
-   const error=m.op==='safeCodeApi.publicStatus'&&!window.gatewayOnline?'网络中断':undefined;
+   const error=m.op==='safeCodeApi.publicStatus'&&!window.gatewayOnline?'網絡中斷':undefined;
    if(m.op==='safeCodeApi.install'&&window.deferGatewayInstall){
      window.replyToGatewayInstall=()=>window.safeCodeNativeResponse?.({id:m.id,result,error});
      return;
@@ -44,22 +44,22 @@ with sync_playwright() as p:
  page.add_init_script(main_fixture)
  page.goto((root/'web'/'index.html').as_uri());page.wait_for_function('window.safeCodeNativeReady===true')
  page.evaluate("showScreen('workspace');switchMode('maintenance')")
- assert page.locator('.window-controls').is_hidden();assert page.locator('#codex-launch').is_disabled();assert page.locator('#claude-desktop-launch').is_disabled();assert '暂不可用' in page.locator('#bridge-state').inner_text()
- assert 'macOS' in page.locator('#usage-detail').inner_text();assert '系统设置' in page.locator('.host-risk small').inner_text()
+ assert page.locator('.window-controls').is_hidden();assert page.locator('#codex-launch').is_disabled();assert page.locator('#claude-desktop-launch').is_disabled();assert '暫不可用' in page.locator('#bridge-state').inner_text()
+ assert 'macOS' in page.locator('#usage-detail').inner_text();assert '系統設定' in page.locator('.host-risk small').inner_text()
  assert page.locator('#score-source').get_attribute('href') is None
  assert page.locator('#mount-guard-status').evaluate('el=>getComputedStyle(el).backgroundColor')=='rgb(255, 248, 220)'
  page.evaluate("safeCodeMountStatus({count:1,state:'connected',message:'Connected'})")
  page.wait_for_function("getComputedStyle(document.querySelector('#mount-guard-status')).backgroundColor==='rgb(247, 250, 246)'")
  page.locator('#bridge-manage').click()
  page.wait_for_selector('#app-message-dialog[open]')
- assert '自行承担后果' in page.locator('#app-message-body').inner_text()
- assert 'macOS 暂不可用' in page.locator('#app-message-body').inner_text()
+ assert '自行承擔後果' in page.locator('#app-message-body').inner_text()
+ assert 'macOS 暫不可用' in page.locator('#app-message-body').inner_text()
  page.locator('#app-message-confirm').click()
  assert page.locator('#bridge-dialog').is_hidden()
  # The original password remains available after an explicit Keychain unlock.
  page.evaluate("showScreen('login')")
  restore=page.locator('#restore-saved-login')
- expect(restore).to_have_text('解锁已保存的登录信息')
+ expect(restore).to_have_text('解鎖已儲存的登入資料')
  restore.click()
  expect(page.locator('#ip')).to_have_value('192.0.2.42')
  expect(page.locator('#username')).to_have_value('fixture')
@@ -77,11 +77,11 @@ with sync_playwright() as p:
  page.wait_for_selector('#host-dialog[open]')
  assert page.locator('#host-alias').input_value()=='mac'
  assert not page.locator('#host-risk').is_checked()
- assert '远程登录' in page.locator('#host-progress').inner_text()
+ assert '遠端登入' in page.locator('#host-progress').inner_text()
  page.locator('#host-close').click()
  page.locator('#claude-desktop-manage').click()
- expect(page.locator('#claude-desktop-title')).to_have_text('Safe Code API · 公网网关')
- expect(page.locator('#safe-code-api-enable')).to_have_text('已启用')
+ expect(page.locator('#claude-desktop-title')).to_have_text('Safe Code API · 公網網關')
+ expect(page.locator('#safe-code-api-enable')).to_have_text('已啟用')
  page.locator('#safe-code-api-manage').click()
  page.wait_for_function("calls.some(m=>m.op==='window.gateway.open')")
  expect(page.locator('#claude-desktop-dialog')).to_be_hidden()
@@ -106,9 +106,9 @@ with sync_playwright() as p:
   newbie.wait_for_function("!document.querySelector('#claude-desktop-manage').disabled")
   newbie.evaluate("switchMode('maintenance')")
   newbie.locator('#claude-desktop-manage').click()
-  expect(newbie.locator('#claude-desktop-title')).to_have_text('Safe Code API · 公网网关')
+  expect(newbie.locator('#claude-desktop-title')).to_have_text('Safe Code API · 公網網關')
   enable=newbie.locator('#safe-code-api-enable')
-  expect(enable).to_have_text('启用')
+  expect(enable).to_have_text('啟用')
   expect(newbie.locator('#safe-code-cloudcli-config')).to_be_hidden()
   if not cloud_installed:
    newbie.evaluate('window.deferGatewayInstall=true')
@@ -122,19 +122,19 @@ with sync_playwright() as p:
    assert newbie.evaluate("calls.filter(message=>message.op==='safeCodeApi.install').at(-1).args.cloudcli")=={'apiKey':'fixture-cloudcli-key'}
   elif not cloud_installed:
    newbie.wait_for_function('!!window.replyToGatewayInstall')
-   expect(newbie.locator('#safe-code-api-progress')).to_contain_text('可以关闭此窗口')
+   expect(newbie.locator('#safe-code-api-progress')).to_contain_text('可以關閉此視窗')
    newbie.locator('#claude-desktop-close').click()
    expect(newbie.locator('#claude-desktop-dialog')).to_be_hidden()
    newbie.evaluate('window.replyToGatewayInstall()')
-   expect(enable).to_have_text('已启用')
+   expect(enable).to_have_text('已啟用')
    expect(newbie.locator('#app-message-dialog')).to_be_hidden()
    newbie.locator('#claude-desktop-manage').click()
-   expect(newbie.locator('#app-message-title')).to_have_text('CloudCLI 账户已创建')
+   expect(newbie.locator('#app-message-title')).to_have_text('CloudCLI 帳戶已建立')
    expect(newbie.locator('#app-message-body')).to_contain_text('generated-fixture-password')
    newbie.locator('#app-message-confirm').click()
    expect(newbie.locator('#app-message-body')).to_be_empty()
    assert newbie.evaluate("calls.filter(message=>message.op==='safeCodeApi.enablePublic').map(message=>message.args)")==[{'accepted':True}]
-  expect(enable).to_have_text('已启用')
+  expect(enable).to_have_text('已啟用')
   if not needs_key:
    assert newbie.evaluate("calls.filter(message=>message.op==='safeCodeApi.install').map(message=>message.args)")==[{'accepted':True}]
   expect(newbie.locator('#safe-code-cloudcli-api-key')).to_have_value('')
@@ -154,7 +154,7 @@ with sync_playwright() as p:
    .replace("m.op==='connect'?{server:", """m.op==='connect'&&++window.resumeAttempts===1?{retryable:true}:
      m.op==='connect'?{server:"""))
  resumed.goto((root/'web'/'index.html').as_uri())
- expect(resumed.locator('#connection-progress-text')).to_contain_text('5 秒后自动重连')
+ expect(resumed.locator('#connection-progress-text')).to_contain_text('5 秒後自動重連')
  resumed.clock.run_for(5100)
  expect(resumed.locator('#public-gateway-runtime')).to_be_hidden()
  resumed.wait_for_function("calls.some(message=>message.op==='safeCodeApi.publicStatus')")
@@ -167,7 +167,7 @@ with sync_playwright() as p:
  gateway.on('pageerror',lambda e:errors.append(str(e)))
  gateway.add_init_script("""window.calls=[];
  const id='a'.repeat(64);
- const key={id,note:'旧设备',rpm:0,active:true,enabled:true,waiting:1,requests:2,tokens:18};
+ const key={id,note:'舊裝置',rpm:0,active:true,enabled:true,waiting:1,requests:2,tokens:18};
  const records=[{key_id:id,model:'claude-test',at:Math.floor(Date.now()/1000),outcome:'success',status:200,wait_ms:82,duration_ms:1600,tokens:18}];
  const models=[{model:'claude-test',requests:2,failures:0,input:10,output:3,cache_read:5,cache_write:0}];
  const keys=[key];
@@ -205,17 +205,17 @@ with sync_playwright() as p:
  expect(gateway.locator('#metric-queue')).to_have_text('1 / 1')
  expect(gateway.locator('#gateway-claude-limits [data-limit=five_hour]')).to_have_text('72.5%')
  assert gateway.locator('dialog[open]').count()==0
- assert gateway.locator('#queue-current').inner_text()=='正在处理 · 旧设备'
- assert '排队 1' in gateway.locator('.key-activity').inner_text()
+ assert gateway.locator('#queue-current').inner_text()=='正在處理 · 舊裝置'
+ assert '排隊 1' in gateway.locator('.key-activity').inner_text()
  assert gateway.locator('#key-rows tr').count()==1
  assert gateway.evaluate('document.documentElement.scrollWidth===innerWidth')
  gateway.locator('#key-search').fill('不存在')
  assert gateway.locator('#key-empty').is_visible()
  gateway.locator('#key-search').fill('')
- gateway.get_by_role('button',name='用量详情').click()
+ gateway.get_by_role('button',name='用量詳情').click()
  gateway.wait_for_selector('#usage-rows tr')
  assert gateway.locator('#usage-rows td').nth(7).inner_text()=='18'
- gateway.get_by_role('button',name='查看此密钥的请求').click()
+ gateway.get_by_role('button',name='查看此密鑰的請求').click()
  assert '82 毫秒' in gateway.locator('#request-rows').inner_text()
  assert '1.60 秒' in gateway.locator('#request-rows').inner_text()
  gateway.get_by_role('button',name='用量分析').click()
@@ -228,29 +228,29 @@ with sync_playwright() as p:
  expect(gateway.locator('#traffic-summary')).to_have_text('近 7 天 · 每段 1 天')
  gateway.locator('#traffic-chart canvas').focus()
  gateway.locator('#traffic-chart canvas').press('Home')
- expect(gateway.locator('#traffic-chart .chart-readout')).to_contain_text('Token / 分钟')
- expect(gateway.locator('#analysis-queue')).to_contain_text('排队 1')
+ expect(gateway.locator('#traffic-chart .chart-readout')).to_contain_text('Token / 分鐘')
+ expect(gateway.locator('#analysis-queue')).to_contain_text('排隊 1')
  assert 'claude-test' in gateway.locator('#model-rows').inner_text()
- gateway.get_by_role('button',name='密钥管理').click()
+ gateway.get_by_role('button',name='密鑰管理').click()
  gateway.locator('#create-key').click()
- gateway.locator('#note').fill('测试笔记本')
+ gateway.locator('#note').fill('測試筆記本')
  gateway.locator('#rpm').fill('8')
  gateway.locator('#save-key').click()
  gateway.wait_for_selector('#issued-dialog[open]')
  assert gateway.locator('#ticket').input_value()=='sc1.disposable-fixture-only'
  gateway.locator('#copy-key').click()
- expect(gateway.locator('#copy-status')).to_have_text('已复制密钥。')
+ expect(gateway.locator('#copy-status')).to_have_text('已複製密鑰。')
  gateway.get_by_role('button',name='完成').click()
  expect(gateway.locator('#ticket')).to_have_value('')
- first=gateway.locator('#key-rows tr').filter(has_text='旧设备')
- first.get_by_role('button',name='编辑').click()
- expect(gateway.locator('#editor-title')).to_have_text('编辑密钥')
+ first=gateway.locator('#key-rows tr').filter(has_text='舊裝置')
+ first.get_by_role('button',name='編輯').click()
+ expect(gateway.locator('#editor-title')).to_have_text('編輯密鑰')
  gateway.locator('#rpm').fill('3')
  gateway.locator('#save-key').click()
  first.get_by_text('3 次/分').wait_for()
- first.get_by_role('button',name='撤销').click()
+ first.get_by_role('button',name='撤銷').click()
  gateway.locator('#revoke-key').click()
- first.get_by_text('已撤销').wait_for()
+ first.get_by_text('已撤銷').wait_for()
  gateway.locator('#key-filter').select_option('enabled')
  assert gateway.locator('#key-rows tr').count()==1
  assert not errors,errors;browser.close()

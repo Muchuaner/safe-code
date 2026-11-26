@@ -23,9 +23,9 @@ public sealed class ClaudeTrackedFile
 }
 
 /// <summary>
-/// 只读 Claude Desktop 官方本地会话 JSONL 的 usage 元数据。范围：
-/// 3P 本地会话（local-agent-mode-sessions）和 Claude Desktop 代码页关联的 CLI transcript。
-/// 不读取正文入库，不估算，不从服务端汇总其他客户端流量。
+/// 只讀 Claude Desktop 官方本地會話 JSONL 的 usage 元數據。範圍：
+/// 3P 本地會話（local-agent-mode-sessions）和 Claude Desktop 程式碼頁關聯的 CLI transcript。
+/// 不讀取正文入庫，不估算，不從伺服器端彙總其他客戶端流量。
 /// </summary>
 public sealed partial class ClaudeUsageSource
 {
@@ -55,8 +55,8 @@ public sealed partial class ClaudeUsageSource
     public bool Available=>sourceAvailable&&hasUsage;
     public string? Error=>error;
     public IntegrationUsage Snapshot()=>Available
-        ?ledger.Snapshot("Claude Desktop 官方本地会话 JSONL（只读 token 元数据）")
-        :IntegrationUsage.Unavailable(error??(sourceAvailable?"暂未读到新的官方会话用量；主聊天不写本地 token 元数据时无法统计":"未发现可读的 Claude Desktop 官方会话用量"));
+        ?ledger.Snapshot("Claude Desktop 官方本地會話 JSONL（只讀 token 元數據）")
+        :IntegrationUsage.Unavailable(error??(sourceAvailable?"暫未讀到新的官方會話用量；主聊天不寫本地 token 元數據時無法統計":"未發現可讀的 Claude Desktop 官方會話用量"));
     public ClaudeUsageState Export()
     {
         var recent=ledger.ExportMessages();
@@ -104,7 +104,7 @@ public sealed partial class ClaudeUsageSource
                 await ReadNewLinesAsync(path,tracked,ct);
             }
         }
-        catch(Exception exception)when(exception is IOException or UnauthorizedAccessException){error="读取 Claude Desktop 本地会话用量失败";}
+        catch(Exception exception)when(exception is IOException or UnauthorizedAccessException){error="讀取 Claude Desktop 本地會話用量失敗";}
     }
     private void TrackExisting(string path)
     {
@@ -166,13 +166,13 @@ public sealed partial class ClaudeUsageSource
         {
             long length=stream.Length;long available=length-offset;if(available<=0)return;
             if(available>16*1024*1024){offset=length-16*1024*1024;available=length-offset;tracked.Offset=offset;}
-            if(available>int.MaxValue)throw new IOException("会话文件增量过大。");
+            if(available>int.MaxValue)throw new IOException("會話檔案增量過大。");
             bytes=new byte[(int)available];stream.Seek(offset,SeekOrigin.Begin);
             int read=0;while(read<bytes.Length){int n=await stream.ReadAsync(bytes.AsMemory(read,bytes.Length-read),ct);if(n==0)break;read+=n;}
             tracked.Length=length;if(read<bytes.Length)Array.Resize(ref bytes,read);
         }
         int end=-1;for(int i=bytes.Length-1;i>=0;i--)if(bytes[i]==(byte)'\n'){end=i;break;}
-        if(end<0)return; // 半行留在原文件，持久 offset 仍停在完整行边界，重启后重读。
+        if(end<0)return; // 半行留在原檔案，持久 offset 仍停在完整行邊界，重新啟動後重讀。
         tracked.Offset=offset+end+1;
         string complete=Encoding.UTF8.GetString(bytes,0,end+1);
         foreach(string line in complete.Split('\n'))ObserveLine(line);

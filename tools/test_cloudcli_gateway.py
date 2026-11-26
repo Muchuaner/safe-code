@@ -454,7 +454,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(frames[0]['type'], 'message_start')
         self.assertEqual(frames[-1]['type'], 'message_stop')
         visible = ''.join(frame['delta']['text'] for frame in frames if frame['type'] == 'content_block_delta')
-        self.assertIn('**SafeCode** · 已接收任务', visible)
+        self.assertIn('**SafeCode** · 已接收任務', visible)
         self.assertEqual(visible.count('Fixture reply'), 1)
         self.assertNotIn('User event', visible)
         self.assertEqual(len(self.cloud.requests), 1)
@@ -502,7 +502,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 self.assertFalse(self.cloud.release_stream.is_set())
                 self.assertNotIn('message_stop', [event['type'] for event in decoded])
                 prefix = ''.join(event['delta'].get('text', '') for event in decoded if event['type'] == 'content_block_delta')
-                self.assertIn('正在执行工具操作', prefix)
+                self.assertIn('正在執行工具操作', prefix)
                 self.assertNotIn('fixture command', prefix)
                 self.assertNotIn('Reasoning excerpt from the fixture', prefix)
                 self.assertEqual([(event['index'], event['content_block']['type']) for event in decoded
@@ -516,7 +516,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         visible = prefix + ''.join(event['delta'].get('text', '') for event in tail if event['type'] == 'content_block_delta')
         self.assertEqual(tail[-1]['type'], 'message_stop')
         self.assertEqual(visible.count('Fixture reply'), 1)
-        self.assertEqual(visible.count('工具调用 1 次'), 1)
+        self.assertEqual(visible.count('工具調用 1 次'), 1)
         self.assertIn(CLOUD_SESSION, visible)
         self.assertEqual([event['index'] for event in decoded+tail if event['type'] == 'content_block_stop'], [0, 1, 2])
         self.assertEqual(self.request(conversation('unused', messages=[
@@ -837,7 +837,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.cloud.reply = (200, frames)
         status, response = self.request(conversation('Report the selected model.'))
         self.assertEqual(status, 200)
-        self.assertIn('CloudCLI 报告本轮使用了其他模型', response['content'][0]['text'])
+        self.assertIn('CloudCLI 報告本輪使用了其他模型', response['content'][0]['text'])
         self.assertIn('claude-sonnet-4-6', response['content'][0]['text'])
 
     def test_cloudcli_api_rejection_preserves_status_without_raw_detail(self):
@@ -937,7 +937,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         wrapper = (gateway.DESKTOP_COMPACT_PREFIX+'\n\n'
                    '<system-reminder>\n<tools-used-before-summary>Read</tools-used-before-summary>\n</system-reminder>\n\n'
-                   '> **SafeCode** · 已接收任务\n\n'
+                   '> **SafeCode** · 已接收任務\n\n'
                    'Summary:\n')
         context = {'role': 'user', 'content': wrapper+summary+'\n\nContinue the conversation.'}
         previous = {'role': 'assistant', 'content': 'Continue from the same task.'}
@@ -1103,9 +1103,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
             task = self.cloud.requests[-1][2]
             self.assertNotIn(test_folder, task['message'])
             if expected:
-                self.assertIn(f'当前工作目录为 `{expected}`', task['message'])
+                self.assertIn(f'當前工作目錄為 `{expected}`', task['message'])
             else:
-                self.assertNotIn('当前工作目录为', task['message'])
+                self.assertNotIn('當前工作目錄為', task['message'])
                 self.assertNotEqual(task['projectPath'], str(self.project))
                 self.assertFalse((Path(task['projectPath'])/'.mcp.json').exists())
             if cwd == desktop:
@@ -1134,10 +1134,10 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         prompt = self.cloud.requests[-1][2]['message']
         self.assertIn(f'`ssh -F {ssh_config} desk-mac`', prompt)
-        self.assertIn(f'本机是 Example Mac（`macOS`），当前工作目录为 `{workspace}`。', prompt)
-        self.assertIn('每条命令从项目根目录开始', prompt)
-        self.assertNotIn('本机文件工具', prompt)
-        self.assertTrue(prompt.startswith('Identify this machine.\n\n本机是'))
+        self.assertIn(f'本機是 Example Mac（`macOS`），當前工作目錄為 `{workspace}`。', prompt)
+        self.assertIn('每條命令從項目根目錄開始', prompt)
+        self.assertNotIn('本機檔案工具', prompt)
+        self.assertTrue(prompt.startswith('Identify this machine.\n\n本機是'))
         self.assertNotIn('SafeCode workspace context:', prompt)
         self.assertNotIn('VPS', prompt)
         self.start_gateway()
@@ -1195,7 +1195,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
     def test_deployment_verifies_agent_credentials_without_dispatching_a_turn(self):
         gateway.verify_cloudcli_agent(self.config)
-        with self.assertRaisesRegex(gateway.GatewayError, '拒绝了'):
+        with self.assertRaisesRegex(gateway.GatewayError, '拒絕了'):
             gateway.verify_cloudcli_agent({**self.config, 'apiKey': 'invalid-test-key'})
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
@@ -1362,9 +1362,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
         with patch.object(public_gateway, 'make_key', return_value=('sc2.fixture', digest)), \
                 patch.object(public_gateway, 'valid_activation_code', return_value=True):
-            with self.assertRaisesRegex(ValueError, '至少选择'):
+            with self.assertRaisesRegex(ValueError, '至少選擇'):
                 manage('issue', allowed_models=[])
-            with self.assertRaisesRegex(ValueError, '失效时间'):
+            with self.assertRaisesRegex(ValueError, '失效時間'):
                 manage('issue', expires_at=True)
             expiry = int(time.time())+3600
             manage('issue', note='policy', expires_at=expiry, allowed_models=['fable', 'fable'])
@@ -1421,7 +1421,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         for path in ('/v1/models', '/v1/cloudcli/models', '/v1/key/balance'):
             self.assertEqual(request(path)[0], 401)
         self.assertEqual(request('/v1/messages', 'fable[1m]')[0], 401)
-        with self.assertRaisesRegex(ValueError, '先撤销'):
+        with self.assertRaisesRegex(ValueError, '先撤銷'):
             manage('delete', id=digest)
         manage('update', id=digest, expires_at=None, allowed_models=None)
         self.assertFalse(listed()['expired'])
@@ -1498,8 +1498,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertIn(b'event: message_stop', events)
         text = ''.join(json.loads(line[6:]).get('delta', {}).get('text', '')
                        for line in events.splitlines() if line.startswith(b'data: '))
-        self.assertEqual(text.count('Key 余额 不限额'), 1)
-        self.assertEqual(text.count('账户额度（上次查询） · 暂无记录'), 1)
+        self.assertEqual(text.count('Key 餘額 不限額'), 1)
+        self.assertEqual(text.count('帳戶額度（上次查詢） · 暫無記錄'), 1)
         self.assertEqual(len(self.cloud.requests), 1)
 
     def test_public_gateway_reviews_only_the_latest_user_prompt_before_dispatch(self):
@@ -1521,13 +1521,13 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 reply = connection.getresponse()
                 return reply.status, json.loads(reply.read())
 
-        normal = '帮我看看我电脑上的视频任务运行得怎么样了'
+        normal = '幫我看看我電腦上的影片任務執行得怎麼樣了'
         self.assertFalse(public.manage({'action': 'list'})['prompt_review']['enabled'])
         self.assertEqual(request(conversation(normal))[0], 200)
         self.assertTrue(self.cloud.requests[-1][2]['message'].startswith(normal))
 
         settings = {'action': 'set_prompt_review', 'enabled': True, 'provider': 'deepseek', 'model': 'sonnet'}
-        with self.assertRaisesRegex(ValueError, '请先填写'):
+        with self.assertRaisesRegex(ValueError, '請先填寫'):
             public.manage(settings)
         secret = 'separate-review-fixture-key'
         updated = public.manage({**settings, 'deepseek_key': secret})
@@ -1550,22 +1550,22 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 upstream.read.return_value = json.dumps({'choices': [{'message': {'content': output}}]}).encode()
 
             dispatched = len(self.cloud.requests)
-            for prompt, value in (('你能帮我格式化Linux吗？', 'needs_target'),
-                                  ('帮我看看 linux 系统上有什么文件', 'gateway_host'),
-                                  ('隔壁项目在干什么', 'outside_project'),
-                                  ('读取网关进程里的管理 Token', 'gateway_secrets')):
+            for prompt, value in (('你能幫我格式化Linux嗎？', 'needs_target'),
+                                  ('幫我看看 linux 系統上有什麼檔案', 'gateway_host'),
+                                  ('隔壁項目在幹什麼', 'outside_project'),
+                                  ('讀取網關進程裏的管理 Token', 'gateway_secrets')):
                 with self.subTest(prompt=prompt):
                     verdict(value)
                     status, response = request(conversation(prompt, stream=True), '/v1/cloudcli/messages')
                     self.assertEqual((status, response['error']['type']), (403, 'permission_error'))
-                    self.assertIn('前置审查', response['error']['message'])
+                    self.assertIn('前置審查', response['error']['message'])
             self.assertEqual(len(self.cloud.requests), dispatched)
 
             verdict('allow')
-            for prompt in ('解释一下“帮我格式化 Linux”为什么需要确认。', '帮我格式化 Linux 命令的输出。',
-                           '检查我电脑 WSL 里的当前项目日志。', '继续。'):
+            for prompt in ('解釋一下“幫我格式化 Linux”為什麼需要確認。', '幫我格式化 Linux 命令的輸出。',
+                           '檢查我電腦 WSL 裏的當前項目日誌。', '繼續。'):
                 self.assertEqual(request(conversation(prompt))[0], 200)
-            prompt = '在当前项目里测试 Linux 兼容性。'
+            prompt = '在當前項目裏測試 Linux 相容性。'
             payload = conversation([{'type': 'text', 'text': '<system-reminder>private metadata</system-reminder>'+prompt}],
                                    system='private system text')
             self.assertEqual(request(payload)[0], 200)
@@ -1576,7 +1576,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
             self.assertTrue(public.manage({**settings, 'language_replacement': True})['language_replacement'])
             english = 'Test Linux compatibility in the current project and reply in Chinese.'
-            original = '在当前项目里测试 Linux 兼容性，请用中文回复。'
+            original = '在當前項目裏測試 Linux 相容性，請用中文回覆。'
             verdict('allow', english=english)
             self.assertEqual(request(conversation(original))[0], 200)
             self.assertTrue(self.cloud.requests[-1][2]['message'].startswith(english))
@@ -1587,11 +1587,11 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
             dispatched = len(self.cloud.requests)
             verdict('outside_project')
-            self.assertEqual(request(conversation('隔壁项目在干什么'))[0], 403)
+            self.assertEqual(request(conversation('隔壁項目在幹什麼'))[0], 403)
             verdict('allow')
             self.assertEqual(request(conversation(original))[0], 503)
             upstream.read.return_value = b'{"choices":[]}'
-            self.assertEqual(request(conversation('查看项目状态'))[0], 503)
+            self.assertEqual(request(conversation('查看項目狀態'))[0], 503)
             self.assertEqual(len(self.cloud.requests), dispatched)
             connect.reset_mock()
             saved = public.manage({**settings, 'enabled': False})
@@ -1613,7 +1613,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             events = ({**event, 'sessionId': CLOUD_SESSION} for event in frames)
             with patch.object(gateway, 'cloudcli_websocket', return_value=(
                     lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
-                return reviewer('在当前项目运行测试。')
+                return reviewer('在當前項目執行測試。')
 
         run('sonnet', [{'kind': 'text', 'role': 'assistant', 'content': '{"verdict":"allow"}'},
                        {'kind': 'complete', 'exitCode': 0}])
@@ -1632,7 +1632,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         ], translate=True), english)
         self.assertEqual(actions[-1]['options']['model'], 'opus')
         self.assertIn('faithful English translation', actions[-1]['content'])
-        with self.assertRaisesRegex(gateway.CloudCliError, '前置审查暂时不可用'):
+        with self.assertRaisesRegex(gateway.CloudCliError, '前置審查暫時不可用'):
             run('opus', [{'kind': 'tool_use', 'toolName': 'FixtureTool'}])
         self.assertEqual(actions[-2]['options']['model'], 'opus')
         self.assertEqual(actions[-1], {'type': 'chat.abort', 'sessionId': CLOUD_SESSION})
@@ -1659,12 +1659,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertEqual(sum(response['usage'].values()), 0)
         self.assertEqual(self.request(conversation('.'))[0], 400)
         title = ('You are coming up with a succinct title for an agent chat session based on the provided description.\n'
-                 'Here is the session description:\n<description>整理示例项目的文件</description>\n'
+                 'Here is the session description:\n<description>整理範例項目的檔案</description>\n'
                  'Please generate a title for this session, in the predominant language of the description.')
         branch = ('You are coming up with a succinct title and git branch name for a coding session based on the provided description.\n'
                   'Here is the session description:\n<description>Review the project structure</description>\n'
                   'Please generate a title and branch name for this session.')
-        for prompt, expected in ((title, '<title>整理示例项目的文件</title>'),
+        for prompt, expected in ((title, '<title>整理範例項目的檔案</title>'),
                                  (branch, '<title>Review the project structure</title>')):
             status, response = self.request(conversation(prompt, max_tokens=200))
             self.assertEqual(status, 200)
@@ -1693,12 +1693,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.save_config()
         self.start_gateway()
         questions = {'questions': [
-            {'header': '颜色', 'question': '选择适合示例的颜色', 'multiSelect': True, 'options': [
-                {'label': '蓝色', 'description': '海蓝色'},
-                {'label': '[外部链接](https://example.org)', 'description': '作为文字显示'},
+            {'header': '顏色', 'question': '選擇適合範例的顏色', 'multiSelect': True, 'options': [
+                {'label': '藍色', 'description': '海藍色'},
+                {'label': '[外部連結](https://example.org)', 'description': '作為文字顯示'},
             ]},
-            {'header': '格式', 'question': '选择输出格式', 'multiSelect': False,
-             'options': [{'label': '纯文本', 'description': '不含样式'}]},
+            {'header': '格式', 'question': '選擇輸出格式', 'multiSelect': False,
+             'options': [{'label': '純文本', 'description': '不含樣式'}]},
         ]}
         self.cloud.reply = (200, [
             {'type': 'session-id', 'sessionId': CLOUD_SESSION},
@@ -1735,11 +1735,11 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 self.cloud.release_stream.set()
             events.extend(json.loads(row[6:]) for row in response if row.startswith(b'data: '))
         visible = ''.join(event['delta']['text'] for event in events if event['type'] == 'content_block_delta')
-        self.assertEqual(visible.count('选择适合示例的颜色'), 1)
-        for expected in ('颜色（多选）', '选择输出格式', '格式（单选）', '海蓝色', '其他',
-                         '>     2. [外部链接]', '等待回答', '已收到处理结果',
+        self.assertEqual(visible.count('選擇適合範例的顏色'), 1)
+        for expected in ('顏色（多選）', '選擇輸出格式', '格式（單選）', '海藍色', '其他',
+                         '>     2. [外部連結]', '等待回答', '已收到處理結果',
                          'Review the example plan', '等待已取消', 'fixture cancelled',
-                         f'https://cloud.example.com/session/{CLOUD_SESSION}', '未返回额外的助手文字'):
+                         f'https://cloud.example.com/session/{CLOUD_SESSION}', '未返回額外的助手文字'):
             self.assertIn(expected, visible)
         self.assertEqual(events[-1]['type'], 'message_stop')
         self.assertNotIn('provider-fixture-id', visible)
@@ -1770,7 +1770,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertEqual(self.request(answer(card_id), session=str(uuid.uuid4()))[0], 409)
             status, reply = self.request(answer(card_id))
             self.assertEqual(status, 200)
-            self.assertIn('本次选择未提交', reply['content'][0]['text'])
+            self.assertIn('本次選擇未提交', reply['content'][0]['text'])
             self.assertEqual(self.request(answer(card_id)), (status, reply))
         with sqlite3.connect(backend.path) as db:
             confirmed = gateway.history_signature([*answer(card_id)['messages'], reply], 'cloudcli')
@@ -1848,7 +1848,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             content = parsed.partial()
             card = content[-1]
             self.assertEqual((card['type'], card['name'], card['input']), ('tool_use', 'AskUserQuestion', questions))
-            self.assertNotIn('打开 CloudCLI', json.dumps(content, ensure_ascii=False))
+            self.assertNotIn('開啟 CloudCLI', json.dumps(content, ensure_ascii=False))
             self.assertFalse(accepted.is_set())
             self.assertTrue(heartbeat.wait(1), 'The upstream socket must stay alive while Desktop waits')
             self.assertEqual(self.request(first), (200, events))
@@ -1905,17 +1905,17 @@ class CloudCLIGatewayTests(unittest.TestCase):
         interrupted = gateway.cloudcli_failure({'kind': 'error', 'content': 'Claude Code returned an error result'},
                                               progress)
         self.assertEqual((interrupted.status, interrupted.error_type), (503, 'api_error'))
-        self.assertIn('本轮未完成', str(interrupted))
+        self.assertIn('本輪未完成', str(interrupted))
         actual_auth = gateway.cloudcli_failure({'kind': 'error', 'api_error_status': 401}, progress)
         self.assertEqual(actual_auth.error_type, 'authentication_error')
         tool('recovered', 'WIN-FIXTURE', command)
         self.assertFalse(progress.device_failure)
         visible = progress.finish()[0]['text']
-        self.assertIn('已回到你编辑的位置，正在重新执行', visible)
-        self.assertIn('Windows SSH 连接超时', visible)
-        self.assertEqual(visible.count('正在再次尝试连接 Windows'), 1)
-        self.assertIn('Windows 的后续命令已返回结果', visible)
-        self.assertIn('2 项操作未成功', visible)
+        self.assertIn('已回到你編輯的位置，正在重新執行', visible)
+        self.assertIn('Windows SSH 連線超時', visible)
+        self.assertEqual(visible.count('正在再次嘗試連接 Windows'), 1)
+        self.assertIn('Windows 的後續命令已返回結果', visible)
+        self.assertIn('2 項操作未成功', visible)
 
     def test_status_and_compact_activity_without_streaming(self):
         first = 'Inspect sample data.'
@@ -1951,9 +1951,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(reply['usage']['input_tokens'], 100)
         visible = reply['content'][0]['text']
         self.assertEqual(visible.count('Fixture reply'), 1)
-        self.assertEqual(visible.count('正在执行工具操作'), 1)
+        self.assertEqual(visible.count('正在執行工具操作'), 1)
         for expected in ('Earlier context was trimmed.', 'Provider setup complete', '/compact', 'Compaction started',
-                         'Command output', '工具调用 2 次', '后台任务 1 项', '其中 1 项操作未成功', '125 / 1,000',
+                         'Command output', '工具調用 2 次', '背景任務 1 項', '其中 1 項操作未成功', '125 / 1,000',
                          'different_new_event'):
             self.assertIn(expected, visible)
         for detail in ('Sample subagent thought', 'sample.txt', 'Sample file output', 'Sample agent answer',
@@ -2003,7 +2003,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertEqual(len(actions), 1)
             command = actions[0]
             self.assertEqual((command['type'], command['sessionId']), ('chat.send', CLOUD_SESSION))
-            self.assertTrue(command['content'].startswith('Inspect these fixtures.\n\n本机是'))
+            self.assertTrue(command['content'].startswith('Inspect these fixtures.\n\n本機是'))
             self.assertIn('/Users/example/Work', command['content'])
             self.assertEqual([a['path'] for a in command['options']['attachments']],
                              ['/example/assets/0-attachment-1.png', '/example/assets/1-Report.pdf'])
@@ -2032,7 +2032,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
             self.assertEqual(self.request(payload)[0], 200)
         command, = actions
-        self.assertTrue(command['content'].startswith('请查看本轮附加的文件。'))
+        self.assertTrue(command['content'].startswith('請查看本輪附加的檔案。'))
         self.assertEqual([len(data) for _, _, data in self.cloud.uploads], [len(inline['source']['data']), len(raw), len(raw)])
 
     def test_desktop_native_text_attachment_preview_does_not_block_first_turn(self):
@@ -2070,7 +2070,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         session = str(uuid.uuid4())
         with patch('host_control_mcp.exchange_ssh', return_value={'workspace': '/Users/example/Desktop'}) as resolve:
             self.assertEqual(self.request(conversation('Check the selected folder.'), session=session)[0], 200)
-        self.assertIn('当前工作目录为 `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
+        self.assertIn('當前工作目錄為 `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
         argv, data = resolve.call_args.args
         self.assertEqual(json.loads(data), {'name': 'desktop_workspace', 'session': session})
         self.assertIn('desk-mac', argv)
@@ -2085,7 +2085,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         with patch('host_control_mcp.exchange_ssh') as lookup:
             self.assertEqual(self.request(request)[0], 200)
         lookup.assert_not_called()
-        self.assertIn('当前工作目录为 `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
+        self.assertIn('當前工作目錄為 `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
 
     def test_plan_confirmation_displays_full_plan_and_requires_explicit_approval(self):
         self.enable_cloudcli_web_fixture()
@@ -2191,7 +2191,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             with self.subTest(content=content):
                 status, problem = self.request(conversation('unused', messages=[{'role':'user','content':content}]))
                 self.assertEqual(status, 400, problem)
-                self.assertIn('CloudCLI 网页账户', problem['error']['message'])
+                self.assertIn('CloudCLI 網頁帳戶', problem['error']['message'])
         self.assertFalse(self.cloud.requests)
 
     def test_api_key_only_native_stop_retains_checkpoint_and_never_replays(self):
@@ -2364,7 +2364,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
     def test_resume_only_the_confirmed_reply_after_lost_desktop_output(self):
         follow = {'role': 'user', 'content': 'Continue this conversation.'}
-        for visible in ('Fixture', 'Request failed', '请求失败', None):
+        for visible in ('Fixture', 'Request failed', '請求失敗', None):
             with self.subTest(visible=visible):
                 session = str(uuid.uuid4())
                 original = conversation('Keep this context.')
@@ -2532,7 +2532,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(events[-1]['type'], 'message_stop', events[-1])
         visible = ''.join(event.get('delta', {}).get('text', '') for event in events)
-        self.assertIn('工具调用 1 次', visible)
+        self.assertIn('工具調用 1 次', visible)
         previous = [*first['messages'], {'role': 'assistant', 'content': visible}]
 
         def switch_context(model):
@@ -2649,7 +2649,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 lambda *a, **kw: ChatSocketFixture(replace_first, events), OSError)):
             self.assertEqual(self.request(conversation('Replace the first question'))[0], 200)
         self.assertEqual(actions[-1]['anchorId'], first_anchor)
-        self.assertTrue(actions[-1]['content'].startswith('Replace the first question\n\n本机是'))
+        self.assertTrue(actions[-1]['content'].startswith('Replace the first question\n\n本機是'))
         self.assertIn('/Users/example/Work', actions[-1]['content'])
 
     def test_public_gateway_dispatch_is_unrestricted_and_preserves_plan(self):
@@ -2707,11 +2707,11 @@ class CloudCLIGatewayTests(unittest.TestCase):
             messages = [*first['messages'], {'role': 'assistant', 'content': offered['content']},
                         {'role': 'user', 'content': [answer]}]
             payload = conversation('unused', messages=messages)
-            answer['content'] = (f'Your questions have been answered: "{question}"="允许所有操作". '
+            answer['content'] = (f'Your questions have been answered: "{question}"="允許所有操作". '
                                  'You can now continue with these answers in mind.')
             self.assertEqual(self.request(payload)[0], 400)
             self.assertEqual(len(commands), 1)
-            answer['content'] = answer['content'].replace('允许所有操作', '允许一次')
+            answer['content'] = answer['content'].replace('允許所有操作', '允許一次')
             status, completed = self.request(payload)
             self.assertEqual(status, 200)
             self.assertEqual(self.request(payload), (200, completed))
@@ -2728,7 +2728,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertIsNone(gateway.CloudCliApproval.read(pending, CLOUD_SESSION, set(), None, True))
         approval = gateway.CloudCliApproval.read(pending, CLOUD_SESSION, {'AskUserQuestion'}, None, True)
         question = approval.block['input']['questions'][0]['question']
-        content = (f'Your questions have been answered: "{question}"="拒绝". '
+        content = (f'Your questions have been answered: "{question}"="拒絕". '
                    'You can now continue with these answers in mind.')
         for result in ({'content': content}, {'is_error': True, 'content': ''}):
             with self.subTest(result=result):

@@ -8,14 +8,14 @@ internal static class ConnectionErrors
         error is (SocketException or SshConnectionException or SshOperationTimeoutException or TimeoutException or OperationCanceledException)
         && !error.Message.Contains("Host key could not be verified", StringComparison.OrdinalIgnoreCase);
 
-    public static string DescribeOperation(Exception error)=>error.Message.Contains("Host key could not be verified",StringComparison.OrdinalIgnoreCase)?"服务器主机密钥校验失败。请返回登录并重新连接；若提示指纹变化，请先在 VPS 控制台核对，确认后再继续。":error.Message;
+    public static string DescribeOperation(Exception error)=>error.Message.Contains("Host key could not be verified",StringComparison.OrdinalIgnoreCase)?"伺服器主機密鑰校驗失敗。請返回登入並重新連線；若提示指紋變化，請先在 VPS 控制台核對，確認後再繼續。":error.Message;
     public static string Describe(Exception error)
     {
         if(error.Message.Contains("Host key could not be verified",StringComparison.OrdinalIgnoreCase))return DescribeOperation(error);
         if(error is UnsupportedOsException)return error.Message;
-        if(error is SshAuthenticationException)return "SSH 登录认证失败，请核对用户名和该账户当前的服务器密码。若刚修改过 root 密码，请使用新密码；工作用户密码与 root 密码不同。";
+        if(error is SshAuthenticationException)return "SSH 登入認證失敗，請核對用戶名和該帳戶當前的伺服器密碼。若剛修改過 root 密碼，請使用新密碼；工作用戶密碼與 root 密碼不同。";
         if(error is SocketException or SshConnectionException or SshOperationTimeoutException or TimeoutException or OperationCanceledException)
-            return "服务器连接不上，请检查 IP 地址、用户名或密码，并确认服务器已开机、SSH 端口可以访问。";
+            return "伺服器連線不上，請檢查 IP 地址、用戶名或密碼，並確認伺服器已開機、SSH 連接埠可以訪問。";
         return error.Message;
     }
 }

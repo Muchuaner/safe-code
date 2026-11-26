@@ -8,13 +8,13 @@ var path=new DeviceReturnPath(Renew,Verify,()=>transport,()=>exited,Cancellation
 Task<JsonElement> Renew(CancellationToken ct)
 {
     renewals++;
-    if(revoked)throw new InvalidOperationException("设备授权已撤销");
+    if(revoked)throw new InvalidOperationException("裝置授權已撤銷");
     return Task.FromResult(JsonSerializer.SerializeToElement(new {ready=true}));
 }
 Task<string> Verify(CancellationToken ct)
 {
     logins++;
-    if(!ssh)throw new InvalidOperationException("SSH 未能回连");
+    if(!ssh)throw new InvalidOperationException("SSH 未能回連");
     duringVerification?.Invoke();
     return Task.FromResult("fixture");
 }
@@ -37,15 +37,15 @@ Require(logins==1 && renewals==1,"reuse fresh evidence");
 path.Invalidate();
 Require(path.Problem!=null,"wake invalidates previous verification immediately");
 revoked=true;
-await Rejected("授权已撤销");
+await Rejected("授權已撤銷");
 revoked=false;transport=false;
 await Rejected("FRP");
 transport=true;ssh=false;
 await Rejected("SSH");
 ssh=true;duringVerification=path.Invalidate;
-await Rejected("网络发生变化");
+await Rejected("網絡發生變化");
 duringVerification=null;
 await path.EnsureAsync(false,CancellationToken.None);
 Require(path.Problem==null,"same pairing recovers");
 exited=true;
-await Rejected("进程已退出");
+await Rejected("進程已退出");
