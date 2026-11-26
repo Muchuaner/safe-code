@@ -1317,13 +1317,18 @@ class CloudCliApproval:
                 raise CloudCliError('The plan approved in Desktop differs from the CloudCLI plan', 409)
             return {**decision, 'allow': True, 'updatedInput': self.original}
         # Claude Code returns a rendered answer map, optionally followed by context reminders.
-        prefix = 'Your questions have been answered: '
-        suffix = '. You can now continue with these answers in mind.'
-        end = content.rfind(suffix)
-        tail = content[end+len(suffix):]
-        if not content.startswith(prefix) or end < len(prefix) or not self.only_context(tail):
+        formats = (
+            ('Your questions have been answered: ', '. You can now continue with these answers in mind.'),
+            ('The user answered: ', '. Read the answers carefully — they may request clarification, changes, '
+             'or that you not proceed — and follow what they actually say.'),
+        )
+        for prefix, suffix in formats:
+            if content.startswith(prefix):
+                body, found, tail = content[len(prefix):].rpartition(suffix)
+                if found and self.only_context(tail):
+                    break
+        else:
             raise CloudCliError('Claude Desktop did not return a supported answer', 400)
-        body = content[len(prefix):end]
         questions = [item['question'] for item in self.block['input']['questions']]
         names = '|'.join(re.escape(question) for question in questions)
         pattern = f'(?:^|", )"({names})"="'
@@ -2939,11 +2944,20 @@ class CloudCliBackend:
 
     def answer(self, manager, data, messages, latest, namespace, stream, check_model=None):
         answers = [part for part in latest if isinstance(part, dict) and part.get('type') == 'tool_result']
-        if len(answers) != 1 or any(part is not answers[0] and (not isinstance(part, dict)
-                or part.get('type') != 'text' or not isinstance(part.get('text'), str)
-                or re.sub(r'<system-reminder>.*?</system-reminder>', '', part['text'], flags=re.S).strip())
-                for part in latest):
+        if len(answers) != 1:
             raise CloudCliError('Expected a single Claude Desktop answer', 400)
+        follow_up = []
+        for part in latest:
+            if part is answers[0]:
+                continue
+            if not isinstance(part, dict) or part.get('type') != 'text' or not isinstance(part.get('text'), str):
+                raise CloudCliError('Expected a single Claude Desktop answer', 400)
+            text = SYSTEM_REMINDER.sub('', part['text']).strip()
+            if text:
+                follow_up.append(text.casefold())
+        # Desktop may resend the same answer with a retry marker. Never discard a new instruction.
+        if follow_up and (len(follow_up) != 1 or follow_up[0] not in ('继续', 'continue', 'try again')):
+            raise CloudCliError('Submit the Claude Desktop answer by itself, then send the follow-up separately', 400)
         expected = history_signature(messages[:-1], 'cloudcli')
         answer = {k: v for k, v in answers[0].items() if k != 'cache_control'}
         identity = hashlib.sha256(json.dumps([namespace, expected, answer], sort_keys=True).encode()).hexdigest()
@@ -2962,12 +2976,27 @@ class CloudCliBackend:
             card = answers[0].get('tool_use_id')
             if turn is None and isinstance(card, str):
                 with closing(sqlite3.connect(self.path)) as db, db:
-                    closed = self.closed_question_binding(db, namespace, [expected], card)
+                    source = namespace
+                    closed = self.closed_question_binding(db, source, [expected], card)
+                    if closed is None and follow_up:
+                        # A new Desktop UUID can replay an expired card. Its receipt only permits a local notice.
+                        candidates = db.execute(
+                            'SELECT scope FROM question_receipts WHERE scope GLOB ? AND scope<>? AND history=? '
+                            'AND card=? AND created>=? LIMIT 2',
+                            (self.identity + ':*', namespace, expected, card, time.time()-30*86400)).fetchall()
+                        if len(candidates) == 1:
+                            source = candidates[0][0]
+                            with self.active_lock:
+                                if source in self.paused_turns:
+                                    raise CloudCliError('The question belongs to another active Desktop conversation', 409)
+                            closed = self.closed_question_binding(db, source, [expected], card)
                     if closed:
                         session, project, workspace, model, _ = closed
                         if check_model is not None:
                             check_model(model)
-                        reply = self.local_reply(data['model'], '之前的提问已结束，本次选择未提交。可以在这个对话继续提问。')
+                        reply = self.local_reply(data['model'], '之前的提问已结束，本次选择未提交。请重新发送要继续的内容。')
+                        if source != namespace:
+                            return reply
                         confirmed = history_signature([*messages, reply], 'cloudcli')
                         self.save_session(db, namespace, expected, session, project, workspace, [confirmed])
                         db.execute('INSERT OR REPLACE INTO requests VALUES (?,?,?,?)',

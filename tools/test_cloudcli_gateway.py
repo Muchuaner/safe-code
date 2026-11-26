@@ -2030,7 +2030,63 @@ class CloudCLIGatewayTests(unittest.TestCase):
                                         (namespace, confirmed)).fetchone(), (CLOUD_SESSION,))
         self.assertFalse(self.cloud.requests)
 
+    def test_closed_card_retry_with_a_new_desktop_uuid(self):
+        self.config['desktopQuestions'] = {'username': 'fixture-user', 'password': 'fixture-password'}
+        self.save_config()
+        self.start_gateway()
+        backend = self.manager.cloudcli
+        source = backend.identity + ':' + self.session
+        retry_session = str(uuid.uuid4())
+        target = backend.identity + ':' + retry_session
+        card = {'type': 'tool_use', 'name': 'AskUserQuestion', 'id': 'toolu_fixture', 'input': {}}
+        history = [{'role': 'user', 'content': 'Pick one.'}, {'role': 'assistant', 'content': [card]}]
+        signature = gateway.history_signature(history, 'cloudcli')
+        result = {'type': 'tool_result', 'tool_use_id': card['id'], 'content': 'Blue'}
+        payload = conversation('unused', messages=[*history, {'role': 'user', 'content': [
+            result, {'type': 'text', 'text': 'Try again'}]}])
+        def submit():
+            return self.request(payload, session=retry_session)
+
+        with sqlite3.connect(backend.path) as db, patch.object(backend, 'running_sessions', return_value=[]) as running:
+            def receipt(scope, history=signature, card_id=card['id'], age=0):
+                db.execute('INSERT OR REPLACE INTO question_receipts VALUES (?,?,?,?,?,?,?,?)',
+                           (scope, history, card_id, CLOUD_SESSION, MODEL, str(self.project), None, time.time()-age))
+                db.commit()
+
+            receipt('other-binding:' + self.session)
+            self.assertEqual(submit()[0], 409)
+            receipt(source, history='other-history')
+            self.assertEqual(submit()[0], 409)
+            receipt(source, card_id='another-card')
+            self.assertEqual(submit()[0], 409)
+            receipt(source, age=31*86400)
+            self.assertEqual(submit()[0], 409)
+            receipt(source)
+            running.return_value = [{'sessionId': CLOUD_SESSION}]
+            self.assertEqual(submit()[0], 409)
+            running.return_value = []
+            status, reply = submit()
+            self.assertEqual(status, 200, reply)
+            self.assertIn('重新发送', reply['content'][0]['text'])
+            repeated_status, repeated = submit()
+            self.assertEqual((repeated_status, repeated['content']), (status, reply['content']))
+            payload['messages'][-1]['content'].pop()
+            self.assertEqual(submit()[0], 409)
+            self.assertIsNone(db.execute('SELECT 1 FROM sessions WHERE scope=?', (target,)).fetchone())
+            self.assertIsNotNone(db.execute('SELECT 1 FROM question_receipts WHERE scope=?', (source,)).fetchone())
+        self.assertFalse(self.cloud.requests)
+        self.assertNoNativeFallback()
+
     def test_native_desktop_question_returns_answer_to_the_same_cloudcli_run(self):
+        self.assert_desktop_question_flow()
+
+    def test_new_desktop_answer_format(self):
+        self.assert_desktop_question_flow(new_format=True)
+
+    def test_new_desktop_answer_with_continue(self):
+        self.assert_desktop_question_flow(new_format=True, retry='继续')
+
+    def assert_desktop_question_flow(self, new_format=False, retry=None):
         credentials = {'username': 'fixture-user', 'password': 'fixture-password'}
         second_model = 'claude-sonnet-5-5'
         self.config['models'].append(second_model)
@@ -2047,6 +2103,11 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 {'label': 'Casual', 'description': 'Casual look'}, {'label': 'Formal', 'description': 'Formal look'},
             ]},
         ]}
+        choices = {question: 'Blue, Green', second: 'Custom, with quotes "yes"'}
+        if new_format:
+            for label in ('Size', 'Texture'):
+                questions['questions'].append({**questions['questions'][1], 'header': label, 'question': label + '?'})
+                choices[label + '?'] = 'Formal'
         pending = {'requestId': 'fixture-approval', 'toolName': 'AskUserQuestion', 'input': questions,
                    'sessionId': CLOUD_SESSION}
         actions = []
@@ -2108,26 +2169,50 @@ class CloudCLIGatewayTests(unittest.TestCase):
             dispatch, = actions
             self.assertEqual(dispatch['type'], 'chat.send')
             self.assertEqual(dispatch['sessionId'], CLOUD_SESSION)
-            rendered = (f'Your questions have been answered: "{question}"="Blue, Green", '
-                        f'"{second}"="Custom, with quotes \"yes\"". You can now continue with these answers in mind.'
-                        '\n\n<system-reminder>filtered by the gateway</system-reminder>')
+            pairs = ', '.join(f'"{name}"="{choice}"' for name, choice in choices.items())
+            if new_format:
+                rendered = ('The user answered: ' + pairs + '. Read the answers carefully — they may request '
+                            'clarification, changes, or that you not proceed — and follow what they actually say.')
+            else:
+                rendered = 'Your questions have been answered: ' + pairs + '. You can now continue with these answers in mind.'
+            rendered += '\n\n<system-reminder>filtered by the gateway</system-reminder>'
             result = {'type': 'tool_result', 'tool_use_id': card['id'], 'content': rendered}
             follow_messages = [*first['messages'], {'role': 'assistant', 'content': content},
                                {'role': 'user', 'content': [result]}]
+            if retry:
+                follow_messages[-1]['content'].append({'type': 'text', 'text': retry})
             second_request = conversation('unused', model=second_model, messages=follow_messages, tools=tools)
+            if new_format:
+                result['content'] = rendered.replace('follow what they actually say.', 'continue.')
+                self.assertEqual(self.request(second_request)[0], 400)
+                result['content'] = rendered.replace('"Texture?"=', '"Unexpected?"=')
+                self.assertEqual(self.request(second_request)[0], 400)
+                result['content'] = rendered
             self.assertEqual(self.request(second_request, session=str(uuid.uuid4()))[0], 409)
             self.assertEqual(self.request(conversation('Do something different.'))[0], 409)
             self.assertEqual(actions, [dispatch])
             status, reply = self.request(second_request)
-            self.assertEqual(status, 200)
+            self.assertEqual(status, 200, reply)
             self.assertEqual(reply['model'], MODEL)
             self.assertIn('Fixture selections accepted.', reply['content'][0]['text'])
             self.assertEqual(self.request(second_request), (200, reply))
+            if new_format:
+                blocks = follow_messages[-1]['content']
+                for marker in ('continue', 'Try again', None):
+                    blocks[:] = [result]
+                    if marker:
+                        blocks.append({'type': 'text', 'text': marker})
+                    self.assertEqual(self.request(second_request), (200, reply))
+                blocks.append({'type': 'text', 'text': 'Choose something else.'})
+                self.assertEqual(self.request(second_request)[0], 400)
+                blocks[:] = [result]
+                if retry:
+                    blocks.append({'type': 'text', 'text': retry})
             self.assertEqual(actions, [
                 dispatch,
                 {'type': 'chat.subscribe', 'sessions': [{'sessionId': CLOUD_SESSION}]},
                 {'type': 'chat.permission-response', 'allow': True, 'requestId': pending['requestId'],
-                 'updatedInput': {**questions, 'answers': {question: 'Blue, Green', second: 'Custom, with quotes "yes"'}}},
+                 'updatedInput': {**questions, 'answers': choices}},
             ])
             follow_up = conversation('unused', messages=[*follow_messages, {'role': 'assistant', 'content': reply['content']},
                                                         {'role': 'user', 'content': 'Continue in the same chat.'}], tools=tools)
