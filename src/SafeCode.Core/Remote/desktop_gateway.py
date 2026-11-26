@@ -1316,19 +1316,18 @@ class CloudCliApproval:
             if not found or local_plan.strip() != self.plan.strip():
                 raise CloudCliError('The plan approved in Desktop differs from the CloudCLI plan', 409)
             return {**decision, 'allow': True, 'updatedInput': self.original}
-        # Claude Code returns a rendered answer map, optionally followed by context reminders.
-        formats = (
-            ('Your questions have been answered: ', '. You can now continue with these answers in mind.'),
-            ('The user answered: ', '. Read the answers carefully — they may request clarification, changes, '
-             'or that you not proceed — and follow what they actually say.'),
-        )
-        for prefix, suffix in formats:
-            if content.startswith(prefix):
-                body, found, tail = content[len(prefix):].rpartition(suffix)
-                if found and self.only_context(tail):
-                    break
-        else:
+        # Desktop can render a different answer envelope for free-text input.
+        prefix = 'Your questions have been answered: '
+        suffix = '. You can now continue with these answers in mind.'
+        if self.upstream_tool is None and content.startswith('The user answered: '):
+            prefix = 'The user answered: '
+            suffix = ('. Read the answers carefully — they may request clarification, '
+                      'changes, or that you not proceed — and follow what they actually say.')
+        end = content.rfind(suffix)
+        tail = content[end+len(suffix):]
+        if not content.startswith(prefix) or end < len(prefix) or not self.only_context(tail):
             raise CloudCliError('Claude Desktop did not return a supported answer', 400)
+        body = content[len(prefix):end]
         questions = [item['question'] for item in self.block['input']['questions']]
         names = '|'.join(re.escape(question) for question in questions)
         pattern = f'(?:^|", )"({names})"="'
@@ -1338,6 +1337,8 @@ class CloudCliApproval:
             raise CloudCliError('Claude Desktop answer does not match the original questions', 400)
         answers = {match[1]: body[match.end():matches[index+1].start() if index+1 < len(matches) else -1]
                    for index, match in enumerate(matches)}
+        if any(re.search(r'", "[^"\n]*"="', answer) for answer in answers.values()):
+            raise CloudCliError('Claude Desktop answer contains an unrecognized question', 400)
         if any(not answer.strip() or len(answer) > 4096 for answer in answers.values()):
             raise CloudCliError('Claude Desktop returned an empty or oversized answer', 400)
         if self.upstream_tool is not None:
@@ -3001,7 +3002,7 @@ class CloudCliBackend:
                         self.save_session(db, namespace, expected, session, project, workspace, [confirmed])
                         db.execute('INSERT OR REPLACE INTO requests VALUES (?,?,?,?)',
                                    (identity, namespace, json.dumps(reply, ensure_ascii=False), time.time()))
-                        db.execute('DELETE FROM question_receipts WHERE scope=?', (namespace,))
+                        # Keep the receipt until the next task so a retry under a new UUID can be explained.
                         return reply
             if turn is None or expected != turn.expected or card != turn.question.block['id']:
                 raise CloudCliError('No matching pending question for this Desktop conversation', 409)

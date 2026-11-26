@@ -2068,6 +2068,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
             status, reply = submit()
             self.assertEqual(status, 200, reply)
             self.assertIn('重新发送', reply['content'][0]['text'])
+            original_status, _ = self.request(payload)
+            self.assertEqual(original_status, 200)
             repeated_status, repeated = submit()
             self.assertEqual((repeated_status, repeated['content']), (status, reply['content']))
             payload['messages'][-1]['content'].pop()
@@ -2103,7 +2105,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 {'label': 'Casual', 'description': 'Casual look'}, {'label': 'Formal', 'description': 'Formal look'},
             ]},
         ]}
-        choices = {question: 'Blue, Green', second: 'Custom, with quotes "yes"'}
+        choices = {question: 'Blue, Green', second: r'E:\Example\outputs' + ', with quotes "yes"'}
         if new_format:
             for label in ('Size', 'Texture'):
                 questions['questions'].append({**questions['questions'][1], 'header': label, 'question': label + '?'})
@@ -2186,6 +2188,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 result['content'] = rendered.replace('follow what they actually say.', 'continue.')
                 self.assertEqual(self.request(second_request)[0], 400)
                 result['content'] = rendered.replace('"Texture?"=', '"Unexpected?"=')
+                self.assertEqual(self.request(second_request)[0], 400)
+                result['content'] = rendered.replace('"Texture?"=', '"Extra?"="Formal", "Texture?"=')
                 self.assertEqual(self.request(second_request)[0], 400)
                 result['content'] = rendered
             self.assertEqual(self.request(second_request, session=str(uuid.uuid4()))[0], 409)
