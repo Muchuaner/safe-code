@@ -26,7 +26,7 @@ from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from claude_usage import read_subscription
-from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_MESSAGES_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config, valid_mac_workspace
+from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_MESSAGES_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config, binding_directory
 from desktop_gateway import IMPORTED_SESSION_NAMESPACE, IMPORTED_SESSIONS_FILE
 from device_bridge import (DeviceAlreadyBound, DeviceError, DeviceOffline, Devices, OwnerHosts, SSH_DEVICE,
                            paired_device, pairing_lock, read_json, device_service_problem)
@@ -38,7 +38,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 46
+GATEWAY_REVISION = 47
 DESKTOP_HISTORY = '/v1/desktop-history'
 DESKTOP_FOLLOWUPS = '/v1/desktop-followups'
 PUBLIC_KEY_QUEUE = 'public-key-queue'
@@ -993,17 +993,17 @@ class PublicServer(ThreadingHTTPServer):
                                 self.manage({'action': 'project_catalog'})['projects']}
                     used_projects = set()
                     for item in submitted:
-                        if (not isinstance(item, dict) or not isinstance(item.get('project_id'), str)
-                                or not valid_mac_workspace(item.get('directory'))):
-                            raise ValueError('请选择 CloudCLI 项目并填写 Mac 上 Code 环境的绝对路径。')
-                        project_id, directory = item['project_id'], item['directory']
+                        directory = binding_directory(item.get('directory')) if isinstance(item, dict) else None
+                        if directory is None or not isinstance(item.get('project_id'), str):
+                            raise ValueError('请选择 CloudCLI 项目并填写 Windows 或 Mac 的 Code 工作目录绝对路径。')
+                        project_id = item['project_id']
                         if directory in bindings or project_id in used_projects or project_id not in projects:
                             raise ValueError('项目或本机目录重复，或者项目已归档，请重新选择。')
                         project = projects[project_id]
                         path = Path(project['path'])
                         if not path.is_dir() or path.resolve() != path:
                             raise ValueError('CloudCLI 项目目录不可用。')
-                        bindings[directory] = {**project, 'directory': directory}
+                        bindings[directory] = {**project, 'directory': str(directory)}
                         used_projects.add(project_id)
                 settings['project_bindings'] = json.dumps(list(bindings.values()), ensure_ascii=False) if bindings else None
             if operation=='issue':

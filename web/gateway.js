@@ -629,9 +629,9 @@ function addProjectBinding(binding = {project_id: '', directory: ''}) {
   for (const [id, label] of options) choice.add(new Option(label, id));
   choice.value = binding.project_id;
   choiceLabel.append(choice);
-  const pathLabel = element('label', 'Mac 上的 Code 工作目录');
+  const pathLabel = element('label', '桌面 Code 工作目录');
   const path = element('input');
-  path.placeholder = '/Users/用户名/项目目录';
+  path.placeholder = 'D:/项目目录 或 /Users/用户名/项目目录';
   path.spellcheck = false;
   path.value = binding.directory;
   pathLabel.append(path);
@@ -969,8 +969,8 @@ byId('key-form').onsubmit = event => {
     const bindings = bindingValues();
     const previous = (editingKey?.project_bindings ?? []).map(({project_id, directory}) => ({project_id, directory}));
     if (JSON.stringify(bindings) !== JSON.stringify(previous)) {
-      if (bindings.some(binding => !binding.project_id || !binding.directory.startsWith('/'))) {
-        notice('editor-status', '请选择 CloudCLI 项目并填写 Mac 上 Code 环境的绝对路径。', true);
+      if (bindings.some(binding => !binding.project_id || !/^(?:\/|[a-z]:[\\/])/i.test(binding.directory))) {
+        notice('editor-status', '请选择 CloudCLI 项目并填写 Windows 或 Mac 的 Code 工作目录绝对路径。', true);
         return;
       }
       options.project_bindings = bindings;

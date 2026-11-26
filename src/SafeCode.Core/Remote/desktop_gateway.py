@@ -606,6 +606,24 @@ exec "$cli" "$@"
 """
 
 
+def windows_workspace(value):
+    if not isinstance(value, str) or not re.match(r'^[A-Za-z]:[/\\]', value):
+        return None
+    if len(value) > 4096 or re.search(r'[\x00-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]', value):
+        return None
+    path = PureWindowsPath(value)
+    if any(part.endswith(('.', ' ')) or re.search(r'[<>:"|?*]', part)
+           or PureWindowsPath(part).is_reserved() for part in path.parts[1:]):
+        return None
+    return path if '..' not in path.parts else None
+
+
+def binding_directory(value):
+    if isinstance(value, str) and not re.search(r'[\ud800-\udfff]', value) and valid_mac_workspace(value):
+        return PurePosixPath(value)
+    return windows_workspace(value)
+
+
 def desktop_working_directory(data):
     """Extract the native Environment hint for matching an authorized project."""
     system = data.get('system') if isinstance(data, dict) else None
@@ -630,11 +648,8 @@ def desktop_working_directory(data):
     if len(value) > 4096 or re.search(r'[\x00-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]', value):
         return None
     if re.match(r'^[A-Za-z]:[/\\]', value):
-        path = PureWindowsPath(value)
-        if any(part.endswith(('.', ' ')) or re.search(r'[<>:"|?*]', part)
-               or PureWindowsPath(part).is_reserved() for part in path.parts[1:]):
-            return None
-    elif value.startswith('/') and not value.startswith('//') and '\\' not in value:
+        return windows_workspace(value)
+    if value.startswith('/') and not value.startswith('//') and '\\' not in value:
         path = PurePosixPath(value)
     else:
         return None
@@ -2866,11 +2881,12 @@ class CloudCliBackend:
         elif saved_path is not None:
             field, target = 'path', saved_path
         elif cwd is not None:
-            field, target = 'directory', str(cwd)
+            field, target = 'directory', cwd
         else:
             return None
         for binding in bindings:
-            if binding[field] == target:
+            value = binding_directory(binding[field]) if field == 'directory' else binding[field]
+            if value == target:
                 if not self.device or not self.config.get('desktopQuestions'):
                     raise CloudCliError('绑定项目需要通过已配对的 SafeCode 设备访问。', 403)
                 path = Path(binding['path'])

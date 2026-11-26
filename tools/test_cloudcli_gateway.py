@@ -823,14 +823,19 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertNoNativeFallback()
 
     def test_bound_project_creates_separate_sessions_in_the_original_project(self):
+        self.check_bound_project('macos', '/Users/example/Work', '/Users/example/Work')
+
+    def test_windows_bound_project_uses_drive_path_case_and_separators(self):
+        self.check_bound_project('windows', r'D:\创作中心\My Work', 'd:/创作中心/MY WORK/')
+
+    def check_bound_project(self, platform, registered_directory, reported_directory):
         self.enable_cloudcli_web_fixture()
         backend = self.manager.cloudcli
-        backend.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
-                          'alias': 'desk-mac', 'command': 'ssh desk-mac'}
-        directory = '/Users/example/Work'
+        backend.device = {'id': CLIENT_ID, 'platform': platform, 'hostname': 'Example',
+                          'alias': 'desk-fixture', 'command': 'ssh desk-fixture'}
         project_id = str(uuid.uuid4())
         self.cloud.projects = [{'projectId': project_id, 'displayName': 'Original', 'fullPath': str(self.project)}]
-        bindings = [{'project_id': project_id, 'directory': directory, 'path': str(self.project)}]
+        bindings = [{'project_id': project_id, 'directory': registered_directory, 'path': str(self.project)}]
         backend.project_bindings = lambda: bindings
         identifiers = [str(uuid.uuid4()), str(uuid.uuid4())]
         self.cloud.project_session_ids = iter(identifiers)
@@ -849,7 +854,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
         with patch.object(gateway, 'cloudcli_websocket', return_value=(open_socket, OSError)):
             session = str(uuid.uuid4())
-            payload = conversation('First native chat', system=desktop_environment(directory))
+            payload = conversation('First native chat', system=desktop_environment(reported_directory))
             status, reply = self.request(payload, session=session)
             self.assertEqual(status, 200, reply)
             automatic = {**payload, 'safeguards': [
@@ -859,7 +864,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertEqual([item['projectPath'] for item in self.cloud.created_sessions], [str(self.project)] * 2)
             self.assertEqual([item['sessionId'] for item in commands], identifiers)
             self.assertEqual([c['options']['permissionMode'] for c in commands], ['default', 'auto'])
-            self.assertNotIn('ssh desk-mac', commands[0]['content'])
+            self.assertNotIn('ssh desk-fixture', commands[0]['content'])
             self.assertEqual(self.cloud.registered_projects, [])
             self.assertEqual(self.cloud.requests, [])
             follow_up = conversation('unused', messages=[

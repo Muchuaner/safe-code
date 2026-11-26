@@ -780,8 +780,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
                 args["expires_at"] = seconds as Any? ?? NSNull()
             }
             if let bindings = projectPicker.modifiedBindings {
-                guard bindings.allSatisfy({ !$0["project_id", default: ""].isEmpty && $0["directory", default: ""].hasPrefix("/") }) else {
-                    self.showNotice("请选择 CloudCLI 项目并填写 Mac 上 Code 环境的绝对路径。")
+                guard bindings.allSatisfy({ !$0["project_id", default: ""].isEmpty && $0["directory", default: ""].range(of: #"^(?:/|[A-Za-z]:[/\\])"#, options: .regularExpression) != nil }) else {
+                    self.showNotice("请选择 CloudCLI 项目并填写 Windows 或 Mac 的 Code 工作目录绝对路径。")
                     return
                 }
                 args["project_bindings"] = bindings
@@ -1177,7 +1177,7 @@ private final class GatewayKeyProjectPicker: NSObject {
         let header = NSStackView(views: [title, NSView(), count])
         header.alignment = .centerY
         count.setContentHuggingPriority(.required, for: .horizontal)
-        let help = NSTextField(wrappingLabelWithString: "在 Mac 的 Code 中选择对应目录，新对话会进入绑定的网页项目。")
+        let help = NSTextField(wrappingLabelWithString: "在 Windows 或 Mac 的 Code 中选择对应目录，新对话会进入绑定的网页项目。")
         for label in [status, help] {
             label.font = .systemFont(ofSize: SafeCodeType.small)
             label.textColor = GatewayStyle.muted
@@ -1254,8 +1254,8 @@ private final class GatewayKeyProjectPicker: NSObject {
         populate(choice, id: binding["project_id"] ?? "", name: binding["name"])
         let location = GatewayStyle.label("", color: GatewayStyle.muted, size: SafeCodeType.small)
         let directory = NSTextField(string: binding["directory"] ?? "")
-        directory.placeholderString = "/Users/用户名/项目目录"
-        directory.setAccessibilityLabel("Mac 上的 Code 工作目录")
+        directory.placeholderString = "D:/项目目录 或 /Users/用户名/项目目录"
+        directory.setAccessibilityLabel("桌面 Code 工作目录")
         directory.toolTip = binding["directory"]
         let remove = GatewayButton("移除", kind: .dangerLink, target: self, action: #selector(removeBinding(_:)))
         let remoteColumn = NSStackView(views: [choice, location])
@@ -1264,7 +1264,7 @@ private final class GatewayKeyProjectPicker: NSObject {
         remoteColumn.spacing = 2
         remoteColumn.widthAnchor.constraint(equalToConstant: 164).isActive = true
         for view in [choice, location] { view.widthAnchor.constraint(equalTo: remoteColumn.widthAnchor).isActive = true }
-        let localLabel = GatewayStyle.label("Mac 工作目录", color: GatewayStyle.muted, size: SafeCodeType.small)
+        let localLabel = GatewayStyle.label("桌面工作目录", color: GatewayStyle.muted, size: SafeCodeType.small)
         let localColumn = NSStackView(views: [localLabel, directory])
         localColumn.orientation = .vertical
         localColumn.alignment = .leading

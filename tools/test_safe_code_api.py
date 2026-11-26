@@ -145,6 +145,17 @@ class SafeCodeApiTest(unittest.TestCase):
         self.assertEqual(self.registry.project_bindings(updated['id']), [{**entry, **binding}])
         public.manage({'action': 'update', 'id': updated['id'], 'project_bindings': []})
         self.assertEqual(self.registry.project_bindings(updated['id']), [])
+        windows = {**binding, 'directory': r'D:\创作中心\My Work'}
+        public.manage({'action': 'update', 'id': updated['id'], 'project_bindings': [windows]})
+        other = {**entry, 'project_id': 'd63678da-348b-487d-be2c-16e5213d03a2'}
+        public.catalog_backend.managed_projects.return_value = [entry, other]
+        alias = {'project_id': other['project_id'], 'directory': 'd:/创作中心/MY WORK/'}
+        with self.assertRaisesRegex(ValueError, '重复'):
+            public.manage({'action': 'update', 'id': updated['id'], 'project_bindings': [windows, alias]})
+        for invalid in (r'D:relative', r'D:\folder\..\other', r'D:\bad.CON\file?', r'\\.\PhysicalDrive0'):
+            with self.subTest(directory=invalid), self.assertRaises(ValueError):
+                public.manage({'action': 'update', 'id': updated['id'], 'project_bindings': [{**windows, 'directory': invalid}]})
+        self.assertEqual(self.registry.project_bindings(updated['id']), [{**entry, **windows}])
         self.assertEqual(self.registry.project_bindings(issued['id']), [{**entry, **binding}])
 
     def test_turn_footer_uses_key_ledger_and_cached_windows_only(self):
