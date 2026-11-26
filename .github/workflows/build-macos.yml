@@ -1,0 +1,39 @@
+name: Build macOS Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/release-049
+    paths:
+      - '.github/workflows/build-macos.yml'
+
+jobs:
+  build-macos:
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build macOS app and DMG
+        run: python3 tools/build_macos.py
+
+      - name: Verify build outputs
+        run: |
+          ls -lh dist/macos/
+          cat dist/macos/SafeCode-0.4.9-macOS-arm64.dmg.sha256
+
+      - name: Upload macOS DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SafeCode-0.4.9-macOS-arm64
+          path: |
+            dist/macos/SafeCode-0.4.9-macOS-arm64.dmg
+            dist/macos/SafeCode-0.4.9-macOS-arm64.dmg.sha256
+            dist/macos/arm64/build-report.json
+          if-no-files-found: error
