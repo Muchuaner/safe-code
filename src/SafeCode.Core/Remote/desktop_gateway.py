@@ -3762,7 +3762,14 @@ class CloudCliBackend:
             return False
         if any(row.get('sessionId') == session for row in self.running_sessions()):
             raise CloudCliError('The original CloudCLI conversation is still running', 409)
-        rows, _ = next(self.history_pages(session, 5))
+        # The provider may acknowledge the turn before its transcript index is visible.
+        deadline = time.monotonic() + 5
+        while True:
+            rows, _ = next(self.history_pages(session, max(.1, deadline-time.monotonic())))
+            remaining = deadline-time.monotonic()
+            if rows or remaining <= 0:
+                break
+            time.sleep(min(.25,remaining))
         if not rows:
             return False
         last = rows[-1]
