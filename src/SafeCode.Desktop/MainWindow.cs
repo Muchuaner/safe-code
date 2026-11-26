@@ -110,7 +110,7 @@ public sealed class MainWindow : Window
         Loaded += async (_, _) => await InitializeAsync();
         if(!IsAcceptance)
         {
-            keyAccess=new DesktopKeyAccess(dataDirectory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null);
+            keyAccess=new DesktopKeyAccess(dataDirectory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null,openBash:OpenBashDetailAsync);
             claudeBridge=new ClaudeCodexBridge(dataDirectory);
             integrationTimer.Tick+=async(_,_)=>
             {
@@ -316,7 +316,14 @@ public sealed class MainWindow : Window
         }
     }
     private DesktopKeyAccess KeyAccess => keyAccess??=new DesktopKeyAccess(dataDirectory,LocalSecrets.Protect,
-        LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null);
+        LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null,openBash:OpenBashDetailAsync);
+
+    private Task OpenBashDetailAsync(string session,string call) => Dispatcher.InvokeAsync(async () =>
+    {
+        ShowMainWindow();
+        if(browser.CoreWebView2!=null)
+            await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeBashDetail?.("+JsonSerializer.Serialize(session)+","+JsonSerializer.Serialize(call)+")");
+    }).Task.Unwrap();
 
     private async Task<object> AuthorizeKeyDeviceAsync(CancellationToken ct)
     {
@@ -450,6 +457,7 @@ public sealed class MainWindow : Window
             case "desktopKey.status":
                 return await KeyAccess.RestoreAsync(lifetime.Token,
                     interactive:args.TryGetProperty("interactive",out var interactive)&&interactive.ValueKind==JsonValueKind.True);
+            case "desktopKey.bashHistory": return await KeyAccess.BashHistoryAsync(Read("session"),lifetime.Token);
             case "desktopKey.list": return await KeyAccess.ListKeysAsync(lifetime.Token);
             case "desktopKey.save":
                 await KeyAccess.SaveKeyAsync(Read("key"),Read("name"),lifetime.Token);

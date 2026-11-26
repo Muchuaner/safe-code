@@ -38,7 +38,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 44
+GATEWAY_REVISION = 45
 DESKTOP_HISTORY = '/v1/desktop-history'
 DESKTOP_FOLLOWUPS = '/v1/desktop-followups'
 PUBLIC_KEY_QUEUE = 'public-key-queue'

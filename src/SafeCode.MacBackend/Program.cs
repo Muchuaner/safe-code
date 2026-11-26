@@ -238,6 +238,7 @@ internal sealed class MacBackend : IDisposable
                 return new{configured=File.Exists(Path.Combine(directory,"desktop-key.state")),running=false};
             case "desktopKey.status":
                 return await KeyAccess().RestoreAsync(ct,interactive:Flag("interactive"));
+            case "desktopKey.bashHistory": return await KeyAccess().BashHistoryAsync(Read("session"),ct);
             case "desktopKey.list": return await KeyAccess().ListKeysAsync(ct);
             case "desktopKey.save":
                 await KeyAccess().SaveKeyAsync(Read("key"),Read("name"),ct);
@@ -510,7 +511,7 @@ internal sealed class MacBackend : IDisposable
         ? session : throw new InvalidOperationException("请先连接服务器。");
     private SshSession RequireSession()=>connectionPending==0&&session?.IsConnected==true&&session.Server!=null?session:throw new InvalidOperationException("SSH 已断开，请重新连接。");
     private DesktopKeyAccess KeyAccess()=>keyAccess??=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,
-        diagnostics:services);
+        diagnostics:services,openBash:(session,call)=>EmitAsync(new{type="bashDetail",session,call}));
     private void Log(string operation,string line)
     {
         string diagnostic=operation=="folder"?"directory_list":string.IsNullOrEmpty(operation)?"connection":operation;

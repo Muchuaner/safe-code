@@ -513,3 +513,14 @@ dialog :is(.config-footer,.mount-footer){align-items:center}
 
 .step.done .input-remove-button{border-color:var(--border);color:var(--green)}
 .deploy-footer #reboot-required{color:#805e21}
+
+#bash-history-dialog{box-sizing:border-box;width:min(560px,94vw);max-height:86vh;overflow:auto;padding:20px;border:1px solid #cbd5ce;border-radius:14px;color:#20352d;background:#fafcf9}
+#bash-history-dialog::backdrop{background:#18291d55}
+#bash-history-dialog form{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+#bash-history-dialog h2{margin:0;font-size:18px}
+#bash-history-dialog label{display:block;font-size:13px}
+#bash-history-session{width:100%;margin:6px 0 12px}
+#bash-history-rows details{min-width:0;border-top:1px solid #d8e2db;padding:9px 0}
+#bash-history-rows summary{cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#bash-history-rows strong{display:block;margin-top:10px;font-size:12px}
+#bash-history-rows pre{white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;margin:3px 0 8px}

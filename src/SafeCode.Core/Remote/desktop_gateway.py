@@ -1441,6 +1441,7 @@ class CloudCliProgress:
         self.tool_failures = set()
         self.bash_cards = False
         self.bash_ids = {}
+        self.bash_viewer = None
         self.reported_results = set()
         self.activity_detail_bytes = 0
         self.device_command = shlex.split(device['command']) if device else ()
@@ -1714,6 +1715,9 @@ class CloudCliProgress:
                     'type':'bash_code_execution_result', 'stdout':'' if failed else preview,
                     'stderr':preview if failed else '', 'return_code':code if type(code) is int else int(failed),
                     'content':[]}})
+                if self.bash_viewer:
+                    state = '失败' if failed else '已完成'
+                    self.notice(f'Bash {state} · [查看命令和输出]({self.bash_viewer}{card})')
             elif tool != 'AskUserQuestion':
                 state = '失败' if failed else '已返回'
                 self.activity_detail(f'`{tool}` {state}', self.result_preview(output))
@@ -4424,6 +4428,12 @@ class CloudCliBackend:
                                         None if existing_project else self.device)
             progress.bash_cards = bool(scope and isinstance(offered, list) and any(
                 isinstance(tool, dict) and tool.get('name') == 'Bash' for tool in offered))
+            headers = getattr(getattr(stream, 'handler', None), 'headers', {})
+            viewer = headers.get('X-SafeCode-Bash-Viewer', '')
+            if scope and re.fullmatch(r'[1-9][0-9]{0,4}/[a-f0-9]{32}', viewer):
+                port, capability = viewer.split('/')
+                if int(port) <= 65535:
+                    progress.bash_viewer = f'http://127.0.0.1:{port}/bash/{capability}/{scope}/'
             progress.account_footer = manager.account_footer
             progress.stop_requested = active_turn.stop_requested
             progress.client_detached = active_turn.client_detached

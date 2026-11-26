@@ -99,7 +99,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         'claude-desktop-dialog':[450,320],'gateway-repair-dialog':[450,320],'cloud-remote-dialog':[470,445],
         'advanced-dialog':[355,235],'resolution-dialog':[355,305],
         'create-folder-dialog':[380,250],'desktop-key-dialog':[360,190],'key-list-dialog':[480,265],
-        'app-message-dialog':[400,300]
+        'app-message-dialog':[400,300],'bash-history-dialog':[540,440]
       };
       const observer=new MutationObserver(()=>{
         stack=stack.filter(dialog=>dialog.open);
@@ -1310,6 +1310,52 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         try{await refreshSwitchState();}catch{}
       }finally{lockLibrary(false);}
     }
+    const bashDialog=$('#bash-history-dialog'), bashSelect=$('#bash-history-session'), bashRows=$('#bash-history-rows');
+    let bashVersion=0;
+    async function readBashRows(){
+      const version=++bashVersion;
+      const openIds=new Set(Array.from(bashRows.querySelectorAll('details[open]'),row=>row.dataset.call));
+      try{
+        const rows=bashSelect.value?await native('desktopKey.bashHistory',{session:bashSelect.value}):[];
+        if(version!==bashVersion||!bashDialog.open)return;
+        bashRows.replaceChildren();
+        for(const row of rows){
+          const detail=document.createElement('details'), summary=document.createElement('summary');
+          detail.dataset.call=row.id;detail.open=openIds.has(row.id);
+          const state=row.output==null?'等待结果':row.exitCode===0?'已完成':'退出码 '+(row.exitCode??'未知');
+          summary.textContent=state+' · '+row.command.split('\n')[0];detail.append(summary);
+          for(const [label,value] of [['命令',row.command],['输出',row.output??'等待结果']]){
+            const heading=document.createElement('strong'), content=document.createElement('pre');
+            heading.textContent=label;content.textContent=value||'（无输出）';detail.append(heading,content);
+          }
+          bashRows.append(detail);
+        }
+        if(!rows.length)bashRows.textContent='此对话暂无 Bash 执行记录。';
+      }catch(error){if(version===bashVersion)bashRows.textContent=error.message;}
+    }
+    async function openBashHistory(session,call){
+      if(!bashDialog.open)bashDialog.showModal();bashSelect.replaceChildren();bashRows.textContent='正在读取当前 Key 的对话…';
+      const version=++bashVersion;
+      try{
+        const sessions=await native('desktopKey.bashHistory',{session:''});
+        if(!bashDialog.open||version!==bashVersion)return;
+        sessions.forEach(row=>bashSelect.add(new Option(row.title,row.id)));
+        if(session){
+          bashSelect.value=session;
+          if(!bashSelect.value){bashRows.textContent='当前 Key 中找不到这条桌面对话。';return;}
+        }
+        await readBashRows();
+        if(call){
+          const detail=Array.from(bashRows.querySelectorAll('details')).find(item=>item.dataset.call===call);
+          if(detail){detail.open=true;detail.scrollIntoView({block:'nearest'});}
+          else if(bashDialog.open)bashRows.textContent='这条记录尚未写入当前对话。请稍后刷新。';
+        }
+      }catch(error){if(version===bashVersion)bashRows.textContent=error.message;}
+    };
+    window.safeCodeBashDetail=openBashHistory;
+    $('#api-bash-history').onclick=()=>openBashHistory();
+    bashDialog.addEventListener('close',()=>{++bashVersion;bashRows.replaceChildren();bashSelect.replaceChildren();});
+    bashSelect.onchange=readBashRows;$('#bash-history-refresh').onclick=readBashRows;
     $('#api-switch-key').onclick=openKeyList;
     $('#key-library-entry').onclick=openKeyList;
     $('#key-list-close').onclick=()=>keyListDialog.close();

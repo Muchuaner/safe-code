@@ -293,6 +293,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             case "logs":web.evaluateJavaScript("window.safeCodeNativeLogs?.("+json(message["lines"] ?? [])+")",completionHandler:nil)
             case "status":updateStatus(message)
             case "updateProgress":(servicesWeb ?? web).evaluateJavaScript("window.safeCodeUpdateProgress?.(\(message["done"] ?? 0),\(message["total"] ?? 0))",completionHandler:nil)
+            case "bashDetail":
+                if let session=message["session"] as? String, let call=message["call"] as? String {
+                    showMain()
+                    web.evaluateJavaScript("window.safeCodeBashDetail?.("+jsString(session)+","+jsString(call)+")",completionHandler:nil)
+                }
             case "openUrl":if let raw=message["url"] as? String{openURL(raw)}
             case "openFile":if let raw=message["path"] as? String{openFile(raw)}
             default:break

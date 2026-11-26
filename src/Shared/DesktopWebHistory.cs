@@ -17,6 +17,87 @@ internal static class DesktopWebHistory
     private sealed record Entry(string Stamp, string Cwd);
     private sealed record Pending(string Project, string Scope, string Session, string Title, long Updated, Entry Entry);
 
+    private sealed record BashRow(string Id, string Command, string? Output, int? ExitCode);
+    private sealed record BashSession(string Id, string Title);
+    internal static object BashHistory(string userData, string organization, string? session, CancellationToken ct)
+    {
+        var config = Path.Combine(userData, "config.json");
+        if (!File.Exists(config)) return Array.Empty<object>();
+        using var prefs = JsonDocument.Parse(File.ReadAllBytes(config));
+        if (!Guid.TryParse(Text(prefs.RootElement, "lastKnownAccountUuid"), out var account)) return Array.Empty<object>();
+        var root = Path.Combine(userData, "claude-code-sessions", account.ToString("D"), Uuid(organization));
+        if (!Directory.Exists(root)) return Array.Empty<object>();
+        var sessions = new List<BashSession>();
+        foreach (var file in new DirectoryInfo(root).EnumerateFiles("local_*.json").OrderByDescending(f => f.LastWriteTimeUtc))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (file.Length > 4 * 1024 * 1024 || file.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+            try
+            {
+                using var metadata = JsonDocument.Parse(File.ReadAllBytes(file.FullName));
+                var row = metadata.RootElement;
+                var id = Text(row,"cliSessionId");
+                if (!Guid.TryParseExact(id,"D",out _)) continue;
+                if (string.IsNullOrEmpty(session))
+                    sessions.Add(new(id!, Text(row,"title") ?? id!));
+                else if (id == session && Text(row,"cwd") is string cwd && Path.IsPathFullyQualified(cwd))
+                    return ReadBashRows(id!, cwd, ct);
+            }
+            catch (JsonException) { } // Desktop may be updating this metadata.
+            catch (FileNotFoundException) { }
+        }
+        return sessions;
+    }
+
+    private static List<BashRow> ReadBashRows(string session, string cwd, CancellationToken ct)
+    {
+        var projects = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
+        var transcript = Path.Combine(projects, Regex.Replace(cwd, @"[^A-Za-z0-9]", "-"), session + ".jsonl");
+        if (!File.Exists(transcript) && Directory.Exists(projects))
+        {
+            var candidates = Directory.EnumerateDirectories(projects).Select(dir => Path.Combine(dir,session+".jsonl"))
+                .Where(File.Exists).Take(2).ToList();
+            if (candidates.Count == 1) transcript = candidates[0];
+        }
+        var rows = new List<BashRow>();
+        var indices = new Dictionary<string,int>(StringComparer.Ordinal);
+        if (!File.Exists(transcript) || new FileInfo(transcript).Attributes.HasFlag(FileAttributes.ReparsePoint) ||
+            new DirectoryInfo(Path.GetDirectoryName(transcript)!).Attributes.HasFlag(FileAttributes.ReparsePoint)) return rows;
+        using var reader = new StreamReader(new FileStream(transcript, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        while (reader.ReadLine() is string line)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (line.Length > 2 * 1024 * 1024) continue;
+            try
+            {
+                using var entry = JsonDocument.Parse(line);
+                var frame = entry.RootElement;
+                if (Text(frame,"sessionId") != session || Text(frame,"type") != "assistant" ||
+                    !frame.TryGetProperty("message",out var message) || !message.TryGetProperty("content",out var blocks) ||
+                    blocks.ValueKind != JsonValueKind.Array) continue;
+                foreach (var block in blocks.EnumerateArray())
+                {
+                    if (Text(block,"type") == "server_tool_use" && Text(block,"name") == "bash_code_execution" &&
+                        Text(block,"id") is string call && Regex.IsMatch(call, @"^srvtoolu_sc[0-9a-f]{32}$") &&
+                        block.TryGetProperty("input",out var input) && Text(input,"command") is string command &&
+                        indices.TryAdd(call, rows.Count))
+                        rows.Add(new(call,command,null,null));
+                    if (Text(block,"type") == "bash_code_execution_tool_result" && Text(block,"tool_use_id") is string result &&
+                        indices.TryGetValue(result,out var index) && block.TryGetProperty("content",out var content) &&
+                        Text(content,"type") == "bash_code_execution_result")
+                    {
+                        var output = string.Join("\n", new[]{Text(content,"stdout"),Text(content,"stderr")}.Where(s=>!string.IsNullOrEmpty(s)));
+                        int? code = content.TryGetProperty("return_code",out var exit) && exit.TryGetInt32(out var n) ? n : null;
+                        rows[index] = rows[index] with { Output=output, ExitCode=code };
+                    }
+                }
+            }
+            catch (JsonException) { } // Skip a trailing partial frame and reread on refresh.
+        }
+        rows.Reverse();
+        return rows;
+    }
+
     internal static async Task SyncFollowupsAsync(HttpClient gateway, string userData, string organization,
                                                   CancellationToken ct)
     {

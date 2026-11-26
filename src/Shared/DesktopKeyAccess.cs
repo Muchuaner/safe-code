@@ -29,7 +29,7 @@ namespace SafeCode.Desktop;
 // Claude receives a device-local bearer. Only SafeCode holds the remote bearer and TLS pin.
 internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]> protect,
     Func<byte[],byte[]> unprotect, string? profileDirectory=null,ClientServices? diagnostics=null,
-    string? windowsPolicyPath=null) : IDisposable
+    string? windowsPolicyPath=null, Func<string,string,Task>? openBash=null) : IDisposable
 {
     private const int MaxMessagesRequest = 64 * 1024 * 1024;
     private const string DeviceAlreadyBoundMessage="该 Key 已绑定设备。请在原设备停用接入，或联系网关管理员检查绑定状态。";
@@ -403,12 +403,41 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             client.DefaultRequestHeaders.Add("X-SafeCode-Device-Proof",device.DeviceProof);
         }
         var connection=new RelayConnection(devicePath,hostReady);
-        app.Run(ctx=>Forward(ctx,client,local,connection));
+        var viewerKey=Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(local),"SafeCode Bash viewer v1"u8)).ToLowerInvariant()[..32];
+        app.Run(async ctx=>{
+            if (openBash != null && ctx.Request.Path.StartsWithSegments("/bash"))
+            {
+                var parts=(ctx.Request.Path.Value??"").Split('/');
+                if (parts.Length!=5 || parts[2]!=viewerKey || ctx.Request.Host.Host!="127.0.0.1" ||
+                    !Guid.TryParseExact(parts[3],"D",out _) ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(parts[4],@"^srvtoolu_sc[0-9a-f]{32}$"))
+                { ctx.Response.StatusCode=404; return; }
+                ctx.Response.Headers.CacheControl="no-store";
+                ctx.Response.Headers["Referrer-Policy"]="no-referrer";
+                ctx.Response.Headers["Content-Security-Policy"]="default-src 'none'; form-action 'self'; frame-ancestors 'none'";
+                var origin="http://127.0.0.1:"+ctx.Connection.LocalPort;
+                if (HttpMethods.IsPost(ctx.Request.Method) && ctx.Request.Headers.Origin.ToString()==origin ||
+                    HttpMethods.IsGet(ctx.Request.Method) && ctx.Request.Headers["Sec-Fetch-Mode"]=="navigate" &&
+                    ctx.Request.Headers["Sec-Fetch-User"]=="?1")
+                {
+                    await openBash(parts[3],parts[4]);
+                    ctx.Response.ContentType="text/plain; charset=utf-8";
+                    await ctx.Response.WriteAsync("已在 SafeCode 打开执行记录。"); return;
+                }
+                if (!HttpMethods.IsGet(ctx.Request.Method)) {ctx.Response.StatusCode=405;return;}
+                ctx.Response.ContentType="text/html; charset=utf-8";
+                await ctx.Response.WriteAsync("<!doctype html><meta charset=utf-8><title>Bash 执行记录</title><form method=post><button>在 SafeCode 查看命令和输出</button></form>");
+                return;
+            }
+            await Forward(ctx,client,local,connection);
+        });
         try
         {
             await app.StartAsync(ct);
             var addresses=app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses;
-            return new(app,client,new Uri(addresses.Single()).Port,hostReady,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),connection);
+            var localPort=new Uri(addresses.Single()).Port;
+            if(openBash!=null) client.DefaultRequestHeaders.Add("X-SafeCode-Bash-Viewer",localPort+"/"+viewerKey);
+            return new(app,client,localPort,hostReady,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),connection);
         }
         catch{client.Dispose();await app.DisposeAsync();throw;}
     }
@@ -565,6 +594,21 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(profile["claudeAiImport"] is not JsonObject)profile["claudeAiImport"]=new JsonObject();
         profile["claudeAiImport"]!.AsObject()["automatic3pImport"]=false;
         return true;
+    }
+
+    internal async Task<object> BashHistoryAsync(string? session, CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (relay == null || !Configured) throw new InvalidOperationException("请先启用当前 Key。");
+            var saved = Load();
+            var organization = ReadEntries().FirstOrDefault(entry => entry.Remote == saved.Remote)?.HistoryOrganization;
+            if (organization == null) return Array.Empty<object>();
+            return await Task.Run(() => DesktopWebHistory.BashHistory(
+                Path.GetDirectoryName(Library(saved))!, organization, session, ct), ct);
+        }
+        finally { gate.Release(); }
     }
 
     internal async Task<object> ListKeysAsync(CancellationToken ct)
