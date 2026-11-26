@@ -70,6 +70,9 @@ with sync_playwright() as p:
  page.wait_for_function("!document.querySelector('#credential-dialog').open");page.locator('#app-message-confirm').click()
  page.evaluate("window.safeCodeMountStatus({count:1,state:'attention',message:'SSH 登录认证失败',authenticationRequired:true})")
  assert 'needs-credentials' in page.locator('#update-login-password').get_attribute('class')
+ page.locator('#disconnect-server').click()
+ page.wait_for_function("!document.querySelector('#login-screen').hidden")
+ assert page.locator('#password').input_value()==''
  assert not errors,errors
  browser.close()
 print('LOGIN_HELP_ACCOUNT_FIRST_SAVE_CANCEL_APPLY_AND_CREDENTIAL_RECOVERY_UI_PASSED')

@@ -395,7 +395,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         $('#cloud-live-log').hidden=true;$('#mount-live-log').hidden=true;
         $('#mount-summary').textContent='将本机目录挂载到服务器，支持多组目录。';
         window.safeCodeMountStatus({count:0,message:'未挂载目录'});
-        $('#public-gateway-footer').hidden=true;publicGatewayNotice('');
+        $('#public-gateway-footer').hidden=true;
         $('#ssh-port').setCustomValidity('');
         returnToServerLogin();
       }catch(error){
