@@ -31,8 +31,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     string? windowsPolicyPath=null) : IDisposable
 {
     private const int MaxMessagesRequest = 16 * 1024 * 1024;
-    private const string DeviceAlreadyBoundMessage="该 Key 已绑定设备。请在原设备停用接入，或联系网关管理员检查绑定状态。";
-    private const string UnbindPendingMessage="本机接入已停用，网关尚未确认解绑。请点击「重试解绑」查看结果。";
+    private const string DeviceAlreadyBoundMessage="該 Key 已綁定裝置。請在原裝置停用接入，或聯繫網關管理員檢查綁定狀態。";
+    private const string UnbindPendingMessage="本機接入已停用，網關尚未確認解綁。請點擊「重試解綁」查看結果。";
 
     internal sealed record DeviceBinding(string DeviceId,string DeviceProof,string Alias,int Port,string PublicKey);
     internal sealed record DeviceSetup(Ticket Remote,bool Replace,bool UseSaved,DeviceBinding? Existing,SshSession? HostSession=null,bool Switching=false);
@@ -54,7 +54,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     internal sealed record DevicePath(Func<string?> Problem,Func<bool,CancellationToken,Task> Check,Func<int> Generation);
     private sealed class RelayConnection(DevicePath? device,Func<bool>? hostReady)
     {
-        internal string? DeviceProblem=>device?.Problem()??(hostReady?.Invoke()==false?"已授权的本机 SSH 控制通道尚未恢复，请检查 SafeCode 的本机远程控制状态。":null);
+        internal string? DeviceProblem=>device?.Problem()??(hostReady?.Invoke()==false?"已授權的本機 SSH 控制通道尚未恢復，請檢查 SafeCode 的本機遠端控制狀態。":null);
         internal async Task CheckDeviceAsync(bool force,CancellationToken ct)
         {
             if(device!=null)await device.Check(force,ct);
@@ -102,7 +102,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (!Running) throw new InvalidOperationException("API Key 接入尚未启动。");
+            if (!Running) throw new InvalidOperationException("API Key 接入尚未啟動。");
             remote=Load().Remote;
         }
         finally { gate.Release(); }
@@ -116,9 +116,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         deadline.CancelAfter(TimeSpan.FromSeconds(8));
         using var response=await client.GetAsync("/v1/key/balance",deadline.Token).ConfigureAwait(false);
         if (response.StatusCode==HttpStatusCode.NotFound)
-            throw new InvalidOperationException("请升级 VPS 网关后再查看 Key 余额。");
+            throw new InvalidOperationException("請升級 VPS 網關後再查看 Key 餘額。");
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-            throw new InvalidOperationException("Key 无效或公网网关已停用。");
+            throw new InvalidOperationException("Key 無效或公網網關已停用。");
         response.EnsureSuccessStatusCode();
         using var body=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(deadline.Token).ConfigureAwait(false));
         var value=body.RootElement;
@@ -140,7 +140,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     {
         private static string Usd(long nanos)=>"$"+(nanos/1_000_000_000m).ToString("0.00##",System.Globalization.CultureInfo.InvariantCulture);
         public string Used=>"已用 "+Usd(UsedNanos);
-        public string Remaining=>RemainingNanos is long amount?"余额 "+Usd(amount):"不限额";
+        public string Remaining=>RemainingNanos is long amount?"餘額 "+Usd(amount):"不限額";
     }
     private string Library(Saved? saved=null)
     {
@@ -214,7 +214,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(!response.IsSuccessStatusCode)
         {
             if(response.StatusCode==HttpStatusCode.Unauthorized)
-                throw new InvalidOperationException("Key 无效、已过期或已撤销。");
+                throw new InvalidOperationException("Key 無效、已過期或已撤銷。");
             if(optional&&response.StatusCode==HttpStatusCode.NotFound)return null;
             try
             {
@@ -229,12 +229,12 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     {
                         string? explanation = code.GetString() switch
                         {
-                            "device_not_configured" => "此 VPS 尚未安装私有设备服务。请在「网关设置」升级或修复网关。",
-                            "device_not_allowed" => "此 Key 没有设备配对权限。请让签发人在「管理网关」将接入用途改为「Safe Code 桌面接入」。",
+                            "device_not_configured" => "此 VPS 尚未安裝私有裝置服務。請在「網關設定」升級或修復網關。",
+                            "device_not_allowed" => "此 Key 沒有裝置配對權限。請讓簽發人在「管理網關」將接入用途改為「Safe Code 桌面接入」。",
                             "device_already_bound" => DeviceAlreadyBoundMessage,
-                            "device_auth_unavailable" => "VPS 的设备鉴权服务未就绪。请在「网关设置」运行故障修复。",
-                            "device_frp_unavailable" => "VPS 的私有 FRP 服务未就绪。请在「网关设置」运行故障修复。",
-                            "device_ssh_verification_failed" => "网关未能通过 SSH 登录本机。请检查本机远程控制服务及登录权限，SafeCode 会重新验证。",
+                            "device_auth_unavailable" => "VPS 的裝置鑑權服務未就緒。請在「網關設定」執行故障修復。",
+                            "device_frp_unavailable" => "VPS 的私有 FRP 服務未就緒。請在「網關設定」執行故障修復。",
+                            "device_ssh_verification_failed" => "網關未能透過 SSH 登入本機。請檢查本機遠端控制服務及登入權限，SafeCode 會重新驗證。",
                             _ => null
                         };
                         if(explanation!=null)throw new InvalidOperationException(explanation);
@@ -243,10 +243,10 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             }
             catch(JsonException){}
             if(response.StatusCode==HttpStatusCode.BadRequest && JsonSerializer.SerializeToElement(request,Json).TryGetProperty("action",out var action) && action.GetString()=="renew")
-                throw new InvalidOperationException("网关未认可本机保存的设备授权，请检查 Key 的设备绑定并重新授权。");
+                throw new InvalidOperationException("網關未認可本機儲存的裝置授權，請檢查 Key 的裝置綁定並重新授權。");
             if(response.StatusCode==HttpStatusCode.Conflict)
                 throw new InvalidOperationException(DeviceAlreadyBoundMessage);
-            throw new InvalidOperationException("网关未能完成本机远程控制操作（HTTP "+(int)response.StatusCode+"）。请检查该 Key 的设备授权与 FRP 状态。");
+            throw new InvalidOperationException("網關未能完成本機遠端控制操作（HTTP "+(int)response.StatusCode+"）。請檢查該 Key 的裝置授權與 FRP 狀態。");
         }
         using var document=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
         return document.RootElement.Clone();
@@ -263,7 +263,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         bool launchProbe=path=="/v1/models" && ctx.Request.Headers.ContainsKey("X-SafeCode-Launch-Probe");
         if(!CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(key),Encoding.UTF8.GetBytes(token)))
         {
-            const string message="本机接入凭据无效，请在 SafeCode 重新启用接入并重开 Claude。";
+            const string message="本機接入憑據無效，請在 SafeCode 重新啟用接入並重開 Claude。";
             connection.RequestError=message;
             await RelayError(ctx,401,"authentication_error","local_auth_invalid",message);
             return;
@@ -300,7 +300,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 catch(Exception e) when(!ctx.RequestAborted.IsCancellationRequested &&
                     e is InvalidOperationException or OperationCanceledException or IOException or HttpRequestException)
                 {
-                    var reason=e is InvalidOperationException?e.Message:"设备回连验证未完成，请检查 SafeCode 的连接状态后重试。";
+                    var reason=e is InvalidOperationException?e.Message:"裝置回連驗證未完成，請檢查 SafeCode 的連線狀態後重試。";
                     await RelayError(ctx,503,"api_error","device_offline",reason);
                     return;
                 }
@@ -318,7 +318,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     failure=new HttpRequestException(null,null,res.StatusCode);
             }
             if(!launchProbe && res.StatusCode==HttpStatusCode.Unauthorized)
-                connection.RequestError="网关未接受当前 Key，请核对 Key 是否过期或已被撤销。";
+                connection.RequestError="網關未接受當前 Key，請核對 Key 是否過期或已被撤銷。";
             ctx.Response.StatusCode=(int)res.StatusCode;
             ctx.Response.ContentType=res.Content.Headers.ContentType?.ToString()??"application/json";
             if(res.Content.Headers.ContentType?.MediaType=="text/event-stream")
@@ -337,7 +337,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 if(streamStatus.SawError)failure=new HttpRequestException(null,null,(HttpStatusCode)(streamStatus.FailureStatus??502));
                 else if(!streamStatus.Ended)
                 {
-                    connection.RequestError="网关连接在这条回复结束前中断，请检查网络后重试。";
+                    connection.RequestError="網關連線在這條回覆結束前中斷，請檢查網絡後重試。";
                     failure=new HttpRequestException(null,null,HttpStatusCode.BadGateway);
                 }
             }
@@ -354,9 +354,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             failure??=e is OperationCanceledException&&!ctx.RequestAborted.IsCancellationRequested?new TimeoutException():e;
             if(ctx.RequestAborted.IsCancellationRequested){ctx.Abort();return;}
             string reason=e switch {
-                HttpRequestException {HttpRequestError:HttpRequestError.SecureConnectionError}=>"与网关的 TLS 握手未完成。请先检查网络，若持续失败再核对网关证书。",
-                OperationCanceledException=>"等待网关响应超时，请检查网络和网关状态。",
-                _=>"SafeCode 无法连接网关，请检查网络和网关地址。"
+                HttpRequestException {HttpRequestError:HttpRequestError.SecureConnectionError}=>"與網關的 TLS 握手未完成。請先檢查網絡，若持續失敗再核對網關證書。",
+                OperationCanceledException=>"等待網關響應超時，請檢查網絡和網關狀態。",
+                _=>"SafeCode 無法連接網關，請檢查網絡和網關地址。"
             };
             if(!launchProbe)connection.RequestError=reason;
             if(ctx.Response.HasStarted){ctx.Abort();return;}
@@ -434,7 +434,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private static JsonObject ParseProfileMeta(byte[]? data)
     {
         var meta=data!=null?JsonNode.Parse(data) as JsonObject:new JsonObject{["entries"]=new JsonArray(),["appliedId"]=""};
-        if(meta?["entries"] is not JsonArray)throw new IOException("Claude 配置列表无法读取。");
+        if(meta?["entries"] is not JsonArray)throw new IOException("Claude 配置列表無法讀取。");
         return meta;
     }
     private sealed record LegacyMacProfile(string Id,string Token,int Port);
@@ -485,7 +485,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private static string? ProfileText(JsonObject obj,string name)=>
         obj[name] is JsonValue value&&value.TryGetValue<string>(out var text)?text:null;
 
-    private Saved Load()=>JsonSerializer.Deserialize<Saved>(unprotect(File.ReadAllBytes(StatePath)),Json)??throw new IOException("无法读取保存的接入配置。");
+    private Saved Load()=>JsonSerializer.Deserialize<Saved>(unprotect(File.ReadAllBytes(StatePath)),Json)??throw new IOException("無法讀取儲存的接入配置。");
     private void Save(Saved value)
     {
         byte[] data=JsonSerializer.SerializeToUtf8Bytes(value,Json);
@@ -499,7 +499,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     {
         var entries=File.Exists(KeyListPath)
             ? JsonSerializer.Deserialize<List<KeyEntry>>(unprotect(File.ReadAllBytes(KeyListPath)),Json)
-                ?? throw new IOException("无法读取已保存的 Key。")
+                ?? throw new IOException("無法讀取已儲存的 Key。")
             : new List<KeyEntry>();
         if(Configured)
         {
@@ -521,7 +521,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         finally{CryptographicOperations.ZeroMemory(bytes);}
     }
     private static KeyEntry FindEntry(List<KeyEntry> entries,string id)=>
-        entries.FirstOrDefault(entry=>entry.Id==id)??throw new InvalidOperationException("找不到该 Key，请重新打开列表。");
+        entries.FirstOrDefault(entry=>entry.Id==id)??throw new InvalidOperationException("找不到該 Key，請重新開啟列表。");
 
     internal async Task<object> ListKeysAsync(CancellationToken ct)
     {
@@ -536,7 +536,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private static string KeyName(string name)
     {
         name=name.Trim();
-        if(name.Length is 0 or >64)throw new InvalidOperationException("请输入 1 至 64 个字符的 Key 名称。");
+        if(name.Length is 0 or >64)throw new InvalidOperationException("請輸入 1 至 64 個字符的 Key 名稱。");
         return name;
     }
     internal async Task RenameKeyAsync(string id,string name,CancellationToken ct)
@@ -575,7 +575,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var entries=ReadEntries();
             var item=FindEntry(entries,id);
             if(Configured&&Load().Remote==item.Remote)
-                throw new InvalidOperationException("请先切换到其他 Key 或停用当前接入。");
+                throw new InvalidOperationException("請先切換到其他 Key 或停用當前接入。");
             entries.Remove(item);
             WriteEntries(entries);
         }
@@ -598,8 +598,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
 
     private sealed record PolicyChange(PolicyValue? Before,PolicyValue? After);
     private string WindowsPolicyPath=>windowsPolicyPath??ClaudeDesktopPolicy.RegistryPath;
-    private const string WindowsPolicyPermissionMessage="Windows 拒绝访问 Claude Desktop 的本机策略。请先安全退出 Safe Code，再用当前 Windows 账户右键 Safe Code，选择「以管理员身份运行」后重试。若此账户没有管理员权限，或重试后仍失败，请联系管理员检查策略权限。";
-    private const string WindowsPolicyConflictMessage="Claude Desktop 现有管理策略与 Safe Code API 接入冲突，请先停用原管理配置。";
+    private const string WindowsPolicyPermissionMessage="Windows 拒絕訪問 Claude Desktop 的本機策略。請先安全退出 Safe Code，再用當前 Windows 帳戶右鍵 Safe Code，選擇「以管理員身份執行」後重試。若此帳戶沒有管理員權限，或重試後仍失敗，請聯繫管理員檢查策略權限。";
+    private const string WindowsPolicyConflictMessage="Claude Desktop 現有管理策略與 Safe Code API 接入衝突，請先停用原管理配置。";
 
     [SupportedOSPlatform("windows")]
     private (Dictionary<string,PolicyValue> Owned,Dictionary<string,PolicyChange> Changes) PlanWindowsPolicy(
@@ -677,7 +677,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     {
         if(OpenWindowsPolicy(Registry.CurrentUser,writable:true) is {} key)return key;
         using var created=Registry.CurrentUser.CreateSubKey(WindowsPolicyPath,RegistryKeyPermissionCheck.ReadSubTree);
-        return OpenWindowsPolicy(Registry.CurrentUser,writable:true)??throw new IOException("无法打开 Claude Desktop 本机策略。");
+        return OpenWindowsPolicy(Registry.CurrentUser,writable:true)??throw new IOException("無法開啟 Claude Desktop 本機策略。");
     }
 
     [SupportedOSPlatform("windows")]
@@ -694,7 +694,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 {
                     var (field,value)=change;
                     if(!MatchesPolicyValue(ReadPolicyValue(key,field),value.Before))
-                        throw new InvalidOperationException("Claude Desktop 策略已变更，请重试。");
+                        throw new InvalidOperationException("Claude Desktop 策略已變更，請重試。");
                     WritePolicyValue(key,field,value.After);
                     applied.Add(change);
                 }
@@ -798,7 +798,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             case null:
                 key.DeleteValue(field,false);
-                if(ReadPolicyValue(key,field)!=null)throw new UnauthorizedAccessException("无法删除本机策略字段。");
+                if(ReadPolicyValue(key,field)!=null)throw new UnauthorizedAccessException("無法刪除本機策略欄位。");
                 break;
             case {Kind:PolicyValueKind.DWord}:
                 key.SetValue(field,value.Number!.Value,RegistryValueKind.DWord);
@@ -832,11 +832,11 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         await gate.WaitAsync(ct);
         try
         {
-            if(!Configured||relay==null)throw new InvalidOperationException("请先启用 SafeCode 的 API Key 接入。");
+            if(!Configured||relay==null)throw new InvalidOperationException("請先啟用 SafeCode 的 API Key 接入。");
             var saved=Load();
             if(saved.UnbindPending)throw new InvalidOperationException(UnbindPendingMessage);
             if(relay.Port!=saved.Port)
-                throw new InvalidOperationException("本机网关连接已中断，请重新启用接入后再打开 Claude Desktop。");
+                throw new InvalidOperationException("本機網關連線已中斷，請重新啟用接入後再開啟 Claude Desktop。");
             var library=Library(saved);
             var profile=PrepareProfile(library,saved.Profile,saved.Port,saved.Local);
             await relay.Connection.CheckDeviceAsync(true,ct);
@@ -845,7 +845,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             if(OperatingSystem.IsWindows())
             {
                 if(PlanWindowsPolicy(profile,saved).Changes.Count!=0)
-                    throw new InvalidOperationException("Windows 网关策略已变更，请重新启用 SafeCode 接入。");
+                    throw new InvalidOperationException("Windows 網關策略已變更，請重新啟用 SafeCode 接入。");
                 WindowsLaunchPermissions().Enable();
             }
             return relay.StartedAt;
@@ -859,7 +859,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         var names=available.Select(row=>ProfileText(row!.AsObject(),"name")).ToHashSet(StringComparer.Ordinal);
         if(profile["inferenceModels"] is not JsonArray {Count:>0} configured ||
             configured.Any(row=>row is not JsonObject entry || !names.Contains(ProfileText(entry,"name"))))
-            throw new InvalidOperationException("Claude 配置里的模型已变更，请在 SafeCode 接入设置中刷新模型列表，再打开 Claude。");
+            throw new InvalidOperationException("Claude 配置裏的模型已變更，請在 SafeCode 接入設定中重新整理模型列表，再開啟 Claude。");
     }
 
     internal static async Task<JsonArray> CheckLaunchRouteAsync(int port,string bearer,CancellationToken ct)
@@ -873,27 +873,27 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             using var response=await client.SendAsync(request,ct);
             if(response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                throw new InvalidOperationException("模型查询被拒绝，请检查 Key 权限并重新启用 SafeCode 接入。");
+                throw new InvalidOperationException("模型查詢被拒絕，請檢查 Key 權限並重新啟用 SafeCode 接入。");
             if(!response.IsSuccessStatusCode)
-                throw new InvalidOperationException($"本机转发器查询网关模型时收到 HTTP {(int)response.StatusCode}。请检查 SafeCode 接入后重试。");
+                throw new InvalidOperationException($"本機轉發器查詢網關模型時收到 HTTP {(int)response.StatusCode}。請檢查 SafeCode 接入後重試。");
             var body=JsonNode.Parse(await response.Content.ReadAsStringAsync(ct));
             if(body is not JsonObject root || root["data"] is not JsonArray rows)
                 throw new JsonException();
             try{return ReadModelCatalog(rows).Models;}
-            catch(IOException e){throw new InvalidOperationException("网关没有返回可用的聊天模型，请检查 Key 的模型权限。",e);}
+            catch(IOException e){throw new InvalidOperationException("網關沒有返回可用的聊天模型，請檢查 Key 的模型權限。",e);}
             catch(Exception e) when(e is InvalidOperationException or FormatException or InvalidCastException){throw new JsonException("Invalid model",e);}
         }
-        catch(JsonException){throw new InvalidOperationException("网关返回的模型目录格式无效，请检查网关地址及登录页重定向。");}
+        catch(JsonException){throw new InvalidOperationException("網關返回的模型目錄格式無效，請檢查網關地址及登入頁重定向。");}
         catch(HttpRequestException)
-        {throw new InvalidOperationException("无法通过 SafeCode 本机转发器查询网关模型，请检查接入后重试。");}
+        {throw new InvalidOperationException("無法透過 SafeCode 本機轉發器查詢網關模型，請檢查接入後重試。");}
         catch(OperationCanceledException) when(!ct.IsCancellationRequested)
-        {throw new InvalidOperationException("通过 SafeCode 查询网关模型超时，请检查连接后重试。");}
+        {throw new InvalidOperationException("透過 SafeCode 查詢網關模型超時，請檢查連線後重試。");}
     }
 
     internal static JsonObject PrepareProfile(string library,string id,int port,string local)
     {
         if(ProfileText(ReadProfileMeta(library),"appliedId")!=id)
-            throw new InvalidOperationException("Claude Desktop 当前选中了其他配置。请重新启用 SafeCode 接入后再打开。");
+            throw new InvalidOperationException("Claude Desktop 當前選中了其他配置。請重新啟用 SafeCode 接入後再開啟。");
         var path=Path.Combine(library,id+".json");
         var profile=JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject;
         var credential=profile==null?null:ProfileText(profile,"inferenceGatewayApiKey");
@@ -902,7 +902,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             ProfileText(profile,"inferenceGatewayAuthScheme")!="bearer"||
             ProfileText(profile,"inferenceGatewayBaseUrl")!="http://127.0.0.1:"+port||
             (credential!=local && !(credential?.StartsWith("__sealed__:v1:",StringComparison.Ordinal)==true && credential.Length>14)))
-            throw new InvalidOperationException("Claude Desktop 接入配置已变更，请重新启用 SafeCode 接入。");
+            throw new InvalidOperationException("Claude Desktop 接入配置已變更，請重新啟用 SafeCode 接入。");
         if(ProfileText(profile,"codeDefaultPermissionMode")!="auto")
         {
             profile["codeDefaultPermissionMode"]="auto";
@@ -918,7 +918,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         if(profile?["autoModeClassifierModel"] is not JsonValue legacy ||
             !legacy.TryGetValue<string>(out var classifier) || profile["inferenceModels"] is not JsonArray models)return;
         var matches=models.Where(m=>(string?)m?["name"]==classifier).ToArray();
-        if(models.Count==matches.Length)throw new InvalidDataException("此配置缺少可用的聊天模型，请重新启用接入。");
+        if(models.Count==matches.Length)throw new InvalidDataException("此配置缺少可用的聊天模型，請重新啟用接入。");
         foreach(var match in matches)models.Remove(match);
         SetClassifier(profile,classifier);
         profile.Remove("autoModeClassifierModel");
@@ -939,8 +939,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     var saved=Load();
                     if(saved.UnbindPending)return Status();
                     return Status(saved.Device==null
-                        ?"旧接入未绑定本机设备。为防止把 VPS 目录误认为你的电脑，请重新启用并完成本机授权。"
-                        :"请重新启用本机远程控制，验证设备连接后恢复接入。");
+                        ?"舊接入未綁定本機裝置。為防止把 VPS 目錄誤認為你的電腦，請重新啟用並完成本機授權。"
+                        :"請重新啟用本機遠端控制，驗證裝置連線後恢復接入。");
                 }
                 catch(Exception error)
                 {
@@ -965,13 +965,13 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             var previous=Configured?Load():null;
             if(previous?.UnbindPending==true&&(savedId==""||FindEntry(ReadEntries(),savedId).Remote==previous.Remote))throw new InvalidOperationException(UnbindPendingMessage);
-            if(useSaved&&previous==null)throw new InvalidOperationException("没有保存的接入 Key，请输入新的 Key。");
-            if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("请使用「更换 Key」切换已保存的接入。");
+            if(useSaved&&previous==null)throw new InvalidOperationException("沒有儲存的接入 Key，請輸入新的 Key。");
+            if(previous!=null&&!replace&&!useSaved)throw new InvalidOperationException("請使用「更換 Key」切換已儲存的接入。");
             var t=verified?.Remote??(savedId.Length>0?FindEntry(ReadEntries(),savedId).Remote:useSaved?previous!.Remote:Ticket.Parse(code.Trim()));
             bool controlReady=verified?.HostSession==null?device!=null:device!=null&&hostReady?.Invoke()==true;
             if(verified!=null&&(!controlReady||replace!=verified.Replace||useSaved!=verified.UseSaved||
                useSaved&&t!=previous!.Remote))
-                throw new InvalidOperationException("接入配置已变更，请重新验证设备。");
+                throw new InvalidOperationException("接入配置已變更，請重新驗證裝置。");
             using var client=Remote(t);using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(45));
             var (models,classifier)=await FetchModelCatalogAsync(client,timeout.Token);
@@ -982,7 +982,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 {
                     if(deviceSession!=null&&await deviceSession.CanReuseHostControlForKeyAsync(t,timeout.Token))
                         return new DeviceSetup(t,replace,useSaved,null,deviceSession);
-                    throw new InvalidOperationException("请连接签发此 Key 的 VPS，恢复已授权的本机远程控制。");
+                    throw new InvalidOperationException("請連線簽發此 Key 的 VPS，恢復已授權的本機遠端控制。");
                 }
                 // The catalog response can close its TLS connection before device validation.
                 using var deviceClient=Remote(t);
@@ -990,10 +990,10 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 if(capability is {} available)
                 {
                     if(!available.TryGetProperty("httpsTunnel",out var tunnel)||tunnel.ValueKind!=JsonValueKind.True)
-                        throw new InvalidOperationException("此网关尚未支持通过 HTTPS 建立本机远程控制。");
+                        throw new InvalidOperationException("此網關尚未支援透過 HTTPS 建立本機遠端控制。");
                     return new DeviceSetup(t,replace,useSaved,priorDevice,Switching:savedId.Length>0&&previous!=null&&previous.Remote!=t);
                 }
-                if(priorDevice!=null)throw new InvalidOperationException("该 Key 的设备授权已不可用，请联系网关管理员。");
+                if(priorDevice!=null)throw new InvalidOperationException("該 Key 的裝置授權已不可用，請聯繫網關管理員。");
             }
             string lib=Library(previous),profileId=previous?.Profile??Guid.NewGuid().ToString();
             string metaPath=Path.Combine(lib,"_meta.json"),profilePath=Path.Combine(lib,profileId+".json");
@@ -1004,7 +1004,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             string applied=(string?)meta["appliedId"]??"";
             bool wasApplied=previous!=null&&applied==profileId;
             string local=previous?.Local??Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-            if(hostReady?.Invoke()==false)throw new InvalidOperationException("本机远程控制连接已中断，请重新验证。");
+            if(hostReady?.Invoke()==false)throw new InvalidOperationException("本機遠端控制連線已中斷，請重新驗證。");
             var next=await Listen(t,local,0,ct,device,hostReady,devicePath);
             Action? undoPolicy=null,undoLegacyPolicy=null;
             bool profileWritten=false,metaWritten=false;
@@ -1074,7 +1074,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         await gate.WaitAsync(ct);
         try
         {
-            if(relay==null||!Configured)throw new InvalidOperationException("请先启用 API Key 接入。");
+            if(relay==null||!Configured)throw new InvalidOperationException("請先啟用 API Key 接入。");
             var saved=Load();
             using var client=Remote(saved.Remote);
             using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -1086,7 +1086,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var profile=JsonNode.Parse(original) as JsonObject;
             if((string?)ReadProfileMeta(library)["appliedId"]!=saved.Profile||
                 (string?)profile?["inferenceGatewayBaseUrl"]!="http://127.0.0.1:"+saved.Port)
-                throw new InvalidOperationException("Claude Desktop 已切换接入配置，请重新启用 Safe Code API Key。");
+                throw new InvalidOperationException("Claude Desktop 已切換接入配置，請重新啟用 Safe Code API Key。");
 
             profile!["inferenceModels"]=models;
             profile.Remove("autoModeClassifierModel");
@@ -1122,10 +1122,10 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private static async Task<(JsonArray Models,string? Classifier)> FetchModelCatalogAsync(HttpClient client,CancellationToken ct)
     {
         using var response=await VerifyRemoteAsync(client,ct);
-        if(response.StatusCode==HttpStatusCode.Unauthorized)throw new InvalidOperationException("Key 无效、已过期或已撤销。");
+        if(response.StatusCode==HttpStatusCode.Unauthorized)throw new InvalidOperationException("Key 無效、已過期或已撤銷。");
         response.EnsureSuccessStatusCode();
         var catalog=JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))?["data"]?.AsArray()
-            ??throw new IOException("模型列表无效。");
+            ??throw new IOException("模型列表無效。");
         return ReadModelCatalog(catalog);
     }
 
@@ -1157,15 +1157,15 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 models.Add(workflow);
             }
         }
-        if(models.Count==0)throw new IOException("远端 CLI 未提供可用模型。");
+        if(models.Count==0)throw new IOException("遠端 CLI 未提供可用模型。");
         return (models,classifier);
     }
 
     private static bool IsProfileAccessError(Exception error)=>error is UnauthorizedAccessException or SecurityException or DirectoryNotFoundException or FileNotFoundException;
     private static Exception ProfileError(Exception error)=>error switch
     {
-        UnauthorizedAccessException or SecurityException=>new IOException("无法访问本机 Claude Desktop 或 Safe Code 的配置文件。请使用平时运行 Claude Desktop 的系统账户，并检查该账户的文件权限。",error),
-        DirectoryNotFoundException or FileNotFoundException=>new IOException("Claude Desktop 的本机配置位置已变更。请重新打开 Claude Desktop 后再试。",error),
+        UnauthorizedAccessException or SecurityException=>new IOException("無法訪問本機 Claude Desktop 或 Safe Code 的設定檔。請使用平時執行 Claude Desktop 的系統帳戶，並檢查該帳戶的檔案權限。",error),
+        DirectoryNotFoundException or FileNotFoundException=>new IOException("Claude Desktop 的本機配置位置已變更。請重新開啟 Claude Desktop 後再試。",error),
         _=>error
     };
 
@@ -1177,13 +1177,13 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable)
             {
                 response.Dispose();
-                throw new InvalidOperationException("这个 Key 的 VPS 尚未启用 CloudCLI 网关。请通过 SSH 进入 Safe Code 的公网网关，配置 CloudCLI 并升级 API 服务。");
+                throw new InvalidOperationException("這個 Key 的 VPS 尚未啟用 CloudCLI 網關。請透過 SSH 進入 Safe Code 的公網網關，配置 CloudCLI 並升級 API 服務。");
             }
             return response;
         }
         catch (HttpRequestException error) when (error.HttpRequestError == HttpRequestError.SecureConnectionError)
         {
-            throw new InvalidOperationException("无法与网关建立 TLS 连接。请核对公网 HTTPS 地址、转发端口和证书，必要时重新签发 Key。", error);
+            throw new InvalidOperationException("無法與網關建立 TLS 連線。請核對公網 HTTPS 地址、轉發連接埠和證書，必要時重新簽發 Key。", error);
         }
     }
     internal async Task<object> DisableAsync(CancellationToken ct)
@@ -1213,12 +1213,12 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                             new{action="revoke",binding.DeviceId,binding.DeviceProof},ct);
                         if(response.ValueKind!=JsonValueKind.Object||
                            !response.TryGetProperty("revoked",out var revoked)||revoked.ValueKind!=JsonValueKind.True)
-                            return Status("网关返回的解绑确认无效，请核对网关版本后重试。");
+                            return Status("網關返回的解綁確認無效，請核對網關版本後重試。");
                     }
                     catch(Exception error) when(error is IOException or HttpRequestException or InvalidOperationException
                                                 or OperationCanceledException or JsonException)
                     {
-                        return Status("解绑未确认："+error.Message);
+                        return Status("解綁未確認："+error.Message);
                     }
                 }
                 var lib=Library(s);

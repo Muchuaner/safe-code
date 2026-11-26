@@ -22,7 +22,7 @@ class MacHostProof(unittest.TestCase):
    self.assertEqual((pin.read_bytes(),pin.stat().st_mtime_ns),original_pin)
    check['port']=2049
    wrong=subprocess.run([sys.executable,'-I','-c',code],input=json.dumps(check),text=True,capture_output=True,env={**os.environ,'HOME':str(directory)})
-   self.assertNotEqual(wrong.returncode,0);self.assertIn('配置或指纹已变化',wrong.stderr)
+   self.assertNotEqual(wrong.returncode,0);self.assertIn('配置或指紋已變化',wrong.stderr)
    request['userSid']='macos:502'
    bad=subprocess.run([sys.executable,'-I','-c',code],input=json.dumps(request),text=True,capture_output=True,env={**os.environ,'HOME':str(directory)})
    self.assertNotEqual(bad.returncode,0);self.assertIn('macOS',bad.stderr)

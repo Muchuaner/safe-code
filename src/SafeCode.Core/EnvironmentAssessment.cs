@@ -16,10 +16,10 @@ public sealed partial class SshSession
         await environmentSampling.WaitAsync(ct);
         try
         {
-            if (client?.IsConnected != true) throw new InvalidOperationException("SSH 已断开，请重新连接。");
+            if (client?.IsConnected != true) throw new InvalidOperationException("SSH 已斷開，請重新連線。");
             if (environmentAssessment != null && DateTimeOffset.UtcNow - environmentChecked < TimeSpan.FromSeconds(environmentAssessment.RiskScore.HasValue ? 60 : 10)) return environmentAssessment;
             using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.environment_probe.py")
-                ?? throw new FileNotFoundException("缺少VPS环境检测模块。");
+                ?? throw new FileNotFoundException("缺少VPS環境檢測模組。");
             using var reader = new StreamReader(stream);
             string program = await reader.ReadToEndAsync(ct);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -28,11 +28,11 @@ public sealed partial class SshSession
             using var command = client.CreateCommand(prefix + "python3 -c " + Quote(program) + " " + Quote(Server?.Username ?? ""));
             command.CommandTimeout = TimeSpan.FromSeconds(25);
             await command.ExecuteAsync(timeout.Token);
-            if (command.ExitStatus != 0) throw new InvalidOperationException("VPS环境检测暂不可用。");
+            if (command.ExitStatus != 0) throw new InvalidOperationException("VPS環境檢測暫不可用。");
             var result = JsonSerializer.Deserialize<VpsEnvironmentAssessment>(command.Result, JsonDefaults.Options)
-                ?? throw new InvalidOperationException("VPS未返回环境检测结果。");
+                ?? throw new InvalidOperationException("VPS未返迴環境檢測結果。");
             if (result.RiskScore.HasValue && (result.RiskScore is < 0 or > 100 || result.Signals?.Length != 6 || result.Level is not ("low" or "medium" or "high")))
-                throw new InvalidOperationException("VPS环境检测结果不完整。");
+                throw new InvalidOperationException("VPS環境檢測結果不完整。");
             environmentAssessment = result;
             environmentChecked = DateTimeOffset.UtcNow;
             return result;

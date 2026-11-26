@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""验证过期事务清理、独立应用和持久化失败回退，不改宿主网络。"""
+"""驗證過期事務清理、獨立應用和持久化失敗回退，不改宿主網絡。"""
 import importlib.util,json,subprocess,tempfile,time,unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -49,7 +49,7 @@ class Transactions(unittest.TestCase):
     def test_applied_and_recent_records_are_not_discarded(self):
         for applied,age in [(False,20),(True,2000)]:
             path=self.state/('ip-pending-'+'b'*24+'.json');path.write_text(json.dumps({'created':time.time()-age,'applied':applied}))
-            with self.assertRaisesRegex(RuntimeError,'已有网络变更'):n.prepare(self.policy)
+            with self.assertRaisesRegex(RuntimeError,'已有網絡變更'):n.prepare(self.policy)
             self.assertTrue(path.exists());path.unlink()
     def test_scheduled_application_is_independent_and_waits_until_ready(self):
         token=n.prepare(self.policy)['token'];response=n.schedule_apply(token)
@@ -67,7 +67,7 @@ class Transactions(unittest.TestCase):
                 return run(args,*rest,**kwargs)
             with patch.object(n,'run',offline):
                 if locked:
-                    with self.assertRaisesRegex(n.PolicyError,'未能从外部确认出口'):n.commit(token)
+                    with self.assertRaisesRegex(n.PolicyError,'未能從外部確認出口'):n.commit(token)
                     self.assertTrue(n.rollback(token)['rolledBack'])
                 else:
                     result=n.commit(token)

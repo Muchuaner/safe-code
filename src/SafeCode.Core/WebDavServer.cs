@@ -9,7 +9,7 @@ using System.Xml.Linq;
 namespace SafeCode.Core;
 public sealed record MountMapping(string Local, string Remote);
 
-/// <summary>仅监听本机回环、带独立会话认证的 WebDAV 文件桥。远端经反向 SSH 隧道访问。</summary>
+/// <summary>僅監聽本機迴環、帶獨立會話認證的 WebDAV 檔案橋。遠端經反向 SSH 隧道訪問。</summary>
 public sealed record FileTransferStats(long BytesToServer,long BytesToLocal,long CompletedFiles,int ActiveTransfers);
 
 public sealed class WebDavServer : IDisposable
@@ -28,14 +28,14 @@ public sealed class WebDavServer : IDisposable
     public int Port => ((IPEndPoint)listener.LocalEndpoint).Port;
     public WebDavServer(IReadOnlyList<MountMapping> mappings,string? sessionPassword=null)
     {
-        if(sessionPassword!=null&&(sessionPassword.Length!=48||!sessionPassword.All(Uri.IsHexDigit)))throw new ArgumentException("文件通道会话凭据无效。");
+        if(sessionPassword!=null&&(sessionPassword.Length!=48||!sessionPassword.All(Uri.IsHexDigit)))throw new ArgumentException("檔案通道會話憑據無效。");
         Password=sessionPassword??Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
         roots = new Dictionary<string,string>(StringComparer.Ordinal);
         for (int i=0;i<mappings.Count;i++)
         {
             string path=Path.GetFullPath(mappings[i].Local);
-            if (!Directory.Exists(path)) throw new DirectoryNotFoundException("本地目录不存在："+path);
-            if ((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0) throw new IOException("请直接选择实际目录，不使用符号链接。");
+            if (!Directory.Exists(path)) throw new DirectoryNotFoundException("本地目錄不存在："+path);
+            if ((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0) throw new IOException("請直接選擇實際目錄，不使用符號連結。");
             roots["m"+i]=Path.TrimEndingDirectorySeparator(path);
         }
         authorization=Encoding.ASCII.GetBytes("Basic "+Convert.ToBase64String(Encoding.UTF8.GetBytes(Username+":"+Password)));
@@ -82,7 +82,7 @@ public sealed class WebDavServer : IDisposable
                 var resolved=Resolve(rawPath);string path=resolved.Path;
                 if(headers.GetValueOrDefault("Expect","").Equals("100-continue",StringComparison.OrdinalIgnoreCase))
                     await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 100 Continue\r\n\r\n"),token);
-                // 小型 XML 请求先读完，避免关闭时残留请求体导致连接重置。
+                // 小型 XML 請求先讀完，避免關閉時殘留請求體導致連線重設。
                 if(method!="PUT"&&contentLength>0)
                 {
                     if(contentLength>1024*1024){await Reply(stream,413,[]);return;}

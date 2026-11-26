@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在两组独立 Linux 网络命名空间中验证双 IP；不改宿主默认路由和防火墙。"""
+"""在兩組獨立 Linux 網絡命名空間中驗證雙 IP；不改宿主預設路由和防火牆。"""
 import importlib.util,json,subprocess,sys,time,uuid
 spec=importlib.util.spec_from_file_location('policy',sys.argv[1]);policy=importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
 tag=uuid.uuid4().hex[:6];server='sc-server-'+tag;peer='sc-peer-'+tag;v1='scs'+tag;v2='scp'+tag
@@ -32,13 +32,13 @@ HTTPServer(('0.0.0.0',int(__import__('sys').argv[1])),Handler).serve_forever()''
  time.sleep(.5)
  rules=policy.rules({'ingressIp':'198.18.237.11','egressIp':'198.18.237.12','lockIngress':True,'lockEgress':True,'sshPort':22337})
  inside(server,['nft','--check','--file','-'],stdin=rules);inside(server,['nft','--file','-'],stdin=rules)
- assert get(peer,'http://198.18.237.11:22337').returncode==0,'入口连接失败'
- assert get(peer,'http://198.18.237.12:22337').returncode!=0,'出口地址意外允许管理入站'
- assert get(server,'http://203.0.113.1:22336').stdout=='198.18.237.12','默认出口错误'
- assert get(server,'http://203.0.113.1:22336','198.18.237.11').returncode!=0,'显式绑定普通 IP 意外出站'
+ assert get(peer,'http://198.18.237.11:22337').returncode==0,'入口連線失敗'
+ assert get(peer,'http://198.18.237.12:22337').returncode!=0,'出口地址意外允許管理入站'
+ assert get(server,'http://203.0.113.1:22336').stdout=='198.18.237.12','預設出口錯誤'
+ assert get(server,'http://203.0.113.1:22336','198.18.237.11').returncode!=0,'顯式綁定普通 IP 意外出站'
  inside(server,['ip','addr','del','198.18.237.12/24','dev',v1])
  inside(server,['ip','route','replace','default','via','198.18.237.1','dev',v1,'src','198.18.237.11'])
- assert get(server,'http://203.0.113.1:22336').returncode!=0,'住宅出口缺失后回退到了普通 IP'
+ assert get(server,'http://203.0.113.1:22336').returncode!=0,'住宅出口缺失後回退到了普通 IP'
  print(json.dumps({'passed':True,'ingressOnly':True,'selectedEgressObserved':True,'alternateSourceBlocked':True,'missingEgressFailsClosed':True},ensure_ascii=False))
 finally:
  for p in children:

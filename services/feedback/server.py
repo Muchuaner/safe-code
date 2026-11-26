@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe Code 自建反馈与启动统计接口。仅监听回环，前置 HTTPS。"""
+"""Safe Code 自建回饋與啟動統計接口。僅監聽迴環，前置 HTTPS。"""
 import datetime as dt
 import hashlib
 import hmac
@@ -56,7 +56,7 @@ GATEWAY_STATUSES = {'httpStatus','gatewayStatus','cloudcliStatus','anthropicStat
 
 def validate_gateway(detail):
     if not isinstance(detail, dict) or not {'endpoint','platform','responseBytes','sseError'} <= detail.keys():
-        raise ValueError('网关诊断字段无效')
+        raise ValueError('網關診斷欄位無效')
     for key, value in detail.items():
         if key in GATEWAY_CHOICES:
             valid = isinstance(value, str) and value in GATEWAY_CHOICES[key]
@@ -73,46 +73,46 @@ def validate_gateway(detail):
         else:
             valid = False
         if not valid:
-            raise ValueError('网关诊断值无效')
+            raise ValueError('網關診斷值無效')
 
 
 def validate_diagnostic(report,extended=False, gateway=False):
     fields={'operation','outcome','errorKind','failureSite','durationSeconds','signals','omittedLines'}
     if extended:fields.add('stage')
     if gateway:fields.add('gateway')
-    if extended and (not isinstance(report,dict) or report.get('stage') not in SIGNALS|{'started'}):raise ValueError('诊断阶段无效')
-    if not isinstance(report,dict) or set(report)!=fields:raise ValueError('诊断字段不受支持')
+    if extended and (not isinstance(report,dict) or report.get('stage') not in SIGNALS|{'started'}):raise ValueError('診斷階段無效')
+    if not isinstance(report,dict) or set(report)!=fields:raise ValueError('診斷欄位不受支援')
     if gateway:
         if report['operation'] != 'desktop_key_request' or report['outcome'] != 'failure':
-            raise ValueError('网关详情只用于接入请求失败')
+            raise ValueError('網關詳情只用於接入請求失敗')
         validate_gateway(report['gateway'])
     operations=OPERATIONS if extended else LEGACY_OPERATIONS
     errors=ERRORS|RELAY_ERRORS if extended else ERRORS
     for key,allowed in [('operation',operations),('outcome',{'success','failure','cancelled'}),('errorKind',errors),('failureSite',SITES)]:
-        if not isinstance(report[key],str) or report[key] not in allowed:raise ValueError('诊断值不受支持')
-    if not extended and report['errorKind'] in {'ssh_auth_failed','ssh_timeout','ssh_connection_failed','network_error','json_invalid','mount_failed','mount_timeout','mount_target_invalid','deployment_busy'}:raise ValueError('旧版诊断错误码无效')
+        if not isinstance(report[key],str) or report[key] not in allowed:raise ValueError('診斷值不受支援')
+    if not extended and report['errorKind'] in {'ssh_auth_failed','ssh_timeout','ssh_connection_failed','network_error','json_invalid','mount_failed','mount_timeout','mount_target_invalid','deployment_busy'}:raise ValueError('舊版診斷錯誤碼無效')
     for key,maximum in [('durationSeconds',86400),('omittedLines',1000000)]:
-        if type(report[key]) is not int or not 0<=report[key]<=maximum:raise ValueError('诊断数值无效')
-    if (report['outcome']=='success')!=(report['errorKind']=='none'):raise ValueError('诊断结果不一致')
-    if not isinstance(report['signals'],list) or len(report['signals'])>64:raise ValueError('诊断日志数量无效')
+        if type(report[key]) is not int or not 0<=report[key]<=maximum:raise ValueError('診斷數值無效')
+    if (report['outcome']=='success')!=(report['errorKind']=='none'):raise ValueError('診斷結果不一致')
+    if not isinstance(report['signals'],list) or len(report['signals'])>64:raise ValueError('診斷日誌數量無效')
     signals=SIGNALS if extended else LEGACY_SIGNALS
     previous=0
     for signal in report['signals']:
-        if not isinstance(signal,dict) or set(signal)!={'seconds','code'}:raise ValueError('诊断日志字段无效')
-        if not isinstance(signal['code'],str) or signal['code'] not in signals:raise ValueError('诊断日志值无效')
-        if type(signal['seconds']) is not int or not previous<=signal['seconds']<=report['durationSeconds']:raise ValueError('诊断日志时间无效')
+        if not isinstance(signal,dict) or set(signal)!={'seconds','code'}:raise ValueError('診斷日誌欄位無效')
+        if not isinstance(signal['code'],str) or signal['code'] not in signals:raise ValueError('診斷日誌值無效')
+        if type(signal['seconds']) is not int or not previous<=signal['seconds']<=report['durationSeconds']:raise ValueError('診斷日誌時間無效')
         previous=signal['seconds']
 
 def validate_context(context):
-    if not isinstance(context,dict) or set(context)!={'installationId','sessionId','operationId'}:raise ValueError('关联字段无效')
+    if not isinstance(context,dict) or set(context)!={'installationId','sessionId','operationId'}:raise ValueError('關聯欄位無效')
     for value in context.values():
-        if not isinstance(value,str) or str(uuid.UUID(value))!=value:raise ValueError('关联编号无效')
+        if not isinstance(value,str) or str(uuid.UUID(value))!=value:raise ValueError('關聯編號無效')
 
 def validate_feedback_context(context,gateway=False):
     if context is None:return
-    if not isinstance(context,dict) or set(context)!={'correlation','report'}:raise ValueError('反馈关联字段无效')
+    if not isinstance(context,dict) or set(context)!={'correlation','report'}:raise ValueError('回饋關聯欄位無效')
     validate_context(context['correlation']);validate_diagnostic(context['report'],True,gateway)
-    if context['report']['outcome']!='failure':raise ValueError('反馈仅关联失败操作')
+    if context['report']['outcome']!='failure':raise ValueError('回饋僅關聯失敗操作')
 
 class Store:
     def __init__(self,path):
@@ -127,23 +127,23 @@ class Store:
         db=sqlite3.connect(self.path,timeout=5);db.execute('PRAGMA busy_timeout=5000');db.execute('PRAGMA max_page_count=32768');return db
     def insert(self,kind,data):
         required={'schema','eventId','version','installationId','os','eventType'} if kind=='usage' else {'schema','eventId','version','report'} if kind=='diagnostics' else {'schema','eventId','version','message'}
-        if not isinstance(data,dict):raise ValueError('字段不受支持')
+        if not isinstance(data,dict):raise ValueError('欄位不受支援')
         extended=type(data.get('schema')) is int and data['schema'] in (2,3) and kind in ['feedback','diagnostics']
         if extended:required.add('context')
-        if set(data)!=required or type(data.get('schema')) is not int or data['schema'] not in ([1,2,3] if kind in ['feedback','diagnostics'] else [1]):raise ValueError('字段不受支持')
+        if set(data)!=required or type(data.get('schema')) is not int or data['schema'] not in ([1,2,3] if kind in ['feedback','diagnostics'] else [1]):raise ValueError('欄位不受支援')
         if extended:
             if kind=='diagnostics':
                 validate_context(data['context'])
-                if data['context']['operationId']!=data['eventId']:raise ValueError('问题编号不一致')
+                if data['context']['operationId']!=data['eventId']:raise ValueError('問題編號不一致')
             else:validate_feedback_context(data['context'],data['schema']==3)
         for key in ['eventId']+(['installationId'] if kind=='usage' else []):
-            if not isinstance(data[key],str) or str(uuid.UUID(data[key]))!=data[key]:raise ValueError('标识格式错误')
-        if not isinstance(data['version'],str) or not VERSION.fullmatch(data['version']):raise ValueError('版本格式错误')
+            if not isinstance(data[key],str) or str(uuid.UUID(data[key]))!=data[key]:raise ValueError('標識格式錯誤')
+        if not isinstance(data['version'],str) or not VERSION.fullmatch(data['version']):raise ValueError('版本格式錯誤')
         now=dt.datetime.now(dt.timezone.utc);day=now.date().isoformat()
         if kind=='usage':
-            if data['os'] not in ['Windows','macOS'] or data['eventType']!='launch':raise ValueError('事件不受支持')
+            if data['os'] not in ['Windows','macOS'] or data['eventType']!='launch':raise ValueError('事件不受支援')
         elif kind=='diagnostics':validate_diagnostic(data['report'],extended,data['schema']==3)
-        elif not isinstance(data['message'],str) or not 5<=len(data['message'].strip())<=4000:raise ValueError('反馈长度无效')
+        elif not isinstance(data['message'],str) or not 5<=len(data['message'].strip())<=4000:raise ValueError('回饋長度無效')
         with self.connect() as db:
             db.execute('DELETE FROM usage WHERE day < ?',((now.date()-dt.timedelta(days=90)).isoformat(),))
             db.execute('DELETE FROM feedback WHERE created_at < ?',((now-dt.timedelta(days=180)).isoformat(),))
@@ -176,7 +176,7 @@ class Server(http.server.ThreadingHTTPServer):
     def process_request_thread(self,request,address):
         try:super().process_request_thread(request,address)
         finally:self.slots.release()
-    def handle_error(self,request,address):pass # 不输出来源地址、请求正文或用户反馈。
+    def handle_error(self,request,address):pass # 不輸出來源地址、請求正文或用戶回饋。
 
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version='SafeCodeFeedback';sys_version=''
@@ -188,7 +188,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path not in ['/v1/usage','/v1/feedback','/v1/diagnostics']:self.answer(404,{'error':'not_found'});return
         kind=self.path.rsplit('/',1)[1]
-        # 仅当来自回环反向代理时读取由代理覆盖的专用头，来源只在内存中限流。
+        # 僅當來自迴環反向代理時讀取由代理覆蓋的專用頭，來源只在記憶體中限流。
         address=self.headers.get('X-SafeCode-Client-IP',self.client_address[0]) if self.client_address[0] in ['127.0.0.1','::1'] else self.client_address[0]
         address=address or self.client_address[0]
         if len(address)>128 or not self.server.limiter.allow(address,kind):self.answer(429,{'error':'rate_limited'});return

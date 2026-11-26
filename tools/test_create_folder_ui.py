@@ -1,4 +1,4 @@
-"""检查创建空目录、自动选中、重复提交保护和守护状态，使用本地界面夹具。"""
+"""檢查建立空目錄、自動選中、重複提交保護和守護狀態，使用本地介面夾具。"""
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 root=Path(__file__).resolve().parent.parent
@@ -21,9 +21,9 @@ with sync_playwright() as p:
     ''')
     page.goto('https://safe-code.local/web/index.html');page.wait_for_function('window.safeCodeNativeReady')
     page.evaluate("showScreen('workspace')");page.evaluate("document.querySelector('#mount-settings').onclick()")
-    page.locator('[data-path=remote]').locator('..').get_by_role('button',name='选择目录').click()
+    page.locator('[data-path=remote]').locator('..').get_by_role('button',name='選擇目錄').click()
     page.wait_for_function("!document.querySelector('#folder-confirm').disabled")
-    assert page.locator('#folder-confirm').is_enabled(),'空目录不可选'
+    assert page.locator('#folder-confirm').is_enabled(),'空目錄不可選'
     page.locator('#folder-new').click();page.locator('#create-folder-name').fill('Project-2026 中文');page.locator('#create-folder-form [type=submit]').click()
     page.wait_for_function('window.createCalls.length===1')
     assert page.locator('#create-folder-form [type=submit]').is_disabled()
@@ -35,8 +35,8 @@ with sync_playwright() as p:
     page.wait_for_function("!document.querySelector('#remote-folder-dialog').open")
     assert page.locator('[data-path=remote]').input_value()=='/home/fixture/workspace/Project-2026 中文'
     page.locator('#close-mount').click()
-    page.evaluate("window.safeCodeMountStatus({count:2,state:'reconnecting',message:'保留缓存并重连'})")
-    assert '重连中' in page.locator('#mount-guard-status').inner_text()
+    page.evaluate("window.safeCodeMountStatus({count:2,state:'reconnecting',message:'保留快取並重連'})")
+    assert '重連中' in page.locator('#mount-guard-status').inner_text()
     assert page.locator('#mount-guard-status').evaluate('(el)=>el.getBoundingClientRect().right<=innerWidth')
     assert not errors,errors
     (root/'.local/evidence').mkdir(exist_ok=True);page.screenshot(path=str(root/'.local/evidence/mount-guard-status.png'))

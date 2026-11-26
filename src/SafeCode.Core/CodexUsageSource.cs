@@ -19,8 +19,8 @@ public sealed class CodexTrackedFile
 }
 
 /// <summary>
-/// 只读本机 Codex 会话 JSONL 的 token_count 元数据，且只认 Safe Code 的 model_provider。
-/// 不读取正文，不通过 SSH 扫描远端；由后台低频调用。
+/// 只讀本機 Codex 會話 JSONL 的 token_count 元數據，且只認 Safe Code 的 model_provider。
+/// 不讀取正文，不透過 SSH 掃描遠端；由背景低頻調用。
 /// </summary>
 public sealed class CodexUsageSource
 {
@@ -45,8 +45,8 @@ public sealed class CodexUsageSource
     public bool Available=>providerFilesSeen;
     public string? Error=>error;
     public IntegrationUsage Snapshot()=>providerFilesSeen
-        ?ledger.Snapshot("本机 Codex 会话 token_count（仅 Safe Code 供应商）")
-        :IntegrationUsage.Unavailable(error??"未发现 Safe Code 供应商的 Codex 会话用量");
+        ?ledger.Snapshot("本機 Codex 會話 token_count（僅 Safe Code 供應商）")
+        :IntegrationUsage.Unavailable(error??"未發現 Safe Code 供應商的 Codex 會話用量");
     public CodexUsageState Export()=>new(){Initialized=true,Sessions=ledger.ExportSessions(),Counted=ledger.ExportCounted(),Files=files.ToDictionary(pair=>pair.Key,pair=>new CodexTrackedFile{SessionId=pair.Value.SessionId,Offset=pair.Value.Offset,Length=pair.Value.Length})};
     public async Task InitializeAsync(CancellationToken ct=default)
     {
@@ -71,7 +71,7 @@ public sealed class CodexUsageSource
     }
     public async Task SampleAsync(CancellationToken ct=default)
     {
-        if(!Directory.Exists(sessionsRoot)){error="未找到本机 Codex 会话目录";return;}
+        if(!Directory.Exists(sessionsRoot)){error="未找到本機 Codex 會話目錄";return;}
         try
         {
             var since=startedAt.AddMinutes(-2);
@@ -101,7 +101,7 @@ public sealed class CodexUsageSource
                 await ReadNewLinesAsync(path,tracked,ct);
             }
         }
-        catch(Exception exception)when(exception is IOException or UnauthorizedAccessException){error="读取本机 Codex 会话用量失败";}
+        catch(Exception exception)when(exception is IOException or UnauthorizedAccessException){error="讀取本機 Codex 會話用量失敗";}
     }
     private IEnumerable<string> EnumerateCandidates(DateTimeOffset since)
     {
@@ -115,7 +115,7 @@ public sealed class CodexUsageSource
     private IEnumerable<string> EnumerateRecent(DateTimeOffset since)
     {
         if(!Directory.Exists(sessionsRoot))yield break;
-        // 只扫接入会话覆盖的日期目录，避免每次轮询遍历全部历史。
+        // 只掃接入會話覆蓋的日期目錄，避免每次輪詢遍歷全部歷史。
         for(var day=since.LocalDateTime.Date;day<=DateTime.Today;day=day.AddDays(1))
         {
             string directory=SessionDateFolder(sessionsRoot,day);
@@ -170,13 +170,13 @@ public sealed class CodexUsageSource
         {
             long length=stream.Length;long available=length-offset;if(available<=0)return;
             if(available>8*1024*1024){offset=length-8*1024*1024;available=length-offset;tracked.Offset=offset;}
-            if(available>int.MaxValue)throw new IOException("会话文件增量过大。");
+            if(available>int.MaxValue)throw new IOException("會話檔案增量過大。");
             bytes=new byte[(int)available];stream.Seek(offset,SeekOrigin.Begin);
             int read=0;while(read<bytes.Length){int n=await stream.ReadAsync(bytes.AsMemory(read,bytes.Length-read),ct);if(n==0)break;read+=n;}
             tracked.Length=length;if(read<bytes.Length)Array.Resize(ref bytes,read);
         }
         int end=-1;for(int i=bytes.Length-1;i>=0;i--)if(bytes[i]==(byte)'\n'){end=i;break;}
-        if(end<0)return; // 半行留在原文件，持久 offset 仍停在完整行边界，重启后重读。
+        if(end<0)return; // 半行留在原檔案，持久 offset 仍停在完整行邊界，重新啟動後重讀。
         tracked.Offset=offset+end+1;
         string complete=Encoding.UTF8.GetString(bytes,0,end+1);
         foreach(string line in complete.Split('\n'))

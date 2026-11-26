@@ -21,7 +21,7 @@ window.usageLookups = 0;
 window.originMissing = false;
 window.failModelCatalog = false;
 window.addFixtureKey = () => {
-  const key = {id: String(window.activeKeys.length + 1).padStart(64, '0'), note: '测试密钥',
+  const key = {id: String(window.activeKeys.length + 1).padStart(64, '0'), note: '測試密鑰',
     enabled: true, requests: 0, tokens: 0, rpm: 0, cost_nanos: 14616700000, unpriced_tokens: 10};
   window.activeKeys.push(key);
   return key;
@@ -39,7 +39,7 @@ window.chrome = {webview: {postMessage({id, op, args}) {
     window.usageLookups++;
     result = {state: 'available', windows: {five_hour: {used: 23.5}, seven_day: {used: 92}}};
   } else if (args.action === 'model_catalog') {
-    if (window.failModelCatalog) error = '模拟目录读取失败。';
+    if (window.failModelCatalog) error = '模擬目錄讀取失敗。';
     else result = {models: [
       {id: 'fable', name: 'Fable 5'}, {id: 'sonnet', name: 'Sonnet 5.5'},
       {id: 'opus[1m]', name: 'Opus 5.5 (1M)'}, {id: 'haiku', name: 'Haiku 5.5'},
@@ -50,13 +50,13 @@ window.chrome = {webview: {postMessage({id, op, args}) {
     window.concurrency = args.concurrency;
     result = {concurrency: window.concurrency};
   } else if (args.action === 'issue' && window.originMissing) {
-    error = '未识别到 VPS 的公网 IP。请使用 VPS 公网 IP 重新建立 SSH 连接。';
+    error = '未識別到 VPS 的公網 IP。請使用 VPS 公網 IP 重新建立 SSH 連線。';
   } else if (args.action === 'issue') {
     window.issues.push(args);
     if (window.activeKeys.some(key => key.enabled) && args.activation_code !== 'fixture-code') {
-      error = '添加更多 API Key 需要正确的激活码。';
+      error = '添加更多 API Key 需要正確的啟用碼。';
     } else {
-      const key = Object.assign(window.addFixtureKey(), {note: args.note || '测试密钥',
+      const key = Object.assign(window.addFixtureKey(), {note: args.note || '測試密鑰',
         allowed_models: args.allowed_models, expires_at: args.expires_at});
       result = {...key, ticket: 'sc2.fixture'};
     }
@@ -109,7 +109,7 @@ def test_gateway_activation():
             save = page.locator('#save-key')
             editor = page.locator('#key-editor')
             field = page.locator('#activation-field')
-            code = page.get_by_label('激活码', exact=True)
+            code = page.get_by_label('啟用碼', exact=True)
             issue_dialog = page.locator('#issued-dialog')
 
             quota = page.locator('#gateway-claude-limits')
@@ -119,24 +119,24 @@ def test_gateway_activation():
             page.locator('#refresh').click()
             expect(page.locator('#refresh')).to_be_enabled()
             assert page.evaluate('window.usageLookups') == 1
-            quota.get_by_role('button', name='查询 Claude 用量').click()
+            quota.get_by_role('button', name='查詢 Claude 用量').click()
             page.wait_for_function('window.usageLookups === 2')
 
             slots = page.locator('#gateway-concurrency')
-            expect(slots).to_have_text('处理槽位 1')
+            expect(slots).to_have_text('處理槽位 1')
             slots.click()
             slot_value = page.locator('#concurrency-value')
             save_slots = page.locator('#save-concurrency')
             expect(slot_value).to_have_value('1')
             slot_value.fill('0')
             save_slots.click()
-            expect(slots).to_have_text('处理槽位 不限')
+            expect(slots).to_have_text('處理槽位 不限')
             expect(page.locator('#queue-capacity')).to_be_hidden()
             slots.click()
             slot_value.fill('30')
             save_slots.click()
-            expect(slots).to_have_text('处理槽位 30')
-            expect(page.locator('#queue-waiting')).to_have_text('并发 2/30 · 排队 0')
+            expect(slots).to_have_text('處理槽位 30')
+            expect(page.locator('#queue-waiting')).to_have_text('併發 2/30 · 排隊 0')
 
             create.click()
             expect(field).to_be_hidden()
@@ -153,7 +153,7 @@ def test_gateway_activation():
             note.fill('保留草稿')
             code.fill('fixture-code')
             save.click()
-            expect(page.locator('#editor-status')).to_contain_text('未识别到 VPS 的公网 IP')
+            expect(page.locator('#editor-status')).to_contain_text('未識別到 VPS 的公網 IP')
             expect(page.locator('#settings-dialog, #editor-gateway-settings')).to_have_count(0)
             expect(note).to_have_value('保留草稿')
             expect(save).to_be_enabled()
@@ -177,13 +177,13 @@ def test_gateway_activation():
             expect(code).to_have_attribute('type', 'password')
             expect(code).to_have_attribute('required', '')
             expect(code).to_have_value('')
-            link = editor.get_by_role('link', name='关注主播')
+            link = editor.get_by_role('link', name='關注主播')
             expect(link).to_have_attribute('href', CREATOR_URL)
             save.click()
             assert page.evaluate('issues.length') == 1
             code.fill('wrong-fixture')
             save.click()
-            expect(page.locator('#editor-status')).to_have_text('添加更多 API Key 需要正确的激活码。')
+            expect(page.locator('#editor-status')).to_have_text('添加更多 API Key 需要正確的啟用碼。')
             expect(code).to_be_focused()
             expect(save).to_be_enabled()
             assert page.evaluate('issues.at(-1).activation_code') == 'wrong-fixture'
@@ -194,27 +194,27 @@ def test_gateway_activation():
             issue_dialog.get_by_role('button', name='完成').click()
             expect(code).to_have_value('')
 
-            page.get_by_role('button', name='编辑', exact=True).first.click()
+            page.get_by_role('button', name='編輯', exact=True).first.click()
             expect(field).to_be_hidden()
             save.click()
             expect(editor).to_be_hidden()
             assert 'activation_code' not in page.evaluate('updates.at(-1)')
 
-            expect(page.get_by_text('未计价')).to_have_count(0)
+            expect(page.get_by_text('未計價')).to_have_count(0)
             expect(page.get_by_text('$14.6167', exact=False).first).to_be_visible()
-            expect(page.get_by_role('button', name='彻底删除')).to_have_count(0)
-            page.evaluate("Object.assign(window.addFixtureKey(), {note: '待删除密钥', enabled: false})")
+            expect(page.get_by_role('button', name='徹底刪除')).to_have_count(0)
+            page.evaluate("Object.assign(window.addFixtureKey(), {note: '待刪除密鑰', enabled: false})")
             page.locator('#refresh').click()
-            delete_row = page.get_by_role('row').filter(has_text='待删除密钥')
+            delete_row = page.get_by_role('row').filter(has_text='待刪除密鑰')
             delete_dialog = page.locator('#revoke-dialog')
-            delete_row.get_by_role('button', name='彻底删除').click()
-            expect(delete_dialog).to_contain_text('此操作无法撤销')
+            delete_row.get_by_role('button', name='徹底刪除').click()
+            expect(delete_dialog).to_contain_text('此操作無法撤銷')
             cancel = delete_dialog.get_by_role('button', name='取消')
             expect(cancel).to_be_focused()
             cancel.click()
             expect(delete_row).to_be_visible()
-            delete_row.get_by_role('button', name='彻底删除').click()
-            delete_dialog.get_by_role('button', name='彻底删除').click()
+            delete_row.get_by_role('button', name='徹底刪除').click()
+            delete_dialog.get_by_role('button', name='徹底刪除').click()
             expect(delete_row).to_have_count(0)
 
             page.evaluate('window.activeKeys.forEach(key => key.enabled = false)')
@@ -224,7 +224,7 @@ def test_gateway_activation():
             expect(field).to_be_hidden()
             page.evaluate('window.addFixtureKey()')
             save.click()
-            expect(page.locator('#editor-status')).to_have_text('添加更多 API Key 需要正确的激活码。')
+            expect(page.locator('#editor-status')).to_have_text('添加更多 API Key 需要正確的啟用碼。')
             expect(field).to_be_visible()
             expect(code).to_be_focused()
             assert 'activation_code' not in page.evaluate('issues.at(-1)')
@@ -256,28 +256,28 @@ def test_key_policy(screenshots=None):
         save = page.locator('#save-key')
         editor = page.locator('#key-editor')
         model = page.get_by_label('模型管理', exact=True)
-        expiry = page.get_by_label('失效时间', exact=True)
+        expiry = page.get_by_label('失效時間', exact=True)
         date = page.locator('#key-expiry')
         create.click()
         expect(model).to_have_value('all')
         expect(expiry).to_have_value('never')
         expect(date).to_be_hidden()
         capture('01-key-defaults')
-        page.locator('#note').fill('个人工作站')
+        page.locator('#note').fill('個人工作站')
         save.click()
         page.locator('#issued-dialog').get_by_role('button', name='完成').click()
-        expect(page.get_by_role('row').filter(has_text='个人工作站')).to_contain_text('永不过期')
+        expect(page.get_by_role('row').filter(has_text='個人工作站')).to_contain_text('永不過期')
 
-        page.evaluate("""Object.assign(addFixtureKey(), {note:'团队体验 Key'});
-            Object.assign(addFixtureKey(), {note:'短期演示 Key', expires_at:1763769600, expired:true,
+        page.evaluate("""Object.assign(addFixtureKey(), {note:'團隊體驗 Key'});
+            Object.assign(addFixtureKey(), {note:'短期示範 Key', expires_at:1763769600, expired:true,
                 allowed_models:['haiku']});window.failModelCatalog = true""")
         page.locator('#refresh').click()
-        team = page.get_by_role('row').filter(has_text='团队体验 Key')
-        team.get_by_role('button', name='编辑').click()
+        team = page.get_by_role('row').filter(has_text='團隊體驗 Key')
+        team.get_by_role('button', name='編輯').click()
         model.select_option('selected')
-        expect(page.locator('#model-status')).to_contain_text('模拟目录读取失败')
+        expect(page.locator('#model-status')).to_contain_text('模擬目錄讀取失敗')
         save.click()
-        expect(page.locator('#editor-status')).to_have_text('请至少选择一个允许使用的模型。')
+        expect(page.locator('#editor-status')).to_have_text('請至少選擇一個允許使用的模型。')
         assert page.evaluate('updates.length') == 0
         page.evaluate('window.failModelCatalog = false')
         page.locator('#reload-models').click()
@@ -287,16 +287,16 @@ def test_key_policy(screenshots=None):
         expiry.select_option('scheduled')
         date.fill('2026-11-22T12:00')
         save.click()
-        expect(page.locator('#editor-status')).to_have_text('请选择晚于现在的失效时间。')
+        expect(page.locator('#editor-status')).to_have_text('請選擇晚於現在的失效時間。')
         date.fill('2026-12-06T18:00')
         save.click()
         expect(editor).to_be_hidden()
         assert page.evaluate('updates.at(-1).allowed_models') == ['fable', 'sonnet']
         assert page.evaluate('updates.at(-1).expires_at') == int(datetime(2026, 12, 6, 10, tzinfo=timezone.utc).timestamp())
-        expect(team).to_contain_text('2 个模型')
-        expect(page.get_by_role('row').filter(has_text='短期演示 Key')).to_contain_text('已过期')
+        expect(team).to_contain_text('2 個模型')
+        expect(page.get_by_role('row').filter(has_text='短期示範 Key')).to_contain_text('已過期')
         capture('03-key-policy-list')
-        team.get_by_role('button', name='编辑').click()
+        team.get_by_role('button', name='編輯').click()
         expect(page.locator('input[value="sonnet"]')).to_be_checked()
         expect(date).to_have_value('2026-12-06T18:00')
         expect(page.locator('#model-status')).to_be_hidden()
@@ -312,10 +312,10 @@ def test_key_policy(screenshots=None):
         expect(editor).to_be_hidden()
         page.set_viewport_size({'width': 1040, 'height': 760})
         page.locator('#key-filter').select_option('expired')
-        expired = page.get_by_role('row').filter(has_text='短期演示 Key')
+        expired = page.get_by_role('row').filter(has_text='短期示範 Key')
         expect(expired).to_be_visible()
         expect(team).to_have_count(0)
-        expired.get_by_role('button', name='编辑').click()
+        expired.get_by_role('button', name='編輯').click()
         expiry.select_option('never')
         model.select_option('all')
         save.click()

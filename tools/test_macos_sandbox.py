@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix='safe-code-sandbox-') as d:
   raise TimeoutError(op)
  try:
   for op in ['connect','connection.reauthenticate','deploy','mount.apply','host.enable','bridge.start','desktopKey.enable','safeCodeApi.install','safeCodeApi.enablePublic','claudeDesktop.start','claudeDesktop.stop','cloud.open','ip.apply','terminal','desktop','feedback.send','updates.download','updates.install','ip.info']:
-   reply=rpc(op,{'host':'production.invalid','username':'fixture','password':'fixture-only'});assert '隔离预览' in reply['error'],(op,reply)
+   reply=rpc(op,{'host':'production.invalid','username':'fixture','password':'fixture-only'});assert '隔離預覽' in reply['error'],(op,reply)
   prefs=rpc('services.preferences')['result']
   assert not prefs['enabled'] and not prefs['diagnosticsEnabled'] and not prefs['serviceAvailable']
   assert rpc('services.consent',{'enabled':True})['result']['enabled']

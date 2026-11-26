@@ -42,8 +42,8 @@ public sealed partial class SshSession : IDisposable
     public async Task<ServerInfo> ConnectAsync(ConnectionSettings settings, Func<HostKeyInfo, bool> confirmHost, CancellationToken cancellationToken = default)
     {
         if (Uri.CheckHostName(settings.Host) == UriHostNameType.Unknown || settings.Port is < 1 or > 65535)
-            throw new ArgumentException("服务器地址或端口无效。");
-        if (!Regex.IsMatch(settings.Username, @"^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}$")) throw new ArgumentException("用户名格式无效。");
+            throw new ArgumentException("伺服器地址或連接埠無效。");
+        if (!Regex.IsMatch(settings.Username, @"^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}$")) throw new ArgumentException("用戶名格式無效。");
         connection = settings;
         var info = new PasswordConnectionInfo(settings.Host, settings.Port, settings.Username, settings.Password) { Timeout = SshConnectTimeout, RetryAttempts = 2 };
         client = new MountSshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(20) };
@@ -64,29 +64,29 @@ public sealed partial class SshSession : IDisposable
         try
         {
             await client.ConnectAsync(cancellationToken);
-            Log?.Invoke("SSH 认证成功，检查操作系统…");
+            Log?.Invoke("SSH 認證成功，檢查作業系統…");
             string osRelease;
             try{osRelease=await ExecuteTextAsync("cat /etc/os-release", cancellationToken);}
-            catch(InvalidOperationException){throw new UnsupportedOsException("无法安装环境：未能识别为 Ubuntu，请确认系统类型并检查连接；未写入部署文件。");}
-            Log?.Invoke("操作系统信息已读取。");
+            catch(InvalidOperationException){throw new UnsupportedOsException("無法安裝環境：未能識別為 Ubuntu，請確認系統類型並檢查連線；未寫入部署檔案。");}
+            Log?.Invoke("作業系統資訊已讀取。");
             if (!ParseOsRelease(osRelease).TryGetValue("ID", out var id) || id != "ubuntu")
-                throw new UnsupportedOsException("无法安装环境：本软件仅支持 Ubuntu。当前服务器未通过系统检查，未写入任何部署文件。");
+                throw new UnsupportedOsException("無法安裝環境：本軟件僅支援 Ubuntu。當前伺服器未通過系統檢查，未寫入任何部署檔案。");
             string uid = (await ExecuteTextAsync("id -u", cancellationToken)).Trim();
             if (uid != "0")
             {
                 try{await ExecuteTextAsync("sudo -n true", cancellationToken);}
-                catch(InvalidOperationException){throw new InvalidOperationException("此账户没有免密 sudo 安装权限，请使用 root 或配置免密 sudo 后重新连接。");}
+                catch(InvalidOperationException){throw new InvalidOperationException("此帳戶沒有免密 sudo 安裝權限，請使用 root 或配置免密 sudo 後重新連線。");}
                 prefix = "sudo -n ";
             }
             remoteDirectory = (await ExecuteTextAsync("mktemp -d /tmp/safe-code.XXXXXXXX", cancellationToken)).Trim();
-            Log?.Invoke("准备远端部署模块…");
+            Log?.Invoke("準備遠端部署模組…");
             using var sftp = MakeSftp(); await sftp.ConnectAsync(cancellationToken);
             await UploadManagementModulesAsync(sftp, remoteDirectory, cancellationToken);
             WriteKnownHost();
-            Log?.Invoke("部署模块已就绪，检查服务器环境…");
+            Log?.Invoke("部署模組已就緒，檢查伺服器環境…");
             Server = await RequestAsync<ServerInfo>("inspect", null, cancellationToken);
-            Log?.Invoke("检测服务器实际出口 IP…");
-            try{observedEgressIp=(await RequestAsync<EgressProbe>("egress_probe",null,cancellationToken)).Ip;Server.ObservedEgressIp=observedEgressIp;}catch{Log?.Invoke("出口 IP 暂未确认，可在进阶设置中选择。");}
+            Log?.Invoke("檢測伺服器實際出口 IP…");
+            try{observedEgressIp=(await RequestAsync<EgressProbe>("egress_probe",null,cancellationToken)).Ip;Server.ObservedEgressIp=observedEgressIp;}catch{Log?.Invoke("出口 IP 暫未確認，可在進階設定中選擇。");}
             return Server;
         }
         catch { DisposeMountResource(client); client = null;if(trustRequired!=null)throw trustRequired;throw; }
@@ -98,7 +98,7 @@ public sealed partial class SshSession : IDisposable
         foreach (var name in new[] { "agent.py", "network.py", "socks_egress.py" })
         {
             using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote." + name)
-                ?? throw new FileNotFoundException("缺少 Ubuntu 部署模块。", name);
+                ?? throw new FileNotFoundException("缺少 Ubuntu 部署模組。", name);
             string path = directory + "/" + name;
             await sftp.UploadFileAsync(resource, path, ct);
             sftp.ChangePermissions(path, 600);
@@ -113,7 +113,7 @@ public sealed partial class SshSession : IDisposable
 
     public async Task<ServerInfo> SetSocksEgressAsync(string? proxyUrl, CancellationToken ct = default)
     {
-        var server = Server ?? throw new InvalidOperationException("尚未连接服务器。");
+        var server = Server ?? throw new InvalidOperationException("尚未連接伺服器。");
         var status = proxyUrl == null
             ? await RequestAsync<SocksEgressStatus>("socks_disable", null, ct)
             : await RequestAsync<SocksEgressStatus>("socks_enable", new { proxyUrl }, ct);
@@ -122,7 +122,7 @@ public sealed partial class SshSession : IDisposable
         if (!status.Enabled)
         {
             try { observedEgressIp = (await RequestAsync<EgressProbe>("egress_probe", null, ct)).Ip; }
-            catch (RemoteOperationException) { Log?.Invoke("出口 IP 暂未确认。"); }
+            catch (RemoteOperationException) { Log?.Invoke("出口 IP 暫未確認。"); }
         }
         server.ObservedEgressIp = observedEgressIp;
         return server;
@@ -144,7 +144,7 @@ public sealed partial class SshSession : IDisposable
     }
     private SftpClient MakeSftp(ConnectionSettings? settings = null)
     {
-        settings ??= connection ?? throw new InvalidOperationException("尚未连接服务器。");
+        settings ??= connection ?? throw new InvalidOperationException("尚未連接伺服器。");
         var sftp = new SftpClient(settings.Host, settings.Port, settings.Username, settings.Password);
         PinHostKeyAlgorithms(sftp.ConnectionInfo);
         sftp.HostKeyReceived += (_, e) => e.CanTrust = trustedKey != null && CryptographicOperations.FixedTimeEquals(trustedKey, e.HostKey);
@@ -152,7 +152,7 @@ public sealed partial class SshSession : IDisposable
     }
     public async Task<string> ExecuteTextAsync(string text, CancellationToken ct = default)
     {
-        if (client == null) throw new InvalidOperationException("服务器未连接。");
+        if (client == null) throw new InvalidOperationException("伺服器未連線。");
         using var command = client.CreateCommand(text); command.CommandTimeout = TimeSpan.FromMinutes(45);
         await command.ExecuteAsync(ct);
         if (command.ExitStatus != 0) throw new InvalidOperationException((command.Error + "\n" + command.Result).Trim());
@@ -160,14 +160,14 @@ public sealed partial class SshSession : IDisposable
     }
     public async Task<JsonElement> ListDirectoriesAsync(string path,CancellationToken ct=default)
     {
-        if(client?.IsConnected!=true)throw new InvalidOperationException("SSH 已断开，请重新连接。");
+        if(client?.IsConnected!=true)throw new InvalidOperationException("SSH 已斷開，請重新連線。");
         string options=Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{path},JsonDefaults.Options)));
         using var command=client.CreateCommand(prefix+"python3 -u "+Quote(remoteDirectory+"/agent.py")+" --list-directories "+Quote(options));
         command.CommandTimeout=TimeSpan.FromSeconds(10);
         var executing=command.ExecuteAsync(ct);
         var output=Task.Run(async()=>{using var reader=new StreamReader(command.OutputStream,Encoding.UTF8);string? result=null;while(await reader.ReadLineAsync(ct) is {} line){if(line.StartsWith("SC_RESULT:"))result=line[10..];else if(line.StartsWith("SC_ERROR:"))throw new InvalidOperationException(line[9..]);else DirectoryLog?.Invoke(line);}return result;},ct);
         await executing;string? json=await output;
-        if(command.ExitStatus!=0||json==null)throw new InvalidOperationException("无法读取服务器目录，请重试。");
+        if(command.ExitStatus!=0||json==null)throw new InvalidOperationException("無法讀取伺服器目錄，請重試。");
         return JsonSerializer.Deserialize<JsonElement>(json,JsonDefaults.Options);
     }
     public Task<JsonElement> CreateDirectoryAsync(string path,string name,CancellationToken ct=default)=>RequestAsync<JsonElement>("create_directory",new{path,name},ct);
@@ -176,18 +176,18 @@ public sealed partial class SshSession : IDisposable
     {
         var status = await ReadPublicGatewayAsync(false, ct);
         if (!status.TryGetProperty("enabled", out var enabled) || enabled.ValueKind != JsonValueKind.True)
-            throw new InvalidOperationException("请先在 Safe Code 的公网网关设置中点击「启用」。");
+            throw new InvalidOperationException("請先在 Safe Code 的公網網關設定中點擊「啟用」。");
     }
 
     public async Task<T> RequestAsync<T>(string operation, object? options = null, CancellationToken ct = default)
     {
-        Log?.Invoke("正在等待任务通道…");
+        Log?.Invoke("正在等待任務通道…");
         await operations.WaitAsync(ct);
-        Log?.Invoke("正在建立服务器任务通道…");
+        Log?.Invoke("正在建立伺服器任務通道…");
         string requestPath = remoteDirectory + "/request-" + Guid.NewGuid().ToString("N") + ".json";
         try
         {
-            if (client?.IsConnected != true) throw new InvalidOperationException("SSH 连接已断开，请重新连接。");
+            if (client?.IsConnected != true) throw new InvalidOperationException("SSH 連線已斷開，請重新連線。");
             using (var sftp = MakeSftp())
             {
                 if (operation is "safe_code_api" or "safe_code_api_repair") sftp.OperationTimeout = TimeSpan.FromSeconds(12);
@@ -195,7 +195,7 @@ public sealed partial class SshSession : IDisposable
                 using var bytes = new MemoryStream(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { op = operation, options, background = IsLongOperation(operation) }, JsonDefaults.Options)));
                 await sftp.UploadFileAsync(bytes, requestPath, ct); sftp.ChangePermissions(requestPath, 600);
             }
-            Log?.Invoke("任务请求已上传，正在启动远端操作…");
+            Log?.Invoke("任務請求已上載，正在啟動遠端操作…");
             using var command = client.CreateCommand(prefix + "python3 -u " + Quote(remoteDirectory + "/agent.py") + " " + Quote(requestPath));
             command.CommandTimeout = TimeSpan.FromMinutes(45);
             var execution = command.ExecuteAsync(ct);
@@ -218,14 +218,14 @@ public sealed partial class SshSession : IDisposable
                 while (await reader.ReadLineAsync(ct) is { } line) { error = line; Log?.Invoke(line); }
             }, ct);
             await execution; await Task.WhenAll(stdout, stderr);
-            if (command.ExitStatus != 0 || json == null) throw new RemoteOperationException(structuredError ?? error ?? "远端任务未返回结果，请检查连接与部署日志。",remoteErrorCode);
+            if (command.ExitStatus != 0 || json == null) throw new RemoteOperationException(structuredError ?? error ?? "遠端任務未返回結果，請檢查連線與部署日誌。",remoteErrorCode);
             if(IsLongOperation(operation)&&typeof(T)!=typeof(RemoteJob))
             {
-                var job=JsonSerializer.Deserialize<RemoteJob>(json,JsonDefaults.Options)??throw new InvalidDataException("缺少后台任务标识。");
-                Log?.Invoke("远端任务已启动，正在读取实际安装日志…");
+                var job=JsonSerializer.Deserialize<RemoteJob>(json,JsonDefaults.Options)??throw new InvalidDataException("缺少背景任務標識。");
+                Log?.Invoke("遠端任務已啟動，正在讀取實際安裝日誌…");
                 json=await WatchJobJsonAsync(job.JobId,ct);
             }
-            var value = JsonSerializer.Deserialize<T>(json, JsonDefaults.Options) ?? throw new InvalidDataException("服务器返回数据无效。");
+            var value = JsonSerializer.Deserialize<T>(json, JsonDefaults.Options) ?? throw new InvalidDataException("伺服器返回數據無效。");
             if (value is ServerInfo server)
             {
                 if(server.Statuses.GetValueOrDefault("ssh") && server.Username.Length>0)
@@ -248,13 +248,13 @@ public sealed partial class SshSession : IDisposable
     private static bool IsLongOperation(string operation)=>operation is "account" or "localization" or "desktop" or "chrome" or "input" or "claude" or "ssh" or "cloud" or "mount_install" or "safe_code_api_repair";
     private async Task<string> WatchJobJsonAsync(string jobId,CancellationToken ct)
     {
-        if(!Regex.IsMatch(jobId,"^[a-f0-9]{32}$"))throw new ArgumentException("后台任务标识无效。");
+        if(!Regex.IsMatch(jobId,"^[a-f0-9]{32}$"))throw new ArgumentException("背景任務標識無效。");
         long offset=0;
         while(true)
         {
             string output=await ExecuteTextAsync(prefix+"python3 -u "+Quote(remoteDirectory+"/agent.py")+" --poll "+Quote(jobId)+" "+offset,ct);
-            string json=output.Split('\n').LastOrDefault(x=>x.StartsWith("SC_RESULT:"))?[10..]??throw new InvalidDataException("后台任务未返回监控结果。");
-            var poll=JsonSerializer.Deserialize<JobPoll>(json,JsonDefaults.Options)??throw new InvalidDataException("任务监控数据无效。");
+            string json=output.Split('\n').LastOrDefault(x=>x.StartsWith("SC_RESULT:"))?[10..]??throw new InvalidDataException("背景任務未返回監控結果。");
+            var poll=JsonSerializer.Deserialize<JobPoll>(json,JsonDefaults.Options)??throw new InvalidDataException("任務監控數據無效。");
             foreach(string line in poll.Lines)Log?.Invoke(line);offset=poll.NextOffset;
             if(poll.Error!=null)throw new RemoteOperationException(poll.Error,poll.ErrorCode);
             if(poll.Done&&poll.Value is {} value)return value.GetRawText();
@@ -273,11 +273,11 @@ public sealed partial class SshSession : IDisposable
         {
             "account" => new { username, password, hostname },
             "localization" when locale != null => new { timezone = locale.Timezone, locale = locale.Locale },
-            "localization" => throw new InvalidOperationException("请先手动选择时区和系统语言。"),
+            "localization" => throw new InvalidOperationException("請先手動選擇時區和系統語言。"),
             "ssh" => new { publicKey = CreateWorkspaceKey().PublicKey },
             _ => new { }
         };
-        if (id != "account" && Server?.Statuses.GetValueOrDefault("account") != true) throw new InvalidOperationException("请先创建工作用户。");
+        if (id != "account" && Server?.Statuses.GetValueOrDefault("account") != true) throw new InvalidOperationException("請先建立工作用戶。");
         return await RequestAsync<ServerInfo>(id, options, ct);
     }
     public (string Path, string PublicKey) CreateWorkspaceKey()
@@ -305,7 +305,7 @@ public sealed partial class SshSession : IDisposable
             var start = new ProcessStartInfo("icacls.exe") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
             foreach (string arg in new[] { path, "/inheritance:r", "/grant:r", Environment.UserDomainName + "\\" + Environment.UserName + ":F" }) start.ArgumentList.Add(arg);
             using var process = Process.Start(start)!; process.WaitForExit();
-            if (process.ExitCode != 0) throw new IOException("无法保护本地 SSH 私钥访问权限。");
+            if (process.ExitCode != 0) throw new IOException("無法保護本地 SSH 私鑰訪問權限。");
         }
         else File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
@@ -316,13 +316,13 @@ public sealed partial class SshSession : IDisposable
         PinHostKeyAlgorithms(work.ConnectionInfo);
         work.HostKeyReceived += (_, e) => e.CanTrust = trustedKey != null && CryptographicOperations.FixedTimeEquals(trustedKey, e.HostKey);
         await work.ConnectAsync(ct); using var command = work.CreateCommand("id -un"); await command.ExecuteAsync(ct);
-        if (command.Result.Trim() != account.Username) throw new InvalidOperationException("工作用户公钥登录验证失败。");
+        if (command.Result.Trim() != account.Username) throw new InvalidOperationException("工作用戶公鑰登入驗證失敗。");
     }
     public async Task<uint> ForwardAsync(uint destinationPort, CancellationToken ct = default, string localHost = "127.0.0.1")
     {
-        if (client?.IsConnected != true) throw new InvalidOperationException("SSH 已断开。");
+        if (client?.IsConnected != true) throw new InvalidOperationException("SSH 已斷開。");
         await Task.Yield();
-        if(!System.Net.IPAddress.TryParse(localHost,out var localAddress)||!System.Net.IPAddress.IsLoopback(localAddress))throw new ArgumentException("本地转发必须限定为回环地址。");
+        if(!System.Net.IPAddress.TryParse(localHost,out var localAddress)||!System.Net.IPAddress.IsLoopback(localAddress))throw new ArgumentException("本地轉發必須限定為迴環地址。");
         var forward = new ForwardedPortLocal(localHost, 0, "127.0.0.1", destinationPort);
         client.AddForwardedPort(forward); forward.Start(); tunnels.Add(forward); return forward.BoundPort;
     }

@@ -1,11 +1,11 @@
-# Safe Code 桌面快捷方式图标
+# Safe Code 桌面捷徑圖示
 
-酒红底、金色两行文字，上排 SAFE、下排 CODE，参考用户提供的标题配色。
+酒紅底、金色兩行文字，上排 SAFE、下排 CODE，參考用戶提供的標題配色。
 
-- `safe-code-shortcut.svg`：文字已转为矢量轮廓的母版，不依赖安装字体。
-- `safe-code-shortcut.png`：1024 × 1024 透明圆角预览。
-- `safe-code-shortcut.ico`：Windows 图标，含 16、24、32、48、64、128、256 像素七种尺寸。
+- `safe-code-shortcut.svg`：文字已轉為矢量輪廓的母版，不依賴安裝字體。
+- `safe-code-shortcut.png`：1024 × 1024 透明圓角預覽。
+- `safe-code-shortcut.ico`：Windows 圖示，含 16、24、32、48、64、128、256 像素七種尺寸。
 
-只在 Inno Setup 的桌面快捷方式条目指定 `IconFilename`。程序没有设置 `ApplicationIcon`，开始菜单、卸载条目、任务栏和窗口界面未指定这个图标。图标作为独立资源随安装包保存到 `Icons` 目录。
+只在 Inno Setup 的桌面捷徑條目指定 `IconFilename`。程式沒有設定 `ApplicationIcon`，開始選單、卸載條目、工作列和視窗介面未指定這個圖示。圖示作為獨立資源隨安裝包儲存到 `Icons` 目錄。
 
-矢量文字轮廓由 `tools/build_shortcut_icon.py` 使用本机 Georgia Bold Italic 生成，不分发字体文件。PNG 由 Chromium 渲染 SVG，ICO 由 Pillow 编码。
+矢量文字輪廓由 `tools/build_shortcut_icon.py` 使用本機 Georgia Bold Italic 生成，不分發字體檔案。PNG 由 Chromium 渲染 SVG，ICO 由 Pillow 編碼。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""验证更新提示的状态、可见性、点击和窄窗口布局；不调用线上更新接口。"""
+"""驗證更新提示的狀態、可見性、點擊和窄視窗佈局；不調用線上更新接口。"""
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 root=Path(__file__).resolve().parent.parent
@@ -16,13 +16,13 @@ with sync_playwright() as p:
     page.route('**/*',route)
     page.add_init_script('''
       window.__safeCodeDesktop=true;window.__safeCodeAcceptance=true;
-      window.updateFixture={currentVersion:'Beta-0.4.3.3',version:'Beta-0.4.3.4',status:'发现新版本',canInstall:false,page:null};
+      window.updateFixture={currentVersion:'Beta-0.4.3.3',version:'Beta-0.4.3.4',status:'發現新版本',canInstall:false,page:null};
       window.chrome={webview:{postMessage(message){
         let result=null;
         if(message.op==='services.preferences')result={enabled:false,diagnosticsEnabled:false,confirmed:true};
         if(message.op==='notice.state')result={accepted:false};
         if(message.op==='updates.check'){
-          if(window.failUpdate){queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,error:'暂时离线'}));return;}
+          if(window.failUpdate){queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,error:'暫時離線'}));return;}
           result=window.updateFixture;
         }
         queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
@@ -40,11 +40,11 @@ with sync_playwright() as p:
     page.screenshot(path=str(output/'update-notice-narrow.png'))
     notice.click();assert page.locator('#services-dialog').is_visible()
     page.evaluate('window.failUpdate=true');page.locator('#check-update').click()
-    page.wait_for_function("document.querySelector('#update-status').textContent.includes('暂时离线')")
+    page.wait_for_function("document.querySelector('#update-status').textContent.includes('暫時離線')")
     assert page.locator('#title-update-notice').evaluate('element=>!element.hidden'), 'Known update disappeared on network failure'
     page.evaluate("window.failUpdate=false;window.updateFixture={currentVersion:'Beta-0.4.3.3',version:null,status:'已是最新版本',canInstall:false,page:null}")
     page.locator('#check-update').click();page.wait_for_function("document.querySelector('#title-update-notice').hidden")
-    assert page.locator('#services-entry').inner_text()=='更新与反馈'
+    assert page.locator('#services-entry').inner_text()=='更新與回饋'
     assert 'has-update' not in page.locator('#services-entry').get_attribute('class')
     page.locator('#services-dialog .close').click()
     assert not errors,errors

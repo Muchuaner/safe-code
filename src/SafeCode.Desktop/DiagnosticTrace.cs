@@ -8,7 +8,7 @@ using System.Net.Sockets;
 
 namespace SafeCode.Desktop;
 
-// 诊断只输出固定词表，原始日志、异常文本、堆栈和请求参数从不进入报告。
+// 診斷只輸出固定詞表，原始日誌、異常文本、堆棧和請求參數從不進入報告。
 internal sealed record DiagnosticSignal(int Seconds,string Code);
 internal sealed record DiagnosticReport(string Operation,string Outcome,string ErrorKind,string FailureSite,int DurationSeconds,DiagnosticSignal[] Signals,int OmittedLines,string Stage,
     [property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] IReadOnlyDictionary<string,object>? Gateway=null);
@@ -25,8 +25,8 @@ internal sealed class DiagnosticTrace(string operation,int generation,bool backg
         "gateway_enable","gateway_status","gateway_reconnect","gateway_open","gateway_key_list","gateway_usage",
         "gateway_key_issue","gateway_key_update","gateway_key_revoke","gateway_settings","gateway_port","gateway_origin",
         "login_restore"];
-    // 阶段只取流程里程碑；dns_failure/package_lock_wait 等是错误信号，不能冒充阶段。
-    // 同一操作内后续子请求会再次输出 request_uploaded，不能让它把阶段倒回早期。
+    // 階段只取流程里程碑；dns_failure/package_lock_wait 等是錯誤信號，不能冒充階段。
+    // 同一操作內後續子請求會再次輸出 request_uploaded，不能讓它把階段倒回早期。
     private static readonly Dictionary<string,int> PhaseRanks=new(){["ssh_authenticated"]=1,["agent_ready"]=1,["request_uploaded"]=2,["job_started"]=3,["remote_started"]=4,["packages_present"]=4,["package_unpacking"]=5,["package_configuring"]=6,["claude_download_started"]=7,["claude_download_verified"]=8};
     private readonly Stopwatch clock=Stopwatch.StartNew();
     private readonly List<DiagnosticSignal> signals=[];
@@ -92,20 +92,20 @@ internal sealed class DiagnosticTrace(string operation,int generation,bool backg
     }
     internal static string? ClassifyLine(string line)
     {
-        // 即使文本含有凭据，也只返回下面的常量，不拼接任何输入片段。
-        if(line.Contains("系统正在更新，正在等待",StringComparison.Ordinal)||line.Contains("lock-frontend",StringComparison.OrdinalIgnoreCase)||line.Contains("Waiting for cache lock",StringComparison.OrdinalIgnoreCase))return "package_lock_wait";
-        if(line.Contains("DNS 域名解析失败",StringComparison.Ordinal)||line.Contains("Could not resolve",StringComparison.OrdinalIgnoreCase)||line.Contains("Temporary failure resolving",StringComparison.OrdinalIgnoreCase))return "dns_failure";
+        // 即使文本含有憑據，也只返回下面的常量，不拼接任何輸入片段。
+        if(line.Contains("系統正在更新，正在等待",StringComparison.Ordinal)||line.Contains("lock-frontend",StringComparison.OrdinalIgnoreCase)||line.Contains("Waiting for cache lock",StringComparison.OrdinalIgnoreCase))return "package_lock_wait";
+        if(line.Contains("DNS 域名解析失敗",StringComparison.Ordinal)||line.Contains("Could not resolve",StringComparison.OrdinalIgnoreCase)||line.Contains("Temporary failure resolving",StringComparison.OrdinalIgnoreCase))return "dns_failure";
         if(line.Contains("No space left on device",StringComparison.OrdinalIgnoreCase))return "disk_full";
         if(line.Contains("Failed to fetch",StringComparison.OrdinalIgnoreCase))return "package_fetch_failed";
         if(line.Contains("dpkg was interrupted",StringComparison.OrdinalIgnoreCase))return "package_interrupted";
-        if(line.Contains("开始部署：",StringComparison.Ordinal)||line.Contains("开始应用目录挂载配置",StringComparison.Ordinal)||line.Contains("服务器正在独立应用设置",StringComparison.Ordinal))return "remote_started";
-        if(line.Contains("所需组件已安装，跳过重复下载。",StringComparison.Ordinal))return "packages_present";
-        if(line.Contains("任务请求已上传，正在启动远端操作…",StringComparison.Ordinal))return "request_uploaded";
-        if(line.Contains("远端任务已启动，正在读取实际安装日志…",StringComparison.Ordinal))return "job_started";
-        if(line.Contains("SSH 认证成功，检查操作系统…",StringComparison.Ordinal))return "ssh_authenticated";
-        if(line.Contains("部署模块已就绪，检查服务器环境…",StringComparison.Ordinal))return "agent_ready";
-        if(line.Contains("正在通过 VPS 网络获取 Claude Code 官方版本和校验信息",StringComparison.Ordinal))return "claude_download_started";
-        if(line.Contains("VPS 下载完成，官方 Claude Code 文件校验通过",StringComparison.Ordinal))return "claude_download_verified";
+        if(line.Contains("開始部署：",StringComparison.Ordinal)||line.Contains("開始應用目錄掛載配置",StringComparison.Ordinal)||line.Contains("伺服器正在獨立應用設定",StringComparison.Ordinal))return "remote_started";
+        if(line.Contains("所需組件已安裝，跳過重複下載。",StringComparison.Ordinal))return "packages_present";
+        if(line.Contains("任務請求已上載，正在啟動遠端操作…",StringComparison.Ordinal))return "request_uploaded";
+        if(line.Contains("遠端任務已啟動，正在讀取實際安裝日誌…",StringComparison.Ordinal))return "job_started";
+        if(line.Contains("SSH 認證成功，檢查作業系統…",StringComparison.Ordinal))return "ssh_authenticated";
+        if(line.Contains("部署模組已就緒，檢查伺服器環境…",StringComparison.Ordinal))return "agent_ready";
+        if(line.Contains("正在透過 VPS 網絡獲取 Claude Code 官方版本和校驗資訊",StringComparison.Ordinal))return "claude_download_started";
+        if(line.Contains("VPS 下載完成，官方 Claude Code 檔案校驗通過",StringComparison.Ordinal))return "claude_download_verified";
         if(line.Contains("Unpacking ",StringComparison.Ordinal))return "package_unpacking";
         if(line.Contains("Setting up ",StringComparison.Ordinal))return "package_configuring";
         return null;
@@ -122,8 +122,8 @@ internal sealed class DiagnosticTrace(string operation,int generation,bool backg
                 if(site!=null)return site;
             }
         }
-        // 远端协议错误与 SSH 通道错误才是 remote_task；不能仅因调用栈经过 SshSession
-        // 就把本地目录校验、参数校验或安装前置检查误标为远端失败。
+        // 遠端協定錯誤與 SSH 通道錯誤才是 remote_task；不能僅因調用棧經過 SshSession
+        // 就把本地目錄校驗、參數校驗或安裝前置檢查誤標為遠端失敗。
         Exception cause=error;
         while(cause is InvalidOperationException&&cause is not RemoteOperationException&&cause.InnerException!=null)cause=cause.InnerException;
         if(cause is RemoteOperationException)return "remote_task";
@@ -152,7 +152,7 @@ internal sealed class DiagnosticTrace(string operation,int generation,bool backg
         IOException=>"io_error",ArgumentException=>"invalid_argument",_=>"operation_failed"};
     public DiagnosticReport Finish(Exception? error)
     {
-        // 对远端包装后的异常仅提取已知错误码，不上传原始 message。
+        // 對遠端包裝後的異常僅提取已知錯誤碼，不上載原始 message。
         string kind=ErrorKind(error);
         string? signal=error==null?null:ClassifyLine(error.Message);
         if(signal!=null&&PhaseRanks.ContainsKey(signal))signal=null;

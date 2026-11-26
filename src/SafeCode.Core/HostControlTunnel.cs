@@ -23,7 +23,7 @@ public sealed partial class SshSession
         return age>=0 && age<milliseconds && Volatile.Read(ref hostVerifiedGeneration)==Volatile.Read(ref hostNetworkGeneration);
     }
     private void HostAddressChanged(object? sender,EventArgs args)=>InvalidateHostVerification();
-    private string hostClientId="",hostAlias="",hostUser="",hostUserSid="",hostPublicKey="",hostCommand="",hostState="disabled",hostMessage="未启用";
+    private string hostClientId="",hostAlias="",hostUser="",hostUserSid="",hostPublicKey="",hostCommand="",hostState="disabled",hostMessage="未啟用";
     private uint hostLocalPort;
     public bool HasHostControl=>hostLifetime!=null;
     private bool HasVerifiedHostControl=>hostLifetime is { IsCancellationRequested:false }&&IsConnected&&hostState=="connected"&&
@@ -33,14 +33,14 @@ public sealed partial class SshSession
         get
         {
             if(hostState=="connected"&&(!HasVerifiedHostControl||!HostVerificationFresh(45000)))
-                return new(HasHostControl,"reconnecting",hostAlias,"","正在重新验证网关到本机的 SSH 回连");
+                return new(HasHostControl,"reconnecting",hostAlias,"","正在重新驗證網關到本機的 SSH 回連");
             return new(HasHostControl,hostState,hostAlias,hostState=="connected"?hostCommand:"",hostMessage);
         }
     }
     public void RequireVerifiedHostControl()
     {
         if(!HasVerifiedHostControl)
-            throw new InvalidOperationException("请先在当前服务器上开启「本机远程控制」，并等待 SSH 登录验证通过。");
+            throw new InvalidOperationException("請先在當前伺服器上開啟「本機遠端控制」，並等待 SSH 登入驗證通過。");
     }
     public Func<bool> CaptureVerifiedHostControl()
     {
@@ -50,21 +50,21 @@ public sealed partial class SshSession
     }
     public async Task<HostControlIdentity> PrepareHostControlAsync(string clientId,CancellationToken ct=default)
     {
-        if(!Regex.IsMatch(clientId,"\\A[a-f0-9]{20}\\z"))throw new ArgumentException("本机控制标识无效。");
-        if(HasHostControl)throw new InvalidOperationException("请先停用现有本机控制。");
+        if(!Regex.IsMatch(clientId,"\\A[a-f0-9]{20}\\z"))throw new ArgumentException("本機控制標識無效。");
+        if(HasHostControl)throw new InvalidOperationException("請先停用現有本機控制。");
         return await RequestAsync<HostControlIdentity>("host_bridge",new{clientId,action="prepare"},ct);
     }
     public async Task<HostControlStatus> StartHostControlAsync(string clientId,uint localPort,string username,string userSid,string hostKey,string alias,CancellationToken ct=default)
     {
-        if(!Regex.IsMatch(clientId,"\\A[a-f0-9]{20}\\z")||!Regex.IsMatch(alias,"\\A[a-z][a-z0-9_-]{0,31}\\z")||(localPort<1024&&!(localPort==22&&userSid.StartsWith("macos:")))||localPort>65535)throw new ArgumentException("本机控制连接参数无效。");
+        if(!Regex.IsMatch(clientId,"\\A[a-f0-9]{20}\\z")||!Regex.IsMatch(alias,"\\A[a-z][a-z0-9_-]{0,31}\\z")||(localPort<1024&&!(localPort==22&&userSid.StartsWith("macos:")))||localPort>65535)throw new ArgumentException("本機控制連線參數無效。");
         await hostGate.WaitAsync(ct);
         try
         {
-            if(HasHostControl)throw new InvalidOperationException("本机控制已启用。");
+            if(HasHostControl)throw new InvalidOperationException("本機控制已啟用。");
             hostClientId=clientId;hostAlias=alias;hostUser=username;hostUserSid=userSid;hostPublicKey=hostKey;hostLocalPort=localPort;
-            hostState="connecting";hostMessage="正在验证本机命令行连接";
+            hostState="connecting";hostMessage="正在驗證本機命令列連線";
             try{await ConnectHostTunnelAsync(ct);hostLifetime=new();var guardToken=hostLifetime.Token;hostGuard=Task.Run(()=>GuardHostTunnelAsync(guardToken));return HostControlStatus;}
-            catch{CloseHostTunnel();hostState="disabled";hostMessage="部署失败，未开放本机控制";throw;}
+            catch{CloseHostTunnel();hostState="disabled";hostMessage="部署失敗，未開放本機控制";throw;}
         }
         finally{hostGate.Release();}
     }
@@ -75,7 +75,7 @@ public sealed partial class SshSession
         {
             await transport.ConnectAsync(ct);forward=new ForwardedPortRemote("127.0.0.1",0,"127.0.0.1",hostLocalPort);transport.AddForwardedPort(forward);await Task.Run(forward.Start,ct);
             var result=await VerifyHostConnectionAsync("configure",forward.BoundPort,ct);
-            hostTransport=transport;hostForward=forward;hostCommand=result.GetProperty("command").GetString()!;hostState="connected";hostMessage="已验证，服务器 AI 可访问本机当前账户";
+            hostTransport=transport;hostForward=forward;hostCommand=result.GetProperty("command").GetString()!;hostState="connected";hostMessage="已驗證，伺服器 AI 可訪問本機當前帳戶";
         }
         catch{DisposeMountResource(forward);DisposeMountResource(transport);throw;}
     }
@@ -84,7 +84,7 @@ public sealed partial class SshSession
         int generation=Volatile.Read(ref hostNetworkGeneration);
         await EnsureMountControlAsync(ct);
         var result=await RequestAsync<JsonElement>("host_bridge",new{clientId=hostClientId,action,port,username=hostUser,userSid=hostUserSid,hostKey=hostPublicKey,alias=hostAlias},ct);
-        if(!result.GetProperty("verified").GetBoolean())throw new IOException("本机 SSH 未通过实际登录验证。");
+        if(!result.GetProperty("verified").GetBoolean())throw new IOException("本機 SSH 未通過實際登入驗證。");
         Interlocked.Exchange(ref hostVerifiedAt,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         Volatile.Write(ref hostVerifiedGeneration,generation);
         return result;
@@ -129,7 +129,7 @@ public sealed partial class SshSession
         if(mountTrustFailed||mountAuthenticationFailed)
         {
             hostState="attention";
-            hostMessage=mountTrustFailed?"服务器身份变化，已停止自动重连":"SSH 认证失败，请在主界面更新登录密码";
+            hostMessage=mountTrustFailed?"伺服器身份變化，已停止自動重連":"SSH 認證失敗，請在主介面更新登入密碼";
             return;
         }
         try
@@ -144,7 +144,7 @@ public sealed partial class SshSession
                 return;
             }
             hostState="reconnecting";
-            hostMessage="本机控制连接中断，正在重连";
+            hostMessage="本機控制連線中斷，正在重連";
             using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(30));
             await ConnectHostTunnelAsync(timeout.Token);
@@ -156,7 +156,7 @@ public sealed partial class SshSession
             CloseHostTunnel();
             if(error is SshAuthenticationException)mountAuthenticationFailed=true;
             hostState=mountTrustFailed||mountAuthenticationFailed?"attention":"reconnecting";
-            hostMessage=mountTrustFailed?"服务器身份变化，请核对后重新启用":mountAuthenticationFailed?"SSH 认证失败，请在主界面更新登录密码":"连接中断，命令暂不可用；正在重连";
+            hostMessage=mountTrustFailed?"伺服器身份變化，請核對後重新啟用":mountAuthenticationFailed?"SSH 認證失敗，請在主介面更新登入密碼":"連線中斷，命令暫不可用；正在重連";
         }
     }
     private void CloseHostTunnel(){DisposeMountResource(hostForward);hostForward=null;DisposeMountResource(hostTransport);hostTransport=null;}
@@ -165,8 +165,8 @@ public sealed partial class SshSession
         hostLifetime?.Cancel();await hostGate.WaitAsync(ct);
         try
         {
-            CloseHostTunnel();hostLifetime?.Dispose();hostLifetime=null;hostState="disabled";hostCommand="";hostMessage="本机控制已停用";
-            if(hostClientId.Length>0&&IsConnected){try{using var cleanup=CancellationTokenSource.CreateLinkedTokenSource(ct);cleanup.CancelAfter(TimeSpan.FromSeconds(12));await RequestAsync<JsonElement>("host_bridge",new{clientId=hostClientId,action="remove"},cleanup.Token);}catch{Log?.Invoke("本机控制通道已关闭，服务器专用配置待下次连接清理。");}}
+            CloseHostTunnel();hostLifetime?.Dispose();hostLifetime=null;hostState="disabled";hostCommand="";hostMessage="本機控制已停用";
+            if(hostClientId.Length>0&&IsConnected){try{using var cleanup=CancellationTokenSource.CreateLinkedTokenSource(ct);cleanup.CancelAfter(TimeSpan.FromSeconds(12));await RequestAsync<JsonElement>("host_bridge",new{clientId=hostClientId,action="remove"},cleanup.Token);}catch{Log?.Invoke("本機控制通道已關閉，伺服器專用配置待下次連線清理。");}}
         }
         finally{hostGate.Release();}
     }

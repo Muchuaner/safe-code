@@ -43,10 +43,10 @@ with sync_playwright() as p:
     assert page.locator('#workspace-screen').is_visible()
     assert not page.locator('[id*="guide-"]').count()
     assert page.locator('[data-resource=qq]').get_attribute('href')=='https://qm.qq.com/q/Bzd5aqxW36'
-    assert '国内直连' not in page.content()
+    assert '國內直連' not in page.content()
     page.locator('#maintenance-mode').click();assert page.locator('#maintenance-panel').is_visible()
     page.locator('#terminal-card').click();page.wait_for_selector('#app-message-dialog[open]')
-    assert '开发预览' in page.locator('#app-message-dialog').inner_text()
+    assert '開發預覽' in page.locator('#app-message-dialog').inner_text()
     calls=page.evaluate('window.calls.map(x=>x.op)');assert 'preview.begin' in calls
     assert not set(calls)&{'connect','deploy','metrics','ip.info','terminal','account.draft.save'},calls
     page.locator('#app-message-dialog .close').click()

@@ -1,58 +1,58 @@
 # Safe Code API
 
-Safe Code 的 Claude Desktop 网关通过同一台 VPS 上的 CloudCLI 处理对话。CloudCLI 负责调用 Claude Code。Safe Code 只传送当前任务、会话信息及已授权的设备和目录说明。
+Safe Code 的 Claude Desktop 網關透過同一台 VPS 上的 CloudCLI 處理對話。CloudCLI 負責調用 Claude Code。Safe Code 只傳送當前任務、會話資訊及已授權的裝置和目錄說明。
 
-在 Safe Code 通过 SSH 登录 VPS 后，打开「公网网关」，点击「启用」。Safe Code 会检查同一台 VPS 上的 CloudCLI，按需安装或升级网关，并启用公网。首次注册 CloudCLI 时，Safe Code 会自动创建后端 API Key，并显示生成的网页账号和密码。已有 CloudCLI 账户但尚未配置网关时，在「启用」窗口填入 CloudCLI 设置中生成的 API Key。验证连接不发送模型任务。网关使用公网 IP 与当前端口签发 Safe Code API Key。
+在 Safe Code 透過 SSH 登入 VPS 後，開啟「公網網關」，點擊「啟用」。Safe Code 會檢查同一台 VPS 上的 CloudCLI，按需安裝或升級網關，並啟用公網。首次註冊 CloudCLI 時，Safe Code 會自動建立後端 API Key，並顯示生成的網頁帳號和密碼。已有 CloudCLI 帳戶但尚未配置網關時，在「啟用」視窗填入 CloudCLI 設定中生成的 API Key。驗證連線不傳送模型任務。網關使用公網 IP 與當前連接埠簽發 Safe Code API Key。
 
-公网启用后，从「管理网关」创建 Safe Code API Key，再回到主界面「API Key 接入」粘贴。升级会保留原监听端口、TLS 证书、Safe Code API Key、用量及公网启用状态。
+公網啟用後，從「管理網關」建立 Safe Code API Key，再回到主介面「API Key 接入」貼上。升級會保留原監聽連接埠、TLS 證書、Safe Code API Key、用量及公網啟用狀態。
 
-在「网关总览 → 前置审查」选择内置 Claude Sonnet、Opus 或独立的 DeepSeek Flash，打开「安全审查」并保存。安全审查首次安装默认关闭，升级保留已有选项。网关 revision 10 新增默认关闭的「语言替换」。开启后，所选模型会将通过安全审查的本轮提示词翻译成英文，再交给 CloudCLI。 [前置审查机制](../../docs/PROMPT_REVIEW.md)
+在「網關總覽 → 前置審查」選擇內置 Claude Sonnet、Opus 或獨立的 DeepSeek Flash，開啟「安全審查」並儲存。安全審查首次安裝預設關閉，升級保留已有選項。網關 revision 10 新增預設關閉的「語言替換」。開啟後，所選模型會將通過安全審查的本輪提示詞翻譯成英文，再交給 CloudCLI。 [前置審查機制](../../docs/PROMPT_REVIEW.md)
 
-自动创建账户的网关支持 Desktop 工具审批。只配置 CloudCLI API Key 时，对话走 CloudCLI Agent API，附件、计划确认和交互式工具审批需要 CloudCLI 的网页授权。公网 Key 仅供自用。带有固定工作站配置的网关继续通过原有回环监听和受信任的 HTTPS 入口运行。可查看 [CloudCLI 工作区与设备控制配置](../../docs/CLOUDCLI_GATEWAY.md)。
+自動建立帳戶的網關支援 Desktop 工具審批。只配置 CloudCLI API Key 時，對話走 CloudCLI Agent API，附件、計劃確認和互動式工具審批需要 CloudCLI 的網頁授權。公網 Key 僅供自用。帶有固定工作站配置的網關繼續透過原有迴環監聽和受信任的 HTTPS 入口執行。可查看 [CloudCLI 工作區與裝置控制配置](../../docs/CLOUDCLI_GATEWAY.md)。
 
-用量分析可切换近 1 小时、24 小时和 7 天，查看请求与 Token 吞吐、处理和排队耗时分布、请求结果以及错误与限流趋势。并发与排队显示实时状态，模型用量显示历史累计值。图表使用网关已有的请求日志，明细保留 30 天，列表可查看最近 30 条。请求日志只保存模型、密钥 ID 等统计字段。
+用量分析可切換近 1 小時、24 小時和 7 天，查看請求與 Token 吞吐、處理和排隊耗時分佈、請求結果以及錯誤與限流趨勢。併發與排隊顯示實時狀態，模型用量顯示歷史累計值。圖表使用網關已有的請求日誌，明細保留 30 天，列表可查看最近 30 條。請求日誌只儲存模型、密鑰 ID 等統計欄位。
 
-新部署的 Safe Code API 处理槽位默认为 0，表示不限制同时处理的 Messages 请求数。网关的连接保护和密钥限额独立生效。管理员可以在「网关总览 → 处理槽位」保存新的上限，所有密钥共享槽位。调低上限时，已经开始的请求继续处理。其余请求按到达顺序排队，最多 12 个，同一个 Key 最多等候 2 个，最长等候 45 秒。满队、超时或超出每分钟限制时返回 429。限频统计滚动 60 秒内获准执行的请求，0 表示不限频，服务重启会重置频率窗口。Claude Desktop 等待工具结果时，不占据 HTTP 请求队列。队列设计参考 [sub2api 的并发服务](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/concurrency_service.go) 中的名额与等待上限。管理只经已连接的 SSH 调用 Unix 套接字，公网端口提供模型查询、Messages 和仅限本人 Key 的余额查询。
+新部署的 Safe Code API 處理槽位預設為 0，表示不限制同時處理的 Messages 請求數。網關的連線保護和密鑰限額獨立生效。管理員可以在「網關總覽 → 處理槽位」儲存新的上限，所有密鑰共享槽位。調低上限時，已經開始的請求繼續處理。其餘請求按到達順序排隊，最多 12 個，同一個 Key 最多等候 2 個，最長等候 45 秒。滿隊、超時或超出每分鐘限制時返回 429。限頻統計滾動 60 秒內獲准執行的請求，0 表示不限頻，服務重新啟動會重設頻率視窗。Claude Desktop 等待工具結果時，不佔據 HTTP 請求佇列。佇列設計參考 [sub2api 的併發服務](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/concurrency_service.go) 中的名額與等待上限。管理只經已連線的 SSH 調用 Unix 套接字，公網連接埠提供模型查詢、Messages 和僅限本人 Key 的餘額查詢。
 
-网关按 [Claude API 官方标准价](https://platform.claude.com/docs/en/about-claude/pricing) 估算输入、输出、缓存读取和缓存写入费用。缺少缓存时长时按 5 分钟写入价估算。历史数据用当前标准价补算，Haiku 5.5 的历史汇总按基础价估算，因为已有记录缺少每次请求的输入明细。费用栏显示已估算的金额。该金额用于网关额度管理，Claude 订阅和实际账单由服务商单独计算。使用 API Key 接入的设备可以点击系统状态栏或 Windows 托盘图标，查看该 Key 的已用金额和网关余额。
+網關按 [Claude API 官方標準價](https://platform.claude.com/docs/en/about-claude/pricing) 估算輸入、輸出、快取讀取和快取寫入費用。缺少快取時長時按 5 分鐘寫入價估算。歷史數據用當前標準價補算，Haiku 5.5 的歷史彙總按基礎價估算，因為已有記錄缺少每次請求的輸入明細。費用欄顯示已估算的金額。該金額用於網關額度管理，Claude 訂閱和實際帳單由服務商單獨計算。使用 API Key 接入的裝置可以點擊系統狀態列或 Windows 系統匣圖示，查看該 Key 的已用金額和網關餘額。
 
-创建或编辑密钥时可填写累计美元额度，留空不限额。余额等于累计额度减已用金额。请求完成后扣除实际观测用量的估算费用，余额用完则后续 Messages 请求返回 HTTP 402。一笔在余额为正时开始的请求可能使余额变为负数。提高累计额度即可补充余额。
+建立或編輯密鑰時可填寫累計美元額度，留空不限額。餘額等於累計額度減已用金額。請求完成後扣除實際觀測用量的估算費用，餘額用完則後續 Messages 請求返回 HTTP 402。一筆在餘額為正時開始的請求可能使餘額變為負數。提高累計額度即可補充餘額。
 
-手动安装时，将本目录的 `install.sh`、`server.py`、`management.py`、`claude_usage.py`、`pricing.py`、`configure_cloudcli.py`、`host_control_mcp.py`、`device_bridge.py`、`prompt_review.py`，以及 `src/SafeCode.Core/Remote/` 中的 `desktop_gateway.py` 和 `codex_bridge.zip` 放在同一目录。将示例中的账户名、监听地址和端口替换为你的配置，再以管理员身份运行以下命令。
+手動安裝時，將本目錄的 `install.sh`、`server.py`、`management.py`、`claude_usage.py`、`pricing.py`、`configure_cloudcli.py`、`host_control_mcp.py`、`device_bridge.py`、`prompt_review.py`，以及 `src/SafeCode.Core/Remote/` 中的 `desktop_gateway.py` 和 `codex_bridge.zip` 放在同一目錄。將範例中的帳戶名、監聽地址和連接埠替換為你的配置，再以管理員身份執行以下命令。
 
 ```sh
 bash install.sh workspace 192.0.2.10 45143
 systemctl status safe-code-desktop-api
 ```
 
-在客户端启用公网网关后，也可在 Linux 工作账户下签发一份 Key。用实际可达的 HTTPS 地址替换示例域名，签发命令会将 Key 写入指定的新文件，并输出可用于撤销的 Key ID。通过私密渠道将文件交给设备的使用者。
+在客戶端啟用公網網關後，也可在 Linux 工作帳戶下籤發一份 Key。用實際可達的 HTTPS 地址替換範例域名，簽發命令會將 Key 寫入指定的新檔案，並輸出可用於撤銷的 Key ID。透過私密渠道將檔案交給裝置的使用者。
 
-在「网关管理 → 密钥管理」创建或编辑密钥时，可以为单把 Key 选择允许的 CloudCLI 模型和失效时间。新密钥及升级前签发的密钥默认允许全部模型、永不过期。开启模型限制后，网关只返回获准的模型，并在请求执行前校验模型。选择 CloudCLI 的 Default、Best 等自动选项时，由 CloudCLI 决定实际模型。到期后，网关拒绝这把 Key 的新请求和仍在排队的请求。可以编辑到期的 Key 延长有效期，接入设备可继续使用原 Key。
+在「網關管理 → 密鑰管理」建立或編輯密鑰時，可以為單把 Key 選擇允許的 CloudCLI 模型和失效時間。新密鑰及升級前簽發的密鑰預設允許全部模型、永不過期。開啟模型限制後，網關只返回獲准的模型，並在請求執行前校驗模型。選擇 CloudCLI 的 Default、Best 等自動選項時，由 CloudCLI 決定實際模型。到期後，網關拒絕這把 Key 的新請求和仍在排隊的請求。可以編輯到期的 Key 延長有效期，接入裝置可繼續使用原 Key。
 
 ```sh
 state="$HOME/.local/state/safe-code-desktop-api"
 python3 /opt/safe-code/desktop-api/server.py --state "$state" issue https://gateway.example.com:45143 "$state/laptop.key"
 ```
 
-在新设备上安装官方 Claude Desktop，打开 SafeCode 登录页的「API Key 接入」，粘贴整行 Key，点击「验证并启用」。首次启用后完全退出并重开 Claude Desktop。聊天时保持 SafeCode 运行，再次启动 SafeCode 会恢复本机接入。在同一入口停用可恢复之前选用的 Claude 配置。
+在新裝置上安裝官方 Claude Desktop，開啟 SafeCode 登入頁的「API Key 接入」，貼上整行 Key，點擊「驗證並啟用」。首次啟用後完全退出並重開 Claude Desktop。聊天時保持 SafeCode 執行，再次啟動 SafeCode 會恢復本機接入。在同一入口停用可恢復之前選用的 Claude 配置。
 
-自动配置的网关读取 CloudCLI 的 Claude 模型目录，包括 Default、Best、Opus Plan、自定义模型和目录中开放的 1M 选项。网关只有 CloudCLI Agent API Key 时，模型目录来自 VPS 工作账户的 Claude Code。手动配置的网关使用管理员设置的模型及 1M 范围。升级后，已接入的设备可在「API Key 接入」点击「刷新模型」，再重启 Claude Desktop。
+自動配置的網關讀取 CloudCLI 的 Claude 模型目錄，包括 Default、Best、Opus Plan、自訂模型和目錄中開放的 1M 選項。網關只有 CloudCLI Agent API Key 時，模型目錄來自 VPS 工作帳戶的 Claude Code。手動配置的網關使用管理員設定的模型及 1M 範圍。升級後，已接入的裝置可在「API Key 接入」點擊「重新整理模型」，再重新啟動 Claude Desktop。
 
-CloudCLI 提供 Ultracode 时，Claude Desktop 的模型菜单会显示对应的「模型名 · Ultracode」选项。选择它会把 Ultracode 明确传给 CloudCLI。当前 Claude Desktop 的本地开关可能只发送 Extra 档位，无法把远端工作流模式与普通 Extra 区分开。
+CloudCLI 提供 Ultracode 時，Claude Desktop 的模型選單會顯示對應的「模型名 · Ultracode」選項。選擇它會把 Ultracode 明確傳給 CloudCLI。當前 Claude Desktop 的本地開關可能只傳送 Extra 檔位，無法把遠端工作流模式與普通 Extra 區分開。
 
-Windows 会使用 Claude Desktop 的 3P 策略指向本机转发，并通过 Windows 应用入口启动 Claude Desktop。策略中使用本机转发凭据，公网 Key 仍保存在 Safe Code 的加密状态中。停用接入时，Safe Code 撤销自己写入且仍未被修改的策略字段。
+Windows 會使用 Claude Desktop 的 3P 策略指向本機轉發，並透過 Windows 應用入口啟動 Claude Desktop。策略中使用本機轉發憑據，公網 Key 仍儲存在 Safe Code 的加密狀態中。停用接入時，Safe Code 撤銷自己寫入且仍未被修改的策略欄位。
 
-新签发的接入凭证使用加密的 `sc2.` 格式，需要支持该格式的客户端。新版客户端仍接受以前签发的 `sc1.` 凭证。加解密材料随软件分发，完整接入凭证仍需要按密钥保管。
+新簽發的接入憑證使用加密的 `sc2.` 格式，需要支援該格式的客戶端。新版客戶端仍接受以前簽發的 `sc1.` 憑證。加解密材料隨軟件分發，完整接入憑證仍需要按密鑰保管。
 
-需要撤销时，在网关管理窗口操作，或在 Linux 工作账户下使用签发时输出的 ID。撤销对后续请求生效。已撤销的密钥可在管理窗口彻底删除，相关用量和请求记录也会一并删除。若更换 TLS 证书或公网地址，请为设备签发新 Key。
+需要撤銷時，在網關管理視窗操作，或在 Linux 工作帳戶下使用簽發時輸出的 ID。撤銷對後續請求生效。已撤銷的密鑰可在管理視窗徹底刪除，相關用量和請求記錄也會一併刪除。若更換 TLS 證書或公網地址，請為裝置簽發新 Key。
 
 ```sh
 python3 /opt/safe-code/desktop-api/server.py --state "$state" revoke "$key_id"
 ```
-### Key 模式的设备控制
+### Key 模式的裝置控制
 
-标准安装、升级和故障修复会准备官方 FRP 的独立 `safe-code-desktop-frps.service` 和本机鉴权服务。它们都只监听 VPS 回环地址。已有自管 FRP 配置的 VPS 继续使用原有服务。设备服务未就绪时仍可以使用普通 API。
+標準安裝、升級和故障修復會準備官方 FRP 的獨立 `safe-code-desktop-frps.service` 和本機鑑權服務。它們都只監聽 VPS 迴環地址。已有自管 FRP 配置的 VPS 繼續使用原有服務。裝置服務未就緒時仍可以使用普通 API。
 
-创建或编辑密钥时，可选择「Safe Code 桌面接入」或「普通 API」。桌面接入需要私有设备服务健康，原有密钥可授权配对，无需重新签发。客户端通过现有 HTTPS 入口建立 FRP 隧道，仍须经本机明确授权并验证 VPS 的 SSH 回连，才会保存 Claude Desktop 配置。改回普通 API 会取消该 Key 的 FRP 设备配对。
+建立或編輯密鑰時，可選擇「Safe Code 桌面接入」或「普通 API」。桌面接入需要私有裝置服務健康，原有密鑰可授權配對，無需重新簽發。客戶端透過現有 HTTPS 入口建立 FRP 隧道，仍須經本機明確授權並驗證 VPS 的 SSH 回連，才會儲存 Claude Desktop 配置。改回普通 API 會取消該 Key 的 FRP 裝置配對。
 
-独立 frps 实例应仅允许受信任的传输入口访问。将代理监听设为回环，强制 TLS，并将 `Login`、`NewProxy`、`Ping`、`NewWorkConn` 和 `NewUserConn` 接入 SafeCode 的设备授权回调。回调检查设备凭据有效期、所属 Key，以及代理类型、别名和端口。网关为每台设备分配单独的 SSH 身份和项目目录。选中同名目录的设备用不同的 SSH 别名作为项目名称后缀。设备证明只随 SafeCode 发往网关的请求传输。
+獨立 frps 實例應僅允許受信任的傳輸入口訪問。將代理監聽設為迴環，強制 TLS，並將 `Login`、`NewProxy`、`Ping`、`NewWorkConn` 和 `NewUserConn` 接入 SafeCode 的裝置授權回調。回調檢查裝置憑據有效期、所屬 Key，以及代理類型、別名和連接埠。網關為每台裝置分配單獨的 SSH 身份和項目目錄。選中同名目錄的裝置用不同的 SSH 別名作為項目名稱後綴。裝置證明只隨 SafeCode 發往網關的請求傳輸。

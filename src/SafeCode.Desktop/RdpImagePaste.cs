@@ -8,9 +8,9 @@ namespace SafeCode.Desktop;
 internal sealed partial class RdpDesktop
 {
     private const int ImageHotkey = 0x5344;
-    private readonly F.ToolStripSplitButton imageButton = new("粘贴本机图片") { Enabled = false,
-        ToolTipText = "将本机剪贴板的图片粘贴到当前云桌面输入框。右侧箭头可设置 Ctrl+V。" };
-    private readonly F.ToolStripMenuItem imageShortcut = new("Ctrl+V 粘贴本机图片") { CheckOnClick = true };
+    private readonly F.ToolStripSplitButton imageButton = new("貼上本機圖片") { Enabled = false,
+        ToolTipText = "將本機剪貼板的圖片貼上到當前雲桌面輸入框。右側箭頭可設定 Ctrl+V。" };
+    private readonly F.ToolStripMenuItem imageShortcut = new("Ctrl+V 貼上本機圖片") { CheckOnClick = true };
     private Func<IReadOnlyList<DesktopImagePart>, CancellationToken, Task>? sendImage;
     private CancellationTokenSource? imageOperation;
     private bool imageHotkeyRegistered, imageClosing, hotkeyConflict;
@@ -59,7 +59,7 @@ internal sealed partial class RdpDesktop
         {
             hotkeyConflict = true;
             imageShortcut.Checked = false;
-            displayStatus.Text = "Ctrl+V 被占用，请用图片按钮";
+            displayStatus.Text = "Ctrl+V 被佔用，請用圖片按鈕";
         }
     }
 
@@ -100,34 +100,34 @@ internal sealed partial class RdpDesktop
             }
             if (snapshot == null)
             {
-                if (fromButton) displayStatus.Text = "本机剪贴板中没有可粘贴的图片";
+                if (fromButton) displayStatus.Text = "本機剪貼板中沒有可貼上的圖片";
                 else await SendPasteWhenReleased(op.Token, seq); // native text, rich text, files, and remote clipboard
                 return;
             }
-            displayStatus.Text = "正在发送图片…";
+            displayStatus.Text = "正在傳送圖片…";
             var parts = await Task.Run(() => ClipboardImage.Prepare(snapshot), op.Token);
             if (!PasteTarget() || focusEpoch != imageFocusEpoch || (seq != 0 && GetClipboardSequenceNumber() != seq))
-            { displayStatus.Text = "焦点或剪贴板已变化，请重试"; return; }
+            { displayStatus.Text = "焦點或剪貼板已變化，請重試"; return; }
             await sendImage(parts, op.Token);
             op.Token.ThrowIfCancellationRequested();
             lastImageSequence = seq == 0 ? null : seq;
             // X11 ownership is acknowledged immediately, but LibreOffice’s generic X11 backend
             // caches the previous target list for two seconds (SelectionManager::getPasteDataTypes).
-            displayStatus.Text = "图片已发送，等待云桌面更新剪贴板…";
+            displayStatus.Text = "圖片已傳送，等待雲桌面更新剪貼板…";
             await Task.Delay(TimeSpan.FromSeconds(2), op.Token);
             // The native RDP channel may announce the newly installed X11 clipboard back to Windows.
             // A sequence change during the send must never cause a second upload or a wrong-window paste.
-            if (!PasteTarget() || focusEpoch != imageFocusEpoch) { displayStatus.Text = "图片已就绪，请回到输入框粘贴"; return; }
+            if (!PasteTarget() || focusEpoch != imageFocusEpoch) { displayStatus.Text = "圖片已就緒，請回到輸入框貼上"; return; }
             if (!await SendPasteWhenReleased(op.Token, seq, acceptRdpEcho: true)) return;
-            displayStatus.Text = "已发送粘贴按键 · " + string.Join(" / ", parts.Select(p => p.Mime[6..].ToUpperInvariant()));
+            displayStatus.Text = "已傳送貼上按鍵 · " + string.Join(" / ", parts.Select(p => p.Mime[6..].ToUpperInvariant()));
         }
-        catch (OperationCanceledException) { if (!imageClosing && !IsDisposed) displayStatus.Text = "图片粘贴已取消或超时"; }
+        catch (OperationCanceledException) { if (!imageClosing && !IsDisposed) displayStatus.Text = "圖片貼上已取消或超時"; }
         catch (Exception ex)
         {
             if (!imageClosing && !IsDisposed)
             {
-                displayStatus.Text = "未完成图片粘贴";
-                if (OurWindow()) F.MessageBox.Show(this, ex.Message, "粘贴本机图片");
+                displayStatus.Text = "未完成圖片貼上";
+                if (OurWindow()) F.MessageBox.Show(this, ex.Message, "貼上本機圖片");
             }
         }
         finally { imageOperation = null; if (!imageClosing && !IsDisposed) imageButton.Enabled = connected && sendImage != null; }
@@ -141,9 +141,9 @@ internal sealed partial class RdpDesktop
             await Task.Delay(15, ct);
         ct.ThrowIfCancellationRequested();
         if (!PasteTarget() || epoch != imageFocusEpoch || GetAsyncKeyState(0x11) < 0 || GetAsyncKeyState(0x56) < 0)
-        { if (!imageClosing) displayStatus.Text = "请松开按键，在目标输入框重试"; return false; }
+        { if (!imageClosing) displayStatus.Text = "請鬆開按鍵，在目標輸入框重試"; return false; }
         if (expectedSequence != 0 && GetClipboardSequenceNumber() != expectedSequence && !(acceptRdpEcho && OwnedByThisClient()))
-        { displayStatus.Text = "剪贴板已变化，未自动粘贴"; return false; }
+        { displayStatus.Text = "剪貼板已變化，未自動貼上"; return false; }
         // Send only to this COM session. No system-wide SendInput / simulated input in other apps.
         var input = (IRdpScanKeys)control.Client;
         int hr = input.SendKeys(4, [0, 0, -1, -1], [0x1d, 0x2f, 0x2f, 0x1d]);

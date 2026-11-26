@@ -23,9 +23,9 @@ BROWSER_PROBE = r"""(()=>{
   const canvas=document.createElement('canvas').getContext('2d');
   function hasFont(name){
     return ['monospace','sans-serif','serif'].some(fallback=>{
-      canvas.font='72px '+fallback;const baseline=canvas.measureText('中文字体检测ABCabc012').width;
+      canvas.font='72px '+fallback;const baseline=canvas.measureText('中文字體檢測ABCabc012').width;
       canvas.font='72px "'+name+'", '+fallback;
-      return Math.abs(canvas.measureText('中文字体检测ABCabc012').width-baseline)>.5;
+      return Math.abs(canvas.measureText('中文字體檢測ABCabc012').width-baseline)>.5;
     });
   }
   const result={timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -51,7 +51,7 @@ def score_signals(sample, username):
     languages = [str(value).lower() for value in sample.get('languages', [])]
     locale = sample.get('locale', '')
     if not timezone or not languages or not locale or not sample.get('fontMeasurementAvailable') or not isinstance(sample.get('offset'), (int, float)):
-        return unavailable('VPS浏览器检测不完整', username)
+        return unavailable('VPS瀏覽器檢測不完整', username)
     zone = 1 if timezone in ['Asia/Shanghai', 'Asia/Urumqi', 'Asia/Chongqing', 'Asia/Chungking', 'Asia/Harbin', 'Asia/Kashgar'] else .6 if timezone in ['Asia/Hong_Kong', 'Asia/Macau', 'Asia/Taipei'] else 0
     first = languages[0]
     traditional = lambda value: value.startswith(('zh-tw', 'zh-hk', 'zh-mo')) or 'hant' in value
@@ -63,14 +63,14 @@ def score_signals(sample, username):
     device = (sample.get('platform', '') + ' ' + sample.get('userAgent', '')).lower()
     vendor, emoji = ('Apple', .25) if re.search('iphone|ipad|ipod|mac', device) else ('Google', .35) if 'android' in device else ('Microsoft', .4) if 'win' in device else ('Google', .35) if 'cros' in device else ('Linux / Other', .5) if 'linux' in device else ('Unknown', .4)
     font_names = simplified + traditional_fonts
-    facts = [('timezone', '系统时区', timezone, zone, 30), ('language', '浏览器语言', ', '.join(languages), language, 24),
-             ('fonts', '中文字体', ', '.join(font_names[:4]) + ('…' if len(font_names) > 4 else '') if font_names else '未匹配', fonts, 20),
-             ('intlLocale', 'Intl区域', locale, intl, 10), ('timezoneOffset', '时区偏移', 'UTC{:+g}'.format(-sample['offset'] / 60), .7 if sample['offset'] == -480 else 0, 8),
-             ('emoji', 'Emoji风格', vendor, emoji, 8)]
+    facts = [('timezone', '系統時區', timezone, zone, 30), ('language', '瀏覽器語言', ', '.join(languages), language, 24),
+             ('fonts', '中文字體', ', '.join(font_names[:4]) + ('…' if len(font_names) > 4 else '') if font_names else '未匹配', fonts, 20),
+             ('intlLocale', 'Intl區域', locale, intl, 10), ('timezoneOffset', '時區偏移', 'UTC{:+g}'.format(-sample['offset'] / 60), .7 if sample['offset'] == -480 else 0, 8),
+             ('emoji', 'Emoji風格', vendor, emoji, 8)]
     signals = [dict(id=key, label=label, value=value, factor=factor, weight=weight, contribution=math.floor(factor * weight + .5)) for key, label, value, factor, weight in facts]
     score = min(100, sum(item['contribution'] for item in signals))
     level = 'low' if score <= 30 else 'medium' if score <= 60 else 'high'
-    return dict(riskScore=score, level=level, message={'low': '低风险', 'medium': '中风险', 'high': '高风险'}[level], signals=signals, username=username, ruleVersion=RULE_VERSION)
+    return dict(riskScore=score, level=level, message={'low': '低風險', 'medium': '中風險', 'high': '高風險'}[level], signals=signals, username=username, ruleVersion=RULE_VERSION)
 
 
 def browser_context(user):
@@ -118,20 +118,20 @@ def browser_context(user):
 
 def assess(username):
     if not re.fullmatch(r'[a-z_][a-z0-9_.-]{0,31}', username or ''):
-        return unavailable('请先部署工作用户')
+        return unavailable('請先部署工作用戶')
     try:
         user = pwd.getpwnam(username)
     except KeyError:
-        return unavailable('请先部署工作用户')
+        return unavailable('請先部署工作用戶')
     if user.pw_uid == 0 or (os.geteuid() != 0 and os.geteuid() != user.pw_uid):
-        return unavailable('无法读取VPS工作用户环境', username)
+        return unavailable('無法讀取VPS工作用戶環境', username)
     chrome = shutil.which('google-chrome-stable') or shutil.which('google-chrome')
     if not chrome:
-        return unavailable('需先安装VPS Chrome', username)
+        return unavailable('需先安裝VPS Chrome', username)
     try:
         locale, languages = browser_context(user)
     except (OSError, ValueError, TypeError):
-        return unavailable('VPS浏览器语言配置无法读取', username)
+        return unavailable('VPS瀏覽器語言配置無法讀取', username)
     script = BROWSER_PROBE.replace('SIMPLIFIED.filter', json.dumps(SIMPLIFIED_FONTS) + '.filter').replace('TRADITIONAL.filter', json.dumps(TRADITIONAL_FONTS) + '.filter')
     page = '<!doctype html><meta charset="utf-8"><pre id="safe-code-env"></pre><script>' + script + '</script>'
     url = 'data:text/html;base64,' + base64.b64encode(page.encode()).decode()
@@ -157,13 +157,13 @@ def assess(username):
         try:
             output, _ = process.communicate(timeout=18)
             if process.returncode != 0:
-                return unavailable('VPS Chrome暂无法完成检测', username)
+                return unavailable('VPS Chrome暫無法完成檢測', username)
             match = re.search(r'<pre id="safe-code-env">(.*?)</pre>', output.decode(errors='replace'), re.S)
             if not match:
-                return unavailable('VPS浏览器未返回检测结果', username)
+                return unavailable('VPS瀏覽器未返回檢測結果', username)
             return score_signals(json.loads(html.unescape(match[1])), username)
         except (subprocess.TimeoutExpired, ValueError, TypeError):
-            return unavailable('VPS环境检测未完成', username)
+            return unavailable('VPS環境檢測未完成', username)
         finally:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
@@ -181,5 +181,5 @@ if __name__ == '__main__':
     try:
         answer = assess(sys.argv[1] if len(sys.argv) > 1 else '')
     except Exception:
-        answer = unavailable('VPS环境检测暂不可用')
+        answer = unavailable('VPS環境檢測暫不可用')
     print(json.dumps(answer, ensure_ascii=False))

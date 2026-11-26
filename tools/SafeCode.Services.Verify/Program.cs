@@ -152,7 +152,7 @@ try{
   var stableUnknown=new UpdateHandler{ApiStatus=HttpStatusCode.TooManyRequests,LatestLocation=location};
   using var client=new ClientServices(Path.Combine(directory,"rate-stable-unknown"),stableUnknown,currentVersion:"0.4.4");
   var update=await client.CheckUpdateAsync(true,default);
-  Assert(update.Version==null&&!update.CanInstall&&update.Status.Contains("无法"),"stable fallback accepted an unconfirmed release");
+  Assert(update.Version==null&&!update.CanInstall&&update.Status.Contains("無法"),"stable fallback accepted an unconfirmed release");
  }
  var longLimited=new UpdateHandler{ApiStatus=HttpStatusCode.TooManyRequests,RetryAfter="7200"};
  using(var client=new ClientServices(Path.Combine(directory,"rate-long"),longLimited,currentVersion:"0.4.4"))
@@ -193,7 +193,7 @@ try{
   var update=await client.CheckUpdateAsync(true,default);
   Assert(update.Version=="Beta-0.4.4.18"&&!update.CanInstall,"rate-limited beta fallback missed newer release");
   Assert(update.Page=="https://github.com/Muchuaner/safe-code/releases/tag/Beta-0.4.4.18","fallback page is not the official release tag");
-  Assert(update.Status.Contains("发布页"),"fallback did not direct to the release page");
+  Assert(update.Status.Contains("發佈頁"),"fallback did not direct to the release page");
   Assert(rateBeta.ApiRequests==1,"rate-limited beta check retried the API");
   Assert(rateBeta.AtomRequests==3,"fallback was not retried after an unknown result");
   bool noDownload=false;try{await client.DownloadUpdateAsync((_,_)=>{},default);}catch(InvalidOperationException){noDownload=true;}Assert(noDownload,"unverified fallback enabled auto install");
@@ -208,13 +208,13 @@ try{
  using(var client=new ClientServices(Path.Combine(directory,"rate-older"),olderBeta,currentVersion:"Beta-0.4.4.17"))
  {
   var older=await client.CheckUpdateAsync(true,default);
-  Assert(older.Version==null&&older.Status.Contains("无法")&&older.Page=="https://github.com/Muchuaner/safe-code/releases","older fallback releases were reported as current");
+  Assert(older.Version==null&&older.Status.Contains("無法")&&older.Page=="https://github.com/Muchuaner/safe-code/releases","older fallback releases were reported as current");
  }
  var latestBeta=new UpdateHandler{ApiStatus=HttpStatusCode.Forbidden,AtomFeed=AtomFeed("Beta-0.4.4.17","Beta-0.4.4.16","0.4.3","٩.٩.٩","9.9.9\n")};
  using(var client=new ClientServices(Path.Combine(directory,"rate-latest"),latestBeta,currentVersion:"Beta-0.4.4.17"))
  {
   var latest=await client.CheckUpdateAsync(true,default);
-  Assert(latest.Version==null&&latest.Status=="官方发布订阅未发现更新"&&latest.Page=="https://github.com/Muchuaner/safe-code/releases"&&!latest.CanInstall,"fallback latest result is wrong");
+  Assert(latest.Version==null&&latest.Status=="官方發佈訂閱未發現更新"&&latest.Page=="https://github.com/Muchuaner/safe-code/releases"&&!latest.CanInstall,"fallback latest result is wrong");
   Assert(latestBeta.AtomRequests==1,"latest fallback was not requested");
  }
  var formalRelease=new UpdateHandler{ApiStatus=HttpStatusCode.Forbidden,AtomFeed=AtomFeed("v0.4.4","Beta-0.4.4.18","Beta-0.4.4.17")};
@@ -304,8 +304,8 @@ try{
   Assert(DiagnosticTrace.GatewayOperation(argsValue)=="gateway_usage"&&DiagnosticTrace.IsBackgroundOperation("gateway_usage",argsValue),"gateway poll not sampled");
  }
  var claudeTrace=new DiagnosticTrace("claude",0);
- claudeTrace.Observe("正在通过 VPS 网络获取 Claude Code 官方版本和校验信息…");
- claudeTrace.Observe("VPS 下载完成，官方 Claude Code 文件校验通过。");
+ claudeTrace.Observe("正在透過 VPS 網絡獲取 Claude Code 官方版本和校驗資訊…");
+ claudeTrace.Observe("VPS 下載完成，官方 Claude Code 檔案校驗通過。");
  var claudeReport=claudeTrace.Finish(null);
  Assert(claudeReport.Stage=="claude_download_verified"&&claudeReport.Signals.Length==2,"Claude verification milestones lost");
  Assert(DiagnosticTrace.FailureSite("mount_apply",new DirectoryNotFoundException("local only"))=="directory_mount","local mount error marked remote");
@@ -315,19 +315,19 @@ try{
  Assert(DiagnosticTrace.FailureSite("connection",new Renci.SshNet.Common.SshConnectionException("private"))=="connection","SSH connection site lost");
  var localMountTrace=new DiagnosticTrace("mount_apply",0);var localMountReport=localMountTrace.Finish(new DirectoryNotFoundException("local only"));
  Assert(localMountReport.FailureSite=="directory_mount"&&localMountReport.ErrorKind=="directory_not_found","local mount report misclassified");
- var errorStageTrace=new DiagnosticTrace("localization",0);errorStageTrace.Observe("任务请求已上传，正在启动远端操作…");
- var errorStageReport=errorStageTrace.Finish(new InvalidOperationException("DNS 域名解析失败"));
+ var errorStageTrace=new DiagnosticTrace("localization",0);errorStageTrace.Observe("任務請求已上載，正在啟動遠端操作…");
+ var errorStageReport=errorStageTrace.Finish(new InvalidOperationException("DNS 域名解析失敗"));
  Assert(errorStageReport.ErrorKind=="dns_failure"&&errorStageReport.Stage=="request_uploaded","error code leaked into stage");
- var mountStageTrace=new DiagnosticTrace("mount_apply",0);mountStageTrace.Observe("任务请求已上传，正在启动远端操作…");mountStageTrace.Observe("开始应用目录挂载配置…");
+ var mountStageTrace=new DiagnosticTrace("mount_apply",0);mountStageTrace.Observe("任務請求已上載，正在啟動遠端操作…");mountStageTrace.Observe("開始應用目錄掛載配置…");
  var mountStageReport=mountStageTrace.Finish(new SafeCode.Core.RemoteOperationException("private","mount_failed"));
  Assert(mountStageReport.Stage=="remote_started"&&mountStageReport.ErrorKind=="mount_failed","mount phase stage lost");
- var startedOnly=new DiagnosticTrace("localization",0).Finish(new InvalidOperationException("DNS 域名解析失败"));
+ var startedOnly=new DiagnosticTrace("localization",0).Finish(new InvalidOperationException("DNS 域名解析失敗"));
  Assert(startedOnly.Stage=="started","error-only trace invented a phase");
- var noRegress=new DiagnosticTrace("ip_policy",0);noRegress.Observe("任务请求已上传，正在启动远端操作…");noRegress.Observe("服务器正在独立应用设置，断线不会中止自动回退…");noRegress.Observe("任务请求已上传，正在启动远端操作…");
+ var noRegress=new DiagnosticTrace("ip_policy",0);noRegress.Observe("任務請求已上載，正在啟動遠端操作…");noRegress.Observe("伺服器正在獨立應用設定，斷線不會中止自動回退…");noRegress.Observe("任務請求已上載，正在啟動遠端操作…");
  Assert(noRegress.Finish(new TimeoutException("verification")).Stage=="remote_started","later request regressed stage");
- var ipPhase=new DiagnosticTrace("ip_policy",0);ipPhase.Observe("任务请求已上传，正在启动远端操作…");ipPhase.Observe("所需组件已安装，跳过重复下载。");ipPhase.Observe("服务器正在独立应用设置，断线不会中止自动回退…");
+ var ipPhase=new DiagnosticTrace("ip_policy",0);ipPhase.Observe("任務請求已上載，正在啟動遠端操作…");ipPhase.Observe("所需組件已安裝，跳過重複下載。");ipPhase.Observe("伺服器正在獨立應用設定，斷線不會中止自動回退…");
  Assert(ipPhase.Finish(new TimeoutException("verification")).Stage=="remote_started","IP apply phase did not advance");
- var packagePhase=new DiagnosticTrace("account",0);packagePhase.Observe("开始部署：account");packagePhase.Observe("所需组件已安装，跳过重复下载。");packagePhase.Observe("Unpacking package-fixture");
+ var packagePhase=new DiagnosticTrace("account",0);packagePhase.Observe("開始部署：account");packagePhase.Observe("所需組件已安裝，跳過重複下載。");packagePhase.Observe("Unpacking package-fixture");
  Assert(packagePhase.Finish(new InvalidOperationException("dpkg fixture")).Stage=="package_unpacking","package phase did not advance");
  var priorityHandler=new FakeHandler();var priorityDirectory=Path.Combine(directory,"priority");
  using(var priority=new ClientServices(priorityDirectory,priorityHandler)){
@@ -337,10 +337,10 @@ try{
   Assert(priorityHandler.Bodies.Count==1,"duplicate successful reports were sent");
   for(int i=0;i<25;i++)await priority.SendDiagnosticAsync(priority.BeginDiagnostic("resource_stats",background:true)!,null,default);
   Assert(priorityHandler.Bodies.Count==2,"poll blocked a separate feature or consumed success quota");
-  var failure=new DiagnosticTrace("mount_apply",priority.DiagnosticGeneration);failure.Observe("任务请求已上传，正在启动远端操作…");
+  var failure=new DiagnosticTrace("mount_apply",priority.DiagnosticGeneration);failure.Observe("任務請求已上載，正在啟動遠端操作…");
   string? issue=priority.RecordFailure(failure,new SafeCode.Core.RemoteOperationException("private","mount_failed"));
   await priority.SendDiagnosticAsync(failure,new SafeCode.Core.RemoteOperationException("private","mount_failed"),default);
-  await priority.SendFeedbackAsync("用户描述最近失败",default);
+  await priority.SendFeedbackAsync("用戶描述最近失敗",default);
   using var diagnosticPacket=JsonDocument.Parse(priorityHandler.Bodies[2]);using var feedbackPacket=JsonDocument.Parse(priorityHandler.Bodies[3]);
   var correlation=diagnosticPacket.RootElement.GetProperty("context");
   Assert(issue==correlation.GetProperty("operationId").GetString(),"displayed issue lost");
@@ -352,17 +352,17 @@ try{
    await priority.SendDiagnosticAsync(pollTrace,new IOException("private endpoint"),default);
   }
   Assert(priorityHandler.Bodies.Count==5,"duplicate poll failures exhausted reporting quota");
-  await priority.SendFeedbackAsync("后台轮询后保留用户操作",default);
+  await priority.SendFeedbackAsync("背景輪詢後保留用戶操作",default);
   using var afterBackground=JsonDocument.Parse(priorityHandler.Bodies[5]);
   Assert(JsonElement.DeepEquals(afterBackground.RootElement.GetProperty("context").GetProperty("correlation"),correlation),"background failure replaced feedback correlation");
   string install=correlation.GetProperty("installationId").GetString()!;
   using(var reload=new ClientServices(priorityDirectory,new FakeHandler())){
    await reload.SetConsentAsync(false,true);var h=new DiagnosticTrace("chrome",reload.DiagnosticGeneration);
-   // 标识持久化由偏好文件核验，会话编号每次启动变化。
+   // 標識持久化由偏好檔案核驗，會話編號每次啟動變化。
    using var prefs=JsonDocument.Parse(File.ReadAllText(Path.Combine(priorityDirectory,"usage-preferences.json")));
    Assert(prefs.RootElement.GetProperty("diagnosticInstallationId").GetString()==install,"diagnostic installation not persisted");
   }
-  priority.SetDiagnosticConsent(false);await priority.SendFeedbackAsync("关闭诊断后的反馈",default);
+  priority.SetDiagnosticConsent(false);await priority.SendFeedbackAsync("關閉診斷後的回饋",default);
   using var optedOut=JsonDocument.Parse(priorityHandler.Bodies[6]);Assert(optedOut.RootElement.GetProperty("context").ValueKind==JsonValueKind.Null,"optout feedback leaked correlation");
   using var cleared=JsonDocument.Parse(File.ReadAllText(Path.Combine(priorityDirectory,"usage-preferences.json")));Assert(cleared.RootElement.GetProperty("diagnosticInstallationId").GetString()=="","optout retained diagnostic identifier");
  }

@@ -15,12 +15,12 @@ public partial class App : Application
         };
         if (!TryAcquireSingleInstance())
         {
-            MessageBox.Show("Safe Code 已在运行，请使用已打开的程序，或从其所在 Windows 会话的右下角托盘显示主界面。", "Safe Code");
+            MessageBox.Show("Safe Code 已在執行，請使用已開啟的程式，或從其所在 Windows 會話的右下角系統匣顯示主介面。", "Safe Code");
             Shutdown();
             return;
         }
         base.OnStartup(e);
-        if(e.Args.Length>=3&&e.Args[0]=="--acceptance")System.IO.File.WriteAllText(e.Args[2]+".stage.log","启动\n");
+        if(e.Args.Length>=3&&e.Args[0]=="--acceptance")System.IO.File.WriteAllText(e.Args[2]+".stage.log","啟動\n");
         var window = new MainWindow(e.Args); MainWindow = window; window.Show();
     }
     protected override void OnExit(ExitEventArgs e)

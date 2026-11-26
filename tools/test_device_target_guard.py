@@ -35,7 +35,7 @@ class DeviceTargetGuardTests(unittest.TestCase):
         server = (ROOT/'tools/desktop-api/server.py').read_text()
         self.assertIn('"X-SafeCode-Client","safecode-desktop"', access)
         self.assertIn("self.headers.get('X-SafeCode-Client') == 'safecode-desktop'", server)
-        self.assertIn('旧接入未绑定本机设备', access)
+        self.assertIn('舊接入未綁定本機裝置', access)
         capability = access.index('action="capability"')
         self.assertNotIn('optional:true', access[capability:capability+120])
         self.assertIn('action="capability"', access)
@@ -65,8 +65,8 @@ class DeviceTargetGuardTests(unittest.TestCase):
 
     def test_mac_consent_copy_does_not_claim_windows_admin_deployment(self):
         source = (ROOT/'web/native.js').read_text()
-        self.assertIn('只会为当前 macOS 账户添加一把专用 SSH 公钥', source)
-        self.assertIn('正在为系统远程登录添加专用公钥，并建立 FRP 通道', source)
+        self.assertIn('只會為當前 macOS 帳戶添加一把專用 SSH 公鑰', source)
+        self.assertIn('正在為系統遠端登入添加專用公鑰，並建立 FRP 通道', source)
 
     def test_mac_build_pins_official_frp_and_preserves_license(self):
         source = (ROOT/'tools/build_macos.py').read_text()

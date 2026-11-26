@@ -32,7 +32,7 @@ internal static class ClipboardImage
 
     internal static ImageSnapshot? Read(IntPtr owner, bool explicitImage)
     {
-        if (!OpenClipboard(owner)) throw new IOException("本机剪贴板正忙，请重新粘贴。");
+        if (!OpenClipboard(owner)) throw new IOException("本機剪貼板正忙，請重新貼上。");
         try
         {
             List<(uint Id, string Name)> formats = [];
@@ -71,7 +71,7 @@ internal static class ClipboardImage
                     if (dib is { Length: >= 40 }) break;
                 }
             }
-            if (parts.Count == 0 && dib == null) throw new InvalidDataException("未能读取本机图片，请重新截图。");
+            if (parts.Count == 0 && dib == null) throw new InvalidDataException("未能讀取本機圖片，請重新截圖。");
             return new(parts, dib);
         }
         finally { CloseClipboard(); }
@@ -83,7 +83,7 @@ internal static class ClipboardImage
         if (handle == 0) return null;
         nuint size = GlobalSize(handle);
         if (size == 0) return null;
-        if (size > (nuint)budget) throw new InvalidDataException("这张图片超过 32 MiB 限制，请缩小截图范围。");
+        if (size > (nuint)budget) throw new InvalidDataException("這張圖片超過 32 MiB 限制，請縮小截圖範圍。");
         IntPtr ptr = GlobalLock(handle);
         if (ptr == 0) return null;
         try { var bytes = new byte[(int)size]; Marshal.Copy(ptr, bytes, 0, bytes.Length); return bytes; }
@@ -142,7 +142,7 @@ internal static class ClipboardImage
                 using var input = new MemoryStream(image, false);
                 var decoder = BitmapDecoder.Create(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnDemand);
                 var frame = decoder.Frames[0];
-                if ((long)frame.PixelWidth * frame.PixelHeight > PixelLimit) throw new InvalidDataException("截图像素过多。");
+                if ((long)frame.PixelWidth * frame.PixelHeight > PixelLimit) throw new InvalidDataException("截圖像素過多。");
                 using var output = new BoundedStream(budget);
                 var encoder = new PngBitmapEncoder();
                 encoder.Frames.Add(BitmapFrame.Create(frame));
@@ -159,7 +159,7 @@ internal static class ClipboardImage
                 NotSupportedException or COMException or FormatException or OverflowException or System.IO.FileFormatException)
             { /* Try the next representation or return just the untouched originals. */ }
         }
-        if (parts.Count == 0) throw new InvalidDataException("未能无损转换这张位图，或图片超出大小限制。");
+        if (parts.Count == 0) throw new InvalidDataException("未能無損轉換這張位圖，或圖片超出大小限制。");
         return parts;
     }
 
@@ -167,21 +167,21 @@ internal static class ClipboardImage
     {
         uint U32(int i) => BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(i));
         ushort U16(int i) => BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(i));
-        if (d.Length < 40 || d.Length > Limit) throw new InvalidDataException("DIB 长度无效。");
+        if (d.Length < 40 || d.Length > Limit) throw new InvalidDataException("DIB 長度無效。");
         uint head = U32(0);
-        if (head is not (40 or 52 or 56 or 108 or 124) || head > d.Length || U16(12) != 1) throw new InvalidDataException("DIB 头无效。");
+        if (head is not (40 or 52 or 56 or 108 or 124) || head > d.Length || U16(12) != 1) throw new InvalidDataException("DIB 頭無效。");
         int w = (int)U32(4), h = (int)U32(8);
         ushort bpp = U16(14);
         uint compression = U32(16), colors = U32(32);
         if (w <= 0 || h == 0 || (long)w * Math.Abs((long)h) > PixelLimit ||
             bpp is not (1 or 4 or 8 or 16 or 24 or 32) || compression is not (0 or 3 or 6))
-            throw new InvalidDataException("不支持此位图编码或尺寸。");
+            throw new InvalidDataException("不支援此位圖編碼或尺寸。");
         if (colors == 0 && bpp <= 8) colors = 1u << bpp;
         // BITMAPINFOHEADER stores bit masks AFTER the header. V4/V5 store them WITHIN it.
         long offset = head + (head == 40 ? (compression == 3 ? 12 : compression == 6 ? 16 : 0) : 0) + colors * 4L;
         long pixels = (((long)w * bpp + 31) / 32) * 4 * Math.Abs((long)h);
         if (head == 124 && U32(116) != 0 && U32(112) == offset) offset += U32(116);
-        if (offset + pixels > d.Length) throw new InvalidDataException("位图像素不完整。");
+        if (offset + pixels > d.Length) throw new InvalidDataException("位圖像素不完整。");
         byte[] bmp = new byte[checked(d.Length + 14)];
         bmp[0] = 66; bmp[1] = 77;
         BinaryPrimitives.WriteUInt32LittleEndian(bmp.AsSpan(2), (uint)bmp.Length);
@@ -192,7 +192,7 @@ internal static class ClipboardImage
 
     private sealed class BoundedStream(int limit) : MemoryStream
     {
-        private void Check(long end) { if (end > limit) throw new InvalidDataException("图片太大。"); }
+        private void Check(long end) { if (end > limit) throw new InvalidDataException("圖片太大。"); }
         public override void Write(byte[] b, int off, int count) { Check(Position + count); base.Write(b, off, count); }
         public override void Write(ReadOnlySpan<byte> b) { Check(Position + b.Length); base.Write(b); }
         public override void WriteByte(byte b) { Check(Position + 1); base.WriteByte(b); }

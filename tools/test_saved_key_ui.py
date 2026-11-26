@@ -17,17 +17,17 @@ with sync_playwright() as pw:
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.add_init_script("""
         window.__safeCodeDesktop=true;
-        let keys=[{id:'first',name:'测试网关'}], current='first';
+        let keys=[{id:'first',name:'測試網關'}], current='first';
         if(new URLSearchParams(location.search).has('mac-panel')){
           window.__safeCodePlatform='macos';window.__safeCodeNativeDialogs=true;
-          keys.push({id:'second',name:'工作网关'});
+          keys.push({id:'second',name:'工作網關'});
           if(location.hash==='#many')
-            for(let i=2;i<12;i++)keys.push({id:String(i),name:'网关 '+i});
+            for(let i=2;i<12;i++)keys.push({id:String(i),name:'網關 '+i});
         }
         window.launches=0;let pending=null, authorized=new Set(['first']);
         window.chrome={webview:{postMessage({op,args,id}){
           let result=null,error=null;
-          const status=()=>({configured:true,running:true,deviceAlias:'本机设备',startedAt:Date.now()-720000});
+          const status=()=>({configured:true,running:true,deviceAlias:'本機裝置',startedAt:Date.now()-720000});
           switch(op){
             case 'services.preferences':case 'services.confirm':result={};break;
             case 'window.fitDialog':
@@ -43,13 +43,13 @@ with sync_playwright() as pw:
               keys.find(key=>key.id===args.id).name=args.name;result=true;break;
             case 'desktopKey.savedBalance':result={remainingNanos:args.id==='first'?98800000000:null};break;
             case 'desktopKey.enable':
-              if(window.failSwitch)error='目标网关暂不可用';
+              if(window.failSwitch)error='目標網關暫不可用';
               else if(!authorized.has(args.savedId)){pending=args.savedId;result={requiresDevice:true};}
               else {current=args.savedId;result=status();}
               break;
             case 'desktopKey.cancelDevice':pending=null;break;
             case 'desktopKey.authorizeDevice':
-              if(!args.riskAccepted || !pending)error='缺少设备授权';
+              if(!args.riskAccepted || !pending)error='缺少裝置授權';
               else {authorized.add(pending);current=pending;pending=null;result=status();}
               break;
             case 'claudeDesktop.reopen':window.launches++;break;
@@ -72,43 +72,43 @@ with sync_playwright() as pw:
         page.screenshot(path=str(args.screenshots / "api-access.png"))
     picker.click()
     page.locator("#key-add").click()
-    page.locator("#key-label").fill("VPS 环境")
+    page.locator("#key-label").fill("VPS 環境")
     page.locator("#key-code").fill("fixture")
-    page.get_by_role("button", name="保存 Key", exact=True).click()
+    page.get_by_role("button", name="儲存 Key", exact=True).click()
     rows = page.locator(".key-row")
-    expect(rows.nth(0)).to_contain_text("余额 $98.80")
-    expect(rows.nth(1)).to_contain_text("不限额")
+    expect(rows.nth(0)).to_contain_text("餘額 $98.80")
+    expect(rows.nth(1)).to_contain_text("不限額")
     expect(rows.nth(0)).to_contain_text("正在使用")
-    for old, new in (("测试网关", "本地测试"), ("VPS 环境", "工作网关")):
-        page.get_by_role("button", name="编辑备注："+old).click()
+    for old, new in (("測試網關", "本地測試"), ("VPS 環境", "工作網關")):
+        page.get_by_role("button", name="編輯備註："+old).click()
         expect(page.locator("#key-code")).to_be_hidden()
         expect(page.locator("#key-label")).to_have_value(old)
         page.locator("#key-label").fill(new)
-        page.get_by_role("button", name="保存备注").click()
-        expect(page.get_by_role("button", name="编辑备注："+new)).to_be_visible()
+        page.get_by_role("button", name="儲存備註").click()
+        expect(page.get_by_role("button", name="編輯備註："+new)).to_be_visible()
     page.locator("#key-list-close").click()
     picker.click()
-    expect(rows.nth(0)).to_contain_text("本地测试")
+    expect(rows.nth(0)).to_contain_text("本地測試")
     expect(rows.nth(0)).to_contain_text("正在使用")
     assert page.evaluate("launches===0")
     if args.screenshots:
         page.screenshot(path=str(args.screenshots / "key-list.png"))
     page.evaluate("window.failSwitch=true")
-    page.get_by_role("button", name="切换到 工作网关").click()
-    expect(page.locator("#key-list-status")).to_have_text("目标网关暂不可用")
+    page.get_by_role("button", name="切換到 工作網關").click()
+    expect(page.locator("#key-list-status")).to_have_text("目標網關暫不可用")
     assert page.evaluate("launches===0")
     page.evaluate("window.failSwitch=false")
-    page.get_by_role("button", name="切换到 工作网关").click()
+    page.get_by_role("button", name="切換到 工作網關").click()
     expect(page.locator("#host-dialog")).to_be_visible()
     page.locator("#host-close").click()
     expect(rows.nth(0)).to_contain_text("正在使用")
-    page.get_by_role("button", name="切换到 工作网关").click()
+    page.get_by_role("button", name="切換到 工作網關").click()
     page.locator("#host-risk").check()
     page.locator("#host-enable").click()
     expect(page.locator("#key-list-dialog")).not_to_be_visible()
     picker.click()
     expect(rows.nth(1)).to_contain_text("正在使用")
-    page.get_by_role("button", name="切换到 本地测试").click()
+    page.get_by_role("button", name="切換到 本地測試").click()
     page.wait_for_function("launches===2")
     # AppKit moves this WebView into a smaller window, then fits that window to the body.
     page.goto("https://safe-code.local/web/index.html?mac-panel")
@@ -131,11 +131,11 @@ with sync_playwright() as pw:
     fit_panel(440)
     if args.screenshots:
         page.screenshot(path=str(args.screenshots / "key-list-mac-layout.png"))
-    page.get_by_role("button",name="编辑备注：工作网关").click()
-    page.locator("#key-label").fill("工作网关"*16)
+    page.get_by_role("button",name="編輯備註：工作網關").click()
+    page.locator("#key-label").fill("工作網關"*16)
     fit_panel(320)
-    page.get_by_role("button",name="保存备注").click()
-    expect(rows.nth(1)).to_contain_text("工作网关"*16)
+    page.get_by_role("button",name="儲存備註").click()
+    expect(rows.nth(1)).to_contain_text("工作網關"*16)
     fit_panel(320)
     page.goto("https://safe-code.local/web/index.html?mac-panel#many")
     page.reload()  # Reload the fixture when only the fragment changed.

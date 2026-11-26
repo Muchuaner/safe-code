@@ -29,7 +29,7 @@ with sync_playwright() as p:
         if(message.op==='environment.assess'){
           if(environmentMode==='hold'){window.heldEnvironment=message;return;}
           if(environmentMode==='fail')error='fixture environment unavailable';
-          else result={riskScore:22,level:'low',message:'低风险',username:'workspace',signals:[{label:'系统时区',value:'America/New_York',contribution:0}]};
+          else result={riskScore:22,level:'low',message:'低風險',username:'workspace',signals:[{label:'系統時區',value:'America/New_York',contribution:0}]};
         }
         if(message.op==='resources'){
           if(resourceMode==='hold'){window.heldResource=message;return;}
@@ -44,7 +44,7 @@ with sync_playwright() as p:
     page.wait_for_function('window.safeCodeNativeReady')
     page.locator('#advanced-connect').click()
     actions = page.locator('#advanced-dialog .dialog-buttons button')
-    assert actions.all_text_contents() == ['保存', '直接进入', '取消']
+    assert actions.all_text_contents() == ['儲存', '直接進入', '取消']
     boxes = [actions.nth(i).bounding_box() for i in range(3)]
     assert boxes[0]['x'] < boxes[1]['x'] < boxes[2]['x']
     assert boxes[2]['x'] + boxes[2]['width'] <= 360
@@ -76,22 +76,22 @@ with sync_playwright() as p:
     page.wait_for_function("document.querySelector('#resource-cpu').textContent==='7.5 %'")
     assert page.locator('#resource-memory').inner_text() == '2.0 / 8.0 G'
     assert page.locator('#resource-disk').inner_text() == '12.0 / 60.0 G'
-    page.wait_for_function("document.querySelector('#environment-rating-result').textContent==='低风险 · 22/100'")
-    assert 'VPS用户：workspace' in page.locator('.environment-rating').get_attribute('title')
+    page.wait_for_function("document.querySelector('#environment-rating-result').textContent==='低風險 · 22/100'")
+    assert 'VPS用戶：workspace' in page.locator('.environment-rating').get_attribute('title')
     labels = page.locator('.ip-address-label')
     assert abs(labels.nth(0).bounding_box()['x'] - labels.nth(1).bounding_box()['x']) < 1
     assert abs(labels.nth(0).bounding_box()['x'] - page.locator('.server-resources dt').first.bounding_box()['x']) < 1
     page.screenshot(path=str(evidence / 'workspace.png'))
     page.evaluate("environmentMode='fail'")
     page.clock.fast_forward(60100)
-    page.wait_for_function("document.querySelector('#environment-rating-result').textContent==='暂不可用'")
+    page.wait_for_function("document.querySelector('#environment-rating-result').textContent==='暫不可用'")
     page.evaluate("environmentMode='hold'")
     page.clock.fast_forward(60100)
     page.wait_for_function('window.heldEnvironment')
     page.evaluate("resourceMode='fail'")
     page.clock.fast_forward(5100)
     page.wait_for_function("document.querySelector('#resource-cpu').textContent==='—'")
-    assert '暂不可用' in page.locator('#server-resources').get_attribute('title')
+    assert '暫不可用' in page.locator('#server-resources').get_attribute('title')
     page.evaluate("resourceMode='hold'")
     page.clock.fast_forward(5100)
     page.wait_for_function('window.heldResource')
@@ -100,9 +100,9 @@ with sync_playwright() as p:
     page.locator('#enter-preview').click()
     page.wait_for_selector('#developer-preview')
     page.evaluate('safeCodeNativeResponse({id:heldResource.id,result:{cpuPercent:99,memoryUsedBytes:1,memoryTotalBytes:2,diskUsedBytes:3,diskTotalBytes:4}})')
-    page.evaluate('safeCodeNativeResponse({id:heldEnvironment.id,result:{riskScore:94,level:"high",message:"高风险"}})')
+    page.evaluate('safeCodeNativeResponse({id:heldEnvironment.id,result:{riskScore:94,level:"high",message:"高風險"}})')
     assert page.locator('#resource-cpu').inner_text() == '—'
-    assert page.locator('#environment-rating-result').inner_text() == '未连接'
+    assert page.locator('#environment-rating-result').inner_text() == '未連線'
     before = page.evaluate("calls.filter(m=>m.op==='resources').length")
     environment_before = page.evaluate("calls.filter(m=>m.op==='environment.assess').length")
     page.clock.fast_forward(65000)

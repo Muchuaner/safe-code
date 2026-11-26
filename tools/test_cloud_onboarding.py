@@ -1,4 +1,4 @@
-"""验证仅跳过技术引导，保留用户自行注册的网页账号密码。"""
+"""驗證僅跳過技術引導，保留用戶自行註冊的網頁帳號密碼。"""
 import importlib.util,json,os,sqlite3,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch,Mock

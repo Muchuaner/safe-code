@@ -8,7 +8,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     private let manage: Manage
     private let table = NSTableView()
     private let scroller = NSScrollView()
-    private let notice = NSTextField(wrappingLabelWithString: "正在读取网关…")
+    private let notice = NSTextField(wrappingLabelWithString: "正在讀取網關…")
     private var tabs: [GatewayButton] = []
     private var selectedTab = 0
     private var renderedTab = -1
@@ -95,17 +95,17 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             root.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -28)
         ])
 
-        let heading = GatewayStyle.label("网关总览", size: SafeCodeType.large, weight: .semibold)
+        let heading = GatewayStyle.label("網關總覽", size: SafeCodeType.large, weight: .semibold)
         heading.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let refresh = button("刷新", #selector(refresh(_:)))
-        reviewButton = button("前置审查", #selector(editPromptReview))
-        let slots = button("处理槽位", #selector(editSlots))
+        let refresh = button("重新整理", #selector(refresh(_:)))
+        reviewButton = button("前置審查", #selector(editPromptReview))
+        let slots = button("處理槽位", #selector(editSlots))
         quotaButton = button("Claude 用量", #selector(queryQuota), kind: .quota)
         quotaButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         quotaButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
-        quotaButton.setAccessibilityLabel("查询 Claude 用量")
-        let update = button("更新旧 Key", #selector(updateTicket))
-        let create = button("＋ 创建密钥", #selector(createKey), kind: .primary)
+        quotaButton.setAccessibilityLabel("查詢 Claude 用量")
+        let update = button("更新舊 Key", #selector(updateTicket))
+        let create = button("＋ 建立密鑰", #selector(createKey), kind: .primary)
         toolbarButtons = [refresh, slots, update, create]
         let toolbar = row([heading, NSView(), refresh, reviewButton, slots, quotaButton, update, create])
         append(toolbar, to: root)
@@ -114,7 +114,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         totals.alignment = .top
         totals.distribution = .fillEqually
         totals.spacing = 11
-        let titles = ["启用密钥", "累计请求", "累计 Token", "累计估算费用", "执行中 / 排队"]
+        let titles = ["啟用密鑰", "累計請求", "累計 Token", "累計估算費用", "執行中 / 排隊"]
         for (index, title) in titles.enumerated() {
             let label = GatewayStyle.label(title, color: GatewayStyle.muted, size: SafeCodeType.small, weight: .medium)
             let value = GatewayStyle.label("—", size: SafeCodeType.large, weight: .bold)
@@ -150,7 +150,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         notice.textColor = GatewayStyle.muted
         append(notice, to: root)
 
-        tabs = ["密钥管理", "用量分析", "请求记录"].enumerated().map { index, title in
+        tabs = ["密鑰管理", "用量分析", "請求記錄"].enumerated().map { index, title in
             let tab = button(title, #selector(changeTab(_:)), kind: .tab)
             tab.tag = index
             return tab
@@ -161,8 +161,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         tabStrip.alignment = .width
         append(tabStrip, to: root)
 
-        search.placeholderString = "搜索备注或密钥 ID"
-        search.setAccessibilityLabel("搜索备注或密钥 ID")
+        search.placeholderString = "搜尋備註或密鑰 ID"
+        search.setAccessibilityLabel("搜尋備註或密鑰 ID")
         search.font = .systemFont(ofSize: SafeCodeType.medium)
         search.delegate = self
         search.isBezeled = false
@@ -171,18 +171,18 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
                                              radius: 7)
         searchBox.heightAnchor.constraint(equalToConstant: 34).isActive = true
         searchBox.widthAnchor.constraint(equalToConstant: 260).isActive = true
-        filter.addItems(withTitles: ["全部状态", "已启用", "已撤销", "已过期"])
-        sort.addItems(withTitles: ["新建在前", "最近使用", "请求数最多", "Token 最多"])
-        requestFilter.addItems(withTitles: ["全部结果", "成功", "失败", "受限", "已取消"])
-        for (control, title, action) in [(filter,"密钥状态",#selector(resetKeyPage)), (sort,"密钥排序",#selector(resetKeyPage)),
-                                  (requestFilter,"请求结果",#selector(updateRows))] {
+        filter.addItems(withTitles: ["全部狀態", "已啟用", "已撤銷", "已過期"])
+        sort.addItems(withTitles: ["新建在前", "最近使用", "請求數最多", "Token 最多"])
+        requestFilter.addItems(withTitles: ["全部結果", "成功", "失敗", "受限", "已取消"])
+        for (control, title, action) in [(filter,"密鑰狀態",#selector(resetKeyPage)), (sort,"密鑰排序",#selector(resetKeyPage)),
+                                  (requestFilter,"請求結果",#selector(updateRows))] {
             control.target = self
             control.action = action
             control.font = .systemFont(ofSize: SafeCodeType.medium)
             control.setAccessibilityLabel(title)
             control.heightAnchor.constraint(equalToConstant: 34).isActive = true
         }
-        clearKeyFilter = button("显示所有密钥", #selector(clearHistory))
+        clearKeyFilter = button("顯示所有密鑰", #selector(clearHistory))
         requestCaption.font = .systemFont(ofSize: SafeCodeType.small)
         requestCaption.textColor = GatewayStyle.muted
         listToolbar = row([searchBox, filter, sort, requestFilter, clearKeyFilter, NSView(), requestCaption])
@@ -230,10 +230,10 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         pageNumber.textColor = GatewayStyle.muted
         previousPage = button("‹", #selector(pageKeys(_:)))
         previousPage.tag = -1
-        previousPage.setAccessibilityLabel("上一页")
+        previousPage.setAccessibilityLabel("上一頁")
         nextPage = button("›", #selector(pageKeys(_:)))
         nextPage.tag = 1
-        nextPage.setAccessibilityLabel("下一页")
+        nextPage.setAccessibilityLabel("下一頁")
         pagination = row([keyCount, NSView(), previousPage, pageNumber, nextPage])
         append(pagination, to: root)
         updateRows()
@@ -277,7 +277,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     private func loadSnapshot(background: Bool) {
         guard !fetching, !busy, !checkingQuota || snapshot.isEmpty else { return }
         fetching = true
-        if !background && snapshot.isEmpty { showNotice("正在读取网关…") }
+        if !background && snapshot.isEmpty { showNotice("正在讀取網關…") }
         var args: [String: Any] = ["details": true, "background": background]
         if selectedTab == 1 { args["analytics"] = analysis.period }
         manage("list", args) { [weak self] result in
@@ -304,7 +304,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         guard !checkingQuota, !busy else { return }
         checkingQuota = true
         quotaButton.isEnabled = false
-        quotaButton.title = "查询中…"
+        quotaButton.title = "查詢中…"
         manage("refresh_subscription", [:]) { [weak self] response in
             guard let self else { return }
             self.checkingQuota = false
@@ -312,15 +312,15 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             case .success(let result):
                 let value = result as? [String: Any] ?? [:]
                 let windows = value["windows"] as? [String: [String: Any]] ?? [:]
-                let labels = [("five_hour", "5 小时"), ("seven_day", "7 天")].compactMap { name, label -> String? in
+                let labels = [("five_hour", "5 小時"), ("seven_day", "7 天")].compactMap { name, label -> String? in
                     guard let used = (windows[name]?["used"] as? NSNumber)?.doubleValue else { return nil }
                     let remaining = max(0, min(100, 100-used))
-                    return label + "剩余 " + Display.percent(remaining)
+                    return label + "剩餘 " + Display.percent(remaining)
                 }
                 self.quotaAvailable = value["state"] as? String == "available"
                 self.quotaButton.title = (["Claude 用量"] + labels).joined(separator: "  ")
                 self.quotaButton.toolTip = value["reason"] as? String ?? self.quotaButton.title
-                if !self.quotaAvailable { self.showNotice(self.quotaButton.toolTip ?? "用量暂不可用") }
+                if !self.quotaAvailable { self.showNotice(self.quotaButton.toolTip ?? "用量暫不可用") }
             case .failure(let error):
                 self.quotaButton.title = "Claude 用量"
                 self.quotaButton.toolTip = error.localizedDescription
@@ -355,35 +355,35 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         let limit = snapshot["concurrency_text"] as? String ?? String(Display.number(snapshot["concurrency"]))
         let slotLabel = limit == "0" ? "不限" : limit
         let recent = stats != nil
-        metricTitles[1].stringValue = recent ? "近 24 小时请求" : "累计请求"
-        metricTitles[2].stringValue = recent ? "近 24 小时 Token" : "累计 Token"
+        metricTitles[1].stringValue = recent ? "近 24 小時請求" : "累計請求"
+        metricTitles[2].stringValue = recent ? "近 24 小時 Token" : "累計 Token"
         let cards = [
-            Display.integer(Int64(keys.filter { keyState($0) == "已启用" }.count)),
+            Display.integer(Int64(keys.filter { keyState($0) == "已啟用" }.count)),
             Display.integer(stats.map { Display.number($0["requests"]) } ?? keys.reduce(0) { $0 + Display.number($1["requests"]) }),
             Display.integer(stats.map { Display.number($0["tokens"]) } ?? keys.reduce(0) { $0 + Display.number($1["tokens"]) }),
             Display.usd(Display.number((snapshot["billing"] as? [String: Any])?["cost_nanos"])),
             "\(active) / \(waiting)"
         ]
         let details = [
-            "共 \(keys.count) 把密钥",
-            stats.map { "失败 \(Display.number($0["failures"])) · 受限 \(Display.number($0["limited"]))" } ?? "消息请求总计",
-            stats.map { "近 1 分钟 \(Display.number($0["rpm"])) RPM · \(Display.number($0["tpm"])) TPM" } ?? "输入、输出及缓存",
-            "按官方 API 标准价",
-            stats?["average_ms"].map { "近 24 小时平均处理 " + Display.duration($0) } ?? "并发上限 " + slotLabel
+            "共 \(keys.count) 把密鑰",
+            stats.map { "失敗 \(Display.number($0["failures"])) · 受限 \(Display.number($0["limited"]))" } ?? "消息請求總計",
+            stats.map { "近 1 分鐘 \(Display.number($0["rpm"])) RPM · \(Display.number($0["tpm"])) TPM" } ?? "輸入、輸出及快取",
+            "按官方 API 標準價",
+            stats?["average_ms"].map { "近 24 小時平均處理 " + Display.duration($0) } ?? "併發上限 " + slotLabel
         ]
         for (label, value) in zip(totalLabels, cards) { label.stringValue = value }
         for (label, value) in zip(metricDetails, details) { label.stringValue = value; label.toolTip = value }
-        toolbarButtons[1].title = "处理槽位 " + slotLabel
+        toolbarButtons[1].title = "處理槽位 " + slotLabel
         let review = snapshot["prompt_review"] as? [String: Any]
-        reviewButton.title = review?["enabled"] as? Bool == true ? "前置审查 · 已开启" : "前置审查"
+        reviewButton.title = review?["enabled"] as? Bool == true ? "前置審查 · 已開啟" : "前置審查"
         queue.isHidden = false
-        let queueLabel = active == 0 ? "网关空闲" : "正在处理 \(active) 个请求"
+        let queueLabel = active == 0 ? "網關空閒" : "正在處理 \(active) 個請求"
         let message = NSMutableAttributedString(string:"●  " + queueLabel,
             attributes:[.font:NSFont.systemFont(ofSize:SafeCodeType.small,weight:.semibold),.foregroundColor:GatewayStyle.ink])
         message.addAttribute(.foregroundColor,value:active == 0 ? GatewayStyle.grayLine : GatewayStyle.accent,
                              range:NSRange(location:0,length:1))
         queueNow.attributedStringValue = message
-        queueWaiting.stringValue = "并发 \(active)" + (limit == "0" ? "（不限）" : "/" + slotLabel) + " · 排队 \(waiting)"
+        queueWaiting.stringValue = "併發 \(active)" + (limit == "0" ? "（不限）" : "/" + slotLabel) + " · 排隊 \(waiting)"
         queueCapacity.isHidden = limit == "0"
         queueCapacity.maxValue = max(1, Double(limit) ?? 1)
         queueCapacity.doubleValue = Double(active)
@@ -442,8 +442,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             return
         }
         if section == 0 {
-            columns([("note","备注 / 密钥 ID",121),("status","状态",66),("policy","模型 / 失效时间",129),("rpm","限频",66),("requests","请求",56),
-                     ("tokens","Token",86),("cost","已用 / 余额",92),("last","最近使用",104),("actions","操作",205)])
+            columns([("note","備註 / 密鑰 ID",121),("status","狀態",66),("policy","模型 / 失效時間",129),("rpm","限頻",66),("requests","請求",56),
+                     ("tokens","Token",86),("cost","已用 / 餘額",92),("last","最近使用",104),("actions","操作",205)])
             let keyword = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             var matching = keys.filter { key in
                 let statusMatches = filter.indexOfSelectedItem == 0 || keyState(key) == filter.titleOfSelectedItem
@@ -456,18 +456,18 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             keyPage = min(max(0, keyPage), pages-1)
             visibleRows = Array(matching.dropFirst(keyPage*Self.keysPerPage).prefix(Self.keysPerPage))
             pagination.isHidden = matching.isEmpty
-            keyCount.stringValue = "共 \(matching.count) 把密钥"
+            keyCount.stringValue = "共 \(matching.count) 把密鑰"
             pageNumber.stringValue = "\(keyPage+1) / \(pages)"
             previousPage.isEnabled = keyPage > 0
             nextPage.isEnabled = keyPage+1 < pages
         } else {
-            columns([("at","时间",153),("key_id","密钥 ID",136),("model","模型",170),("outcome","结果",90),
-                     ("status","HTTP",64),("wait_ms","等待",76),("duration_ms","处理耗时",89),("tokens","Token",94)])
+            columns([("at","時間",153),("key_id","密鑰 ID",136),("model","模型",170),("outcome","結果",90),
+                     ("status","HTTP",64),("wait_ms","等待",76),("duration_ms","處理耗時",89),("tokens","Token",94)])
             let outcomes = ["", "success", "failed", "limited", "canceled"]
             let outcome = outcomes[requestFilter.indexOfSelectedItem]
             let recent = (keyHistory?["recent"] ?? snapshot["recent"]) as? [[String: Any]] ?? []
             visibleRows = outcome.isEmpty ? recent : recent.filter { $0["outcome"] as? String == outcome }
-            requestCaption.stringValue = keyHistory.map { "仅查看 · " + keyName($0) } ?? "最近 30 条 · 新采集的请求"
+            requestCaption.stringValue = keyHistory.map { "僅查看 · " + keyName($0) } ?? "最近 30 條 · 新採集的請求"
         }
         let itemHeight: CGFloat = section == 0 ? 57 : 40
         table.rowHeight = itemHeight
@@ -478,8 +478,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             table.reloadData()
         }
         empty.isHidden = snapshot.isEmpty || !visibleRows.isEmpty
-        empty.stringValue = section == 0 ? (keys.isEmpty ? "还没有密钥。点击右上角创建第一把。" : "没有符合筛选条件的密钥。")
-              : section == 2 ? "没有符合筛选条件的请求。" : "这个时段暂无记录。"
+        empty.stringValue = section == 0 ? (keys.isEmpty ? "還沒有密鑰。點擊右上角建立第一把。" : "沒有符合篩選條件的密鑰。")
+              : section == 2 ? "沒有符合篩選條件的請求。" : "這個時段暫無記錄。"
         updateButtons()
     }
 
@@ -508,17 +508,17 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         if id == "actions" { return actions(for: row) }
         let value: String
         switch id {
-        case "note": value = (row["note"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "未填写备注"
+        case "note": value = (row["note"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "未填寫備註"
         case "status" where selectedTab == 0: value = keyState(row)
-        case "policy": value = (row["allowed_models"] as? [String]).map { "\($0.count) 个模型" } ?? "全部模型"
-        case "rpm": value = Display.number(row[id]) > 0 ? "\(Display.number(row[id])) / 分" : "不限频"
+        case "policy": value = (row["allowed_models"] as? [String]).map { "\($0.count) 個模型" } ?? "全部模型"
+        case "rpm": value = Display.number(row[id]) > 0 ? "\(Display.number(row[id])) / 分" : "不限頻"
         case "cost":
             let used = Display.number(row["cost_nanos"])
             value = Display.usd(used)
         case "at", "last": value = Display.date(row[id == "last" ? "last_used" : id])
         case "key_id": value = String((row[id] as? String ?? "").prefix(12))
         case "cost_nanos": value = Display.usd(Display.number(row[id]))
-        case "outcome": value = ["success":"成功","failed":"失败","limited":"限流","canceled":"取消"][row[id] as? String ?? ""] ?? "—"
+        case "outcome": value = ["success":"成功","failed":"失敗","limited":"限流","canceled":"取消"][row[id] as? String ?? ""] ?? "—"
         case "wait_ms", "duration_ms", "average_ms", "p95_ms":
             value = Display.duration(row[id] ?? NSNull())
         default: value = row[id] as? String ?? (row[id] as? NSNumber).map { Display.integer($0.int64Value) } ?? "—"
@@ -541,20 +541,20 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             label.toolTip = (row["allowed_models"] as? [String])?.joined(separator: "、") ?? value
             let expiry = (row["expires_at"] as? NSNumber).map {
                 Date(timeIntervalSince1970: $0.doubleValue).formatted(.dateTime.year().month().day().hour().minute())
-            } ?? "永不过期"
+            } ?? "永不過期"
             let detail = GatewayStyle.label(expiry, color: GatewayStyle.muted, size: SafeCodeType.small)
             detail.toolTip = expiry
             items = [label, detail]
         } else if id == "cost" {
             let remaining = (row["budget_nanos"] as? NSNumber).map { $0.int64Value - Display.number(row["cost_nanos"]) }
-            let detail = GatewayStyle.label(remaining.map { "余 " + Display.usd($0) } ?? "不限额",
+            let detail = GatewayStyle.label(remaining.map { "餘 " + Display.usd($0) } ?? "不限額",
                                             color: remaining.map { $0 <= 0 } == true ? GatewayStyle.danger : GatewayStyle.muted,
                                             size: SafeCodeType.small)
             detail.alignment = .right
             items = [label, detail]
         } else if ["status","outcome"].contains(id) && (selectedTab == 0 || id == "outcome") {
-            let good = value == "已启用" || value == "成功"
-            let bad = value == "已撤销" || value == "失败"
+            let good = value == "已啟用" || value == "成功"
+            let bad = value == "已撤銷" || value == "失敗"
             label.textColor = good ? GatewayStyle.accent : bad ? GatewayStyle.danger : GatewayStyle.muted
             label.font = .systemFont(ofSize: SafeCodeType.small, weight: .semibold)
             let badge = GatewayStyle.surface(label, inset: NSEdgeInsets(top: 3, left: 7, bottom: 3, right: 7), radius: 5,
@@ -583,16 +583,16 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     }
 
     private func actions(for key: [String: Any]) -> NSView {
-        let detail = rowAction("用量详情", #selector(keyDetails(_:)), key: key)
+        let detail = rowAction("用量詳情", #selector(keyDetails(_:)), key: key)
         var buttons: [NSView] = [detail]
         if key["bound_device"] is String {
-            buttons.append(rowAction("解绑", #selector(unbindRowKey(_:)), key: key))
+            buttons.append(rowAction("解綁", #selector(unbindRowKey(_:)), key: key))
         }
         if key["enabled"] as? Bool == true {
-            buttons += [rowAction("编辑", #selector(editRowKey(_:)), key: key),
-                        rowAction("撤销", #selector(removeRowKey(_:)), key: key, danger: true)]
+            buttons += [rowAction("編輯", #selector(editRowKey(_:)), key: key),
+                        rowAction("撤銷", #selector(removeRowKey(_:)), key: key, danger: true)]
         } else if snapshot["can_delete_revoked_keys"] as? Bool == true {
-            buttons.append(rowAction("彻底删除", #selector(removeRowKey(_:)), key: key, danger: true))
+            buttons.append(rowAction("徹底刪除", #selector(removeRowKey(_:)), key: key, danger: true))
         }
         return cell(row(buttons + [NSView()], spacing: 3))
     }
@@ -619,7 +619,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     @objc private func unbindRowKey(_ sender: NSButton) {
         guard !busy, let key = key(for: sender), let id = key["id"] as? String,
               let device = key["bound_device"] as? String else { return }
-        confirm("解绑设备", "解除「" + keyName(key) + "」的设备绑定？该 Key 的余额和用量记录将保留。") {
+        confirm("解綁裝置", "解除「" + keyName(key) + "」的裝置綁定？該 Key 的餘額和用量記錄將保留。") {
             self.mutate("unbind", ["id":id, "deviceId":device])
         }
     }
@@ -627,9 +627,9 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     @objc private func removeRowKey(_ sender: NSButton) {
         guard !busy, let key = key(for: sender), let id = key["id"] as? String else { return }
         if key["enabled"] as? Bool == true {
-            confirm("撤销密钥", "使用该 Key 的设备将无法继续请求。") { self.mutate("revoke", ["id":id]) }
+            confirm("撤銷密鑰", "使用該 Key 的裝置將無法繼續請求。") { self.mutate("revoke", ["id":id]) }
         } else if snapshot["can_delete_revoked_keys"] as? Bool == true {
-            confirm("删除已撤销密钥", "删除后无法恢复此密钥的用量记录。") { self.mutate("delete", ["id":id]) }
+            confirm("刪除已撤銷密鑰", "刪除後無法恢復此密鑰的用量記錄。") { self.mutate("delete", ["id":id]) }
         }
     }
 
@@ -639,8 +639,8 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     }
 
     private func keyState(_ key: [String: Any]) -> String {
-        if key["expired"] as? Bool == true { return "已过期" }
-        return key["enabled"] as? Bool == true ? "已启用" : "已撤销"
+        if key["expired"] as? Bool == true { return "已過期" }
+        return key["enabled"] as? Bool == true ? "已啟用" : "已撤銷"
     }
 
     @objc private func usageSelectedKey() {
@@ -656,15 +656,15 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
                 let usage = data as? [String: Any] ?? [:]
                 let models = usage["models"] as? [[String: Any]] ?? []
                 let lines = models.map { model in
-                    "\(model["model"] as? String ?? "—") · \(Display.number(model["requests"])) 次 · \(Display.number(model["failures"])) 次失败\n" +
-                    "输入 \(Display.integer(Display.number(model["input"]))) · 输出 \(Display.integer(Display.number(model["output"]))) · 缓存读取 \(Display.integer(Display.number(model["cache_read"]))) · 缓存写入 \(Display.integer(Display.number(model["cache_write"])))"
+                    "\(model["model"] as? String ?? "—") · \(Display.number(model["requests"])) 次 · \(Display.number(model["failures"])) 次失敗\n" +
+                    "輸入 \(Display.integer(Display.number(model["input"]))) · 輸出 \(Display.integer(Display.number(model["output"]))) · 快取讀取 \(Display.integer(Display.number(model["cache_read"]))) · 快取寫入 \(Display.integer(Display.number(model["cache_write"])))"
                 }
                 guard let window = self.view.window, window.attachedSheet == nil else { return }
                 let dialog = NSAlert()
-                dialog.messageText = "用量详情 · " + self.keyName(key)
-                dialog.informativeText = lines.isEmpty ? "此密钥暂无用量。" : lines.joined(separator: "\n\n")
-                dialog.addButton(withTitle: "关闭")
-                dialog.addButton(withTitle: "查看此密钥的请求")
+                dialog.messageText = "用量詳情 · " + self.keyName(key)
+                dialog.informativeText = lines.isEmpty ? "此密鑰暫無用量。" : lines.joined(separator: "\n\n")
+                dialog.addButton(withTitle: "關閉")
+                dialog.addButton(withTitle: "查看此密鑰的請求")
                 dialog.beginSheetModal(for: window) { response in
                     if response == .alertSecondButtonReturn {
                         self.keyHistory = key
@@ -686,7 +686,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         let note = field(key?["note"] as? String ?? "", placeholder: "可留空")
         let rpm = field(key.map { String(Display.number($0["rpm"])) } ?? "0", placeholder: "0 表示不限")
         let budgetValue = (key?["budget_nanos"] as? NSNumber).map { String(format: "%.2f", $0.doubleValue/1_000_000_000) } ?? ""
-        let budget = field(budgetValue, placeholder: "留空不限额")
+        let budget = field(budgetValue, placeholder: "留空不限額")
         let activation = NSSecureTextField()
         let needsActivation = key == nil && snapshot["activation_required"] as? Bool == true
         let policySupported = snapshot["key_policy_supported"] as? Bool == true
@@ -696,34 +696,34 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         let expiry = NSDatePicker()
         expiry.datePickerStyle = .textFieldAndStepper
         expiry.datePickerElements = [.yearMonthDay, .hourMinute]
-        expiry.setAccessibilityLabel("到期日期与时间")
+        expiry.setAccessibilityLabel("到期日期與時間")
         let savedExpiry = (key?["expires_at"] as? NSNumber)?.int64Value
         expiry.dateValue = savedExpiry.map { Date(timeIntervalSince1970: Double($0)) } ?? Date().addingTimeInterval(7 * 86400)
-        let never = NSButton(checkboxWithTitle: "永不过期", target: nil, action: nil)
+        let never = NSButton(checkboxWithTitle: "永不過期", target: nil, action: nil)
         never.state = savedExpiry == nil ? .on : .off
         let expiryControls = row([never, expiry], spacing: 6)
         expiry.isHidden = never.state == .on
         let expiryToggle = GatewayKeyExpiryToggle(button: never, datePicker: expiry)
         modelPicker.button.isEnabled = policySupported
         never.isEnabled = policySupported
-        var fields: [(String, NSView)] = [("备注",note),("限频（次 / 分）",rpm),("累计额度（美元）",budget),
-                                          ("模型管理", modelPicker.button), ("失效时间", expiryControls)]
+        var fields: [(String, NSView)] = [("備註",note),("限頻（次 / 分）",rpm),("累計額度（美元）",budget),
+                                          ("模型管理", modelPicker.button), ("失效時間", expiryControls)]
         let devicePolicy = NSPopUpButton()
         devicePolicy.addItems(withTitles:["Safe Code 桌面接入","普通 API"])
         devicePolicy.selectItem(at:key == nil || key?["device_access"] as? Bool == true ? 0 : 1)
         let devicePolicySupported = snapshot["device_policy_supported"] as? Bool == true
         if devicePolicySupported { fields.append(("接入用途", devicePolicy)) }
-        if needsActivation { fields.append(("激活码", activation)) }
-        let message = !policySupported ? "请先在「网关设置」升级 VPS 网关，以设置模型权限和失效时间。" :
+        if needsActivation { fields.append(("啟用碼", activation)) }
+        let message = !policySupported ? "請先在「網關設定」升級 VPS 網關，以設定模型權限和失效時間。" :
             snapshot["device_service_problem"] as? String != nil ?
-                "设备服务尚未就绪。请在网关设置中运行故障修复，或先选择普通 API。" : ""
-        form(key == nil ? "创建密钥":"编辑密钥", fields,message:message) { [expiryToggle] in
+                "裝置服務尚未就緒。請在網關設定中執行故障修復，或先選擇普通 API。" : ""
+        form(key == nil ? "建立密鑰":"編輯密鑰", fields,message:message) { [expiryToggle] in
             let maxRate = Int(rpm.stringValue.trimmingCharacters(in: .whitespaces))
             let rawBudget = budget.stringValue.trimmingCharacters(in: .whitespaces)
             let cents = Decimal(string:rawBudget,locale:Locale(identifier:"en_US_POSIX")).map { $0*100 }
             guard let maxRate, (0...600).contains(maxRate), rawBudget.isEmpty ||
                     (cents.map { let n=NSDecimalNumber(decimal:$0); return $0>=0 && $0<=100_000_000 && Decimal(n.intValue)==$0 } == true) else {
-                self.showNotice("请输入有效限频与累计额度，金额最多保留两位小数。")
+                self.showNotice("請輸入有效限頻與累計額度，金額最多保留兩位小數。")
                 return
             }
             var args: [String: Any] = ["note":note.stringValue.trimmingCharacters(in:.whitespacesAndNewlines),
@@ -731,11 +731,11 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             args["budget_cents"] = cents.map { NSDecimalNumber(decimal:$0).intValue as Any } ?? NSNull()
             if policySupported {
                 let models = modelPicker.allowedModels
-                guard models?.isEmpty != true else { self.showNotice("请至少选择一个允许使用的模型。"); return }
+                guard models?.isEmpty != true else { self.showNotice("請至少選擇一個允許使用的模型。"); return }
                 args["allowed_models"] = models as Any? ?? NSNull()
                 let seconds = expiryToggle.expiration
                 guard seconds == nil || seconds == savedExpiry || Double(seconds ?? 0) > Date().timeIntervalSince1970 else {
-                    self.showNotice("请选择晚于现在的失效时间。")
+                    self.showNotice("請選擇晚於現在的失效時間。")
                     return
                 }
                 args["expires_at"] = seconds as Any? ?? NSNull()
@@ -753,12 +753,12 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     @objc private func editPromptReview() {
         guard let settings = snapshot["prompt_review"] as? [String: Any] else { return }
         let selection = NSPopUpButton()
-        selection.addItems(withTitles: ["内置模型 · Sonnet", "内置模型 · Opus", "DeepSeek Flash"])
+        selection.addItems(withTitles: ["內置模型 · Sonnet", "內置模型 · Opus", "DeepSeek Flash"])
         let model = settings["model"] as? String ?? "sonnet"
         selection.selectItem(at: settings["provider"] as? String == "deepseek" ? 2 : model == "opus" ? 1 : 0)
         let key = NSSecureTextField()
         let hasKey = settings["has_deepseek_key"] as? Bool == true
-        key.placeholderString = hasKey ? "已保存，粘贴可替换" : "选择 DeepSeek 时填写"
+        key.placeholderString = hasKey ? "已儲存，貼上可替換" : "選擇 DeepSeek 時填寫"
         let enabled = NSSwitch()
         enabled.state = settings["enabled"] as? Bool == true ? .on : .off
         let language = NSSwitch()
@@ -768,14 +768,14 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         enabled.action = #selector(updateReviewLanguage(_:))
         updateReviewLanguage(enabled)
         let languageSupported = settings["language_replacement"] is Bool
-        var fields: [(String, NSView)] = [("审查模型", selection), ("DeepSeek API Key", key), ("安全审查", enabled)]
-        if languageSupported { fields.append(("语言替换", language)) }
-        let info = "开启语言替换后，上方模型会将通过安全审查的提示词翻译成英文。选择 DeepSeek 时，本轮文字会发送给 DeepSeek。"
-        form("前置审查", fields, message: info) {
+        var fields: [(String, NSView)] = [("審查模型", selection), ("DeepSeek API Key", key), ("安全審查", enabled)]
+        if languageSupported { fields.append(("語言替換", language)) }
+        let info = "開啟語言替換後，上方模型會將通過安全審查的提示詞翻譯成英文。選擇 DeepSeek 時，本輪文字會傳送給 DeepSeek。"
+        form("前置審查", fields, message: info) {
             let deepseek = selection.indexOfSelectedItem == 2
             let secret = key.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if enabled.state == .on && deepseek && secret.isEmpty && !hasKey {
-                self.showNotice("请先填写 DeepSeek API Key，再开始审查。")
+                self.showNotice("請先填寫 DeepSeek API Key，再開始審查。")
                 return
             }
             var args: [String: Any] = ["enabled": enabled.state == .on, "provider": deepseek ? "deepseek" : "builtin",
@@ -793,10 +793,10 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
 
     @objc private func editSlots() {
         let value = field(String(Display.number(snapshot["concurrency"])), placeholder: "0 表示不限")
-        form("处理槽位", [("并发数",value)]) {
+        form("處理槽位", [("併發數",value)]) {
             let text=value.stringValue.trimmingCharacters(in:.whitespaces)
             guard !text.isEmpty, text.allSatisfy({$0 >= "0" && $0 <= "9"}) else {
-                self.showNotice("处理槽位必须是非负整数。")
+                self.showNotice("處理槽位必須是非負整數。")
                 return
             }
             self.mutate("set_concurrency", ["concurrency":text])
@@ -805,7 +805,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
 
     @objc private func updateTicket() {
         let ticket = NSSecureTextField()
-        form("更新旧 Key", [("旧 Safe Code Key",ticket)]) {
+        form("更新舊 Key", [("舊 Safe Code Key",ticket)]) {
             let full = ticket.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
             if !full.isEmpty { self.mutate("refresh_ticket",["ticket":full]) }
         }
@@ -831,14 +831,14 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
     private func showTicket(_ ticket: String) {
         guard let window = view.window else { return }
         let dialog = NSAlert()
-        dialog.messageText = "保存 Safe Code Key"
-        dialog.informativeText = "请复制后回到 Safe Code 主界面的「API Key 接入」粘贴。"
+        dialog.messageText = "儲存 Safe Code Key"
+        dialog.informativeText = "請複製後回到 Safe Code 主介面的「API Key 接入」貼上。"
         let content = field(ticket, placeholder: "")
         content.isEditable = false
         content.frame = NSRect(x:0,y:0,width:410,height:26)
         dialog.accessoryView = content
-        dialog.addButton(withTitle:"复制 Key")
-        dialog.addButton(withTitle:"关闭")
+        dialog.addButton(withTitle:"複製 Key")
+        dialog.addButton(withTitle:"關閉")
         dialog.beginSheetModal(for:window) { result in
             if result == .alertFirstButtonReturn {
                 NSPasteboard.general.clearContents()
@@ -868,7 +868,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         }
         grid.frame.size = grid.fittingSize
         dialog.accessoryView = grid
-        dialog.addButton(withTitle:"保存")
+        dialog.addButton(withTitle:"儲存")
         dialog.addButton(withTitle:"取消")
         dialog.beginSheetModal(for:window) { result in if result == .alertFirstButtonReturn { save() } }
         (fields.first?.1 as? NSTextField)?.selectText(nil)
@@ -880,7 +880,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         dialog.messageText = title
         dialog.informativeText = message
         dialog.addButton(withTitle:"取消")
-        dialog.addButton(withTitle:"确认")
+        dialog.addButton(withTitle:"確認")
         dialog.beginSheetModal(for: window) { result in if result == .alertSecondButtonReturn { action() } }
     }
 }
@@ -896,7 +896,7 @@ private final class GatewayKeyExpiryToggle: NSObject {
         super.init()
         button.target = self
         button.action = #selector(update)
-        datePicker.toolTip = "按本机时区显示，到期后停止接受新请求。"
+        datePicker.toolTip = "按本機時區顯示，到期後停止接受新請求。"
     }
 
     var expiration: Int64? {
@@ -917,8 +917,8 @@ private final class GatewayKeyModelPicker: NSObject {
     private let document = GatewayPageView()
     private let options = NSStackView()
     private let status = NSTextField(wrappingLabelWithString: "")
-    private let help = NSTextField(wrappingLabelWithString: "「Default」「Best」等自动选项由 CloudCLI 决定实际使用的模型。")
-    private let retry = NSButton(title: "重试", target: nil, action: nil)
+    private let help = NSTextField(wrappingLabelWithString: "「Default」「Best」等自動選項由 CloudCLI 決定實際使用的模型。")
+    private let retry = NSButton(title: "重試", target: nil, action: nil)
     private let load: (@escaping GatewayPanel.Reply) -> Void
     private var selected: Set<String>
     private var catalog: [[String: String]] = []
@@ -930,11 +930,11 @@ private final class GatewayKeyModelPicker: NSObject {
         self.selected = Set(selected ?? [])
         self.load = load
         super.init()
-        mode.addItems(withTitles: ["全部模型", "仅允许所选模型"])
+        mode.addItems(withTitles: ["全部模型", "僅允許所選模型"])
         mode.selectItem(at: selected == nil ? 0 : 1)
         mode.target = self
         mode.action = #selector(changeMode)
-        mode.setAccessibilityLabel("模型权限")
+        mode.setAccessibilityLabel("模型權限")
         button.target = self
         button.action = #selector(open)
         button.setAccessibilityLabel("模型管理")
@@ -1002,7 +1002,7 @@ private final class GatewayKeyModelPicker: NSObject {
     @objc private func loadCatalog() {
         guard !loading else { return }
         loading = true
-        status.stringValue = "正在读取 CloudCLI 模型…"
+        status.stringValue = "正在讀取 CloudCLI 模型…"
         status.isHidden = false
         retry.isHidden = true
         renderChoices()
@@ -1013,9 +1013,9 @@ private final class GatewayKeyModelPicker: NSObject {
             switch result {
             case .success(let value):
                 self.catalog = (value as? [String: [[String: String]]])?["models"] ?? []
-                self.status.stringValue = self.catalog.isEmpty ? "CloudCLI 当前没有返回可用模型。" : ""
+                self.status.stringValue = self.catalog.isEmpty ? "CloudCLI 當前沒有返回可用模型。" : ""
             case .failure(let error):
-                self.status.stringValue = "无法读取模型。" + error.localizedDescription
+                self.status.stringValue = "無法讀取模型。" + error.localizedDescription
             }
             self.status.isHidden = !self.catalog.isEmpty
             self.retry.isHidden = !self.catalog.isEmpty
@@ -1055,7 +1055,7 @@ private final class GatewayKeyModelPicker: NSObject {
     }
 
     private func updateSummary() {
-        button.title = allowedModels.map { $0.isEmpty ? "选择模型…" : "仅允许 \($0.count) 个模型" } ?? "全部模型"
+        button.title = allowedModels.map { $0.isEmpty ? "選擇模型…" : "僅允許 \($0.count) 個模型" } ?? "全部模型"
     }
 }
 

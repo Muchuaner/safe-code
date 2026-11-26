@@ -9,12 +9,12 @@ internal static class MacSelfTest
     public static async Task RunAsync()
     {
         LocalSecrets.Initialize(RandomNumberGenerator.GetBytes(32));byte[] plain=Encoding.UTF8.GetBytes("fixture-password-not-a-real-secret");byte[] cipher=LocalSecrets.Protect(plain);
-        if(!LocalSecrets.Unprotect(cipher).SequenceEqual(plain))throw new Exception("加密保存往返失败。");
-        cipher[^1]^=1;try{LocalSecrets.Unprotect(cipher);throw new Exception("接受了被改写的密文。");}catch(CryptographicException){}
-        if(MacClients.Quote("a'b")!="'a'\\''b'")throw new Exception("Shell 参数转义失败。");
+        if(!LocalSecrets.Unprotect(cipher).SequenceEqual(plain))throw new Exception("加密儲存往返失敗。");
+        cipher[^1]^=1;try{LocalSecrets.Unprotect(cipher);throw new Exception("接受了被改寫的密文。");}catch(CryptographicException){}
+        if(MacClients.Quote("a'b")!="'a'\\''b'")throw new Exception("Shell 參數轉義失敗。");
         string Feed(string suffix)=>JsonSerializer.Serialize(new{tag_name="Beta-0.4.4.2",draft=false,prerelease=true,assets=new[]{new{name="SafeCode-Beta-0.4.4.2-"+suffix,browser_download_url="https://github.com/Muchuaner/safe-code/releases/download/Beta-0.4.4.2/SafeCode-Beta-0.4.4.2-"+suffix,digest="sha256:"+new string('a',64),size=123}}});
-        using(var win=JsonDocument.Parse(Feed("Setup-x64.exe")))if(ClientServices.ParseRelease(win.RootElement,"Beta-0.4.4.1","macOS-arm64.dmg").CanInstall)throw new Exception("Mac 更新误选 Windows 安装包。");
-        using(var mac=JsonDocument.Parse(Feed("macOS-arm64.dmg")))if(!ClientServices.ParseRelease(mac.RootElement,"Beta-0.4.4.1","macOS-arm64.dmg").CanInstall||ClientServices.ParseRelease(mac.RootElement,"Beta-0.4.4.1","macOS-x64.dmg").CanInstall)throw new Exception("架构筛选失败。");
+        using(var win=JsonDocument.Parse(Feed("Setup-x64.exe")))if(ClientServices.ParseRelease(win.RootElement,"Beta-0.4.4.1","macOS-arm64.dmg").CanInstall)throw new Exception("Mac 更新誤選 Windows 安裝包。");
+        using(var mac=JsonDocument.Parse(Feed("macOS-arm64.dmg")))if(!ClientServices.ParseRelease(mac.RootElement,"Beta-0.4.4.1","macOS-arm64.dmg").CanInstall||ClientServices.ParseRelease(mac.RootElement,"Beta-0.4.4.1","macOS-x64.dmg").CanInstall)throw new Exception("架構篩選失敗。");
         var catalog=JsonNode.Parse("""
             [
                 {"id":"default","display_name":"Default (recommended)","desktop_model_id":"safecode-cloudcli-default"},
@@ -34,9 +34,9 @@ internal static class MacSelfTest
            (string?)models[2]!["maxEffort"]!="xhigh"||(bool?)models[2]!["supports1m"]!=true||
            (string?)models[2]!["behavesAs"]!="claude-fixture-opus"||
            (string?)models[3]!["maxEffort"]!="high"||classifier!="claude-fixture-classifier")
-            throw new Exception("Claude Desktop API Key 模型、思考强度或分类器配置错误。");
+            throw new Exception("Claude Desktop API Key 模型、思考強度或分類器配置錯誤。");
         using(var transport=DesktopKeyAccess.RemoteHandler(new("https://gateway.example",new string('0',64),new string('a',43))))
-            if(transport.UseProxy)throw new Exception("固定证书网关不应经过系统代理的 CONNECT 隧道。");
+            if(transport.UseProxy)throw new Exception("固定證書網關不應經過系統代理的 CONNECT 隧道。");
         Console.WriteLine("MAC_PINNED_GATEWAY_DIRECT_TRANSPORT_OK");
         Console.WriteLine("MAC_CLAUDE_PROFILE_CHAT_AND_CLASSIFIER_CONFIGURATION_OK");
         string profileTest = Directory.CreateTempSubdirectory("safecode-mac-profile-").FullName;
@@ -81,16 +81,16 @@ internal static class MacSelfTest
             access.RemoveLegacyMacProfiles(meta,library);
             SaveBetaState(sealedId, 18900);
             access.RemoveLegacyMacProfiles(meta,library);
-            if(meta.ToJsonString()!=originalMeta)throw new Exception("缺少匹配的本机状态时改动了旧配置。");
+            if(meta.ToJsonString()!=originalMeta)throw new Exception("缺少匹配的本機狀態時改動了舊配置。");
             SaveBetaState(tokenId, 18899);
             access.RemoveLegacyMacProfiles(meta,library);
             if((string?)meta["appliedId"]!=sealedId || meta["entries"]!.AsArray().Count!=2 ||
                 meta["entries"]!.AsArray().Any(entry=>(string?)entry?["id"]==tokenId))
-                throw new Exception("迁移明文配置时误动了同名加密配置。");
+                throw new Exception("遷移明文配置時誤動了同名加密配置。");
             SaveBetaState(sealedId, 18899);
             access.RemoveLegacyMacProfiles(meta,library);
             if ((string?)meta["appliedId"]!="" || (string?)meta["entries"]!.AsArray().Single()!["id"]!=otherId)
-                throw new Exception("未迁移有匹配本机记录的加密 SSH 配置。");
+                throw new Exception("未遷移有匹配本機記錄的加密 SSH 配置。");
             Console.WriteLine("MAC_LEGACY_SSH_PROFILE_MIGRATION_OK");
 
             var savedKey = new
@@ -109,11 +109,11 @@ internal static class MacSelfTest
             try
             {
                 DesktopKeyAccess.PrepareProfile(library,tokenId,18899,"fixture-local-token");
-                throw new Exception("启动时接受了非当前 SafeCode 配置。");
+                throw new Exception("啟動時接受了非當前 SafeCode 配置。");
             }
             catch(InvalidOperationException){}
             if (File.ReadAllText(otherPath)!=otherContents || JsonNode.Parse(File.ReadAllText(activePath))?["codeDefaultPermissionMode"]!=null)
-                throw new Exception("打开 Claude Desktop 时改写了非当前 Safe Code 配置。");
+                throw new Exception("開啟 Claude Desktop 時改寫了非當前 Safe Code 配置。");
             meta["appliedId"] = tokenId;
             meta["entries"]!.AsArray().Add(new JsonObject { ["id"] = tokenId, ["name"] = "SafeCode" });
             DesktopKeyAccess.WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
@@ -122,10 +122,10 @@ internal static class MacSelfTest
             var preparedProfile = JsonNode.Parse(prepared);
             if ((string?)preparedProfile?["codeDefaultPermissionMode"]!="auto" ||
                 (string?)preparedProfile?["inferenceGatewayApiKey"]!="fixture-local-token")
-                throw new Exception("打开 Claude Desktop 前未保留原接入并设为 Auto。");
+                throw new Exception("開啟 Claude Desktop 前未保留原接入並設為 Auto。");
             DesktopKeyAccess.PrepareProfile(library,tokenId,18899,"fixture-local-token");
             if (File.ReadAllText(activePath)!=prepared)
-                throw new Exception("重复打开 Claude Desktop 改写了相同配置。");
+                throw new Exception("重複開啟 Claude Desktop 改寫了相同配置。");
             Console.WriteLine("MAC_CLAUDE_LAUNCH_AUTO_DEFAULT_OK");
         }
         finally { Directory.Delete(profileTest, true); }
@@ -134,11 +134,11 @@ internal static class MacSelfTest
             new(2560,1600),RdpResizeMode.Dynamic,true);
         if(!rdp.Contains("/cert:deny,fingerprint:sha256:"+fingerprint)||!rdp.Contains("/p:fixture password")||
            !rdp.Contains("/f")||!rdp.Contains("/dynamic-resolution")||rdp.Contains("/smart-sizing"))
-            throw new Exception("Mac RDP 指纹和动态分辨率参数错误。");
+            throw new Exception("Mac RDP 指紋和動態解像度參數錯誤。");
         var scaled=MacClients.FreeRdpArguments(new(22119,"fixture",fingerprint),new("workspace","fixture password"),
             new(1920,1080),RdpResizeMode.Scale,false);
         if(!scaled.Contains("/smart-sizing")||scaled.Contains("/dynamic-resolution")||scaled.Contains("/f"))
-            throw new Exception("Mac RDP 固定分辨率缩放参数错误。");
+            throw new Exception("Mac RDP 固定解像度縮放參數錯誤。");
         Console.WriteLine("MAC_RDP_PINNED_CERTIFICATE_AND_DISPLAY_MODES_OK");
         Console.WriteLine("MAC_AES_GCM_TAMPER_SHELL_QUOTING_AND_PLATFORM_UPDATE_SELECTION_OK");
         string folder=Directory.CreateTempSubdirectory("safecode-host-resume-").FullName;
@@ -153,11 +153,11 @@ internal static class MacSelfTest
             if(!host.CanResume(settings)||host.CanResume(settings with{Port=22})||
                 host.CanResume(settings with{Username="another"})||host.CanResume(settings with{Host="different.example"})||
                 saved.Matches(settings,"SHA256:different"))
-                throw new Exception("本机控制的恢复范围有误。");
+                throw new Exception("本機控制的恢復範圍有誤。");
             await host.SuspendAsync(CancellationToken.None);
-            if(!host.CanResume(settings))throw new Exception("安全退出丢失本机控制恢复设置。");
+            if(!host.CanResume(settings))throw new Exception("安全退出丟失本機控制恢復設定。");
             await host.DisableAsync(CancellationToken.None);
-            if(host.CanResume(settings)||File.Exists(preference))throw new Exception("停用后保留了本机控制授权。");
+            if(host.CanResume(settings)||File.Exists(preference))throw new Exception("停用後保留了本機控制授權。");
             Console.WriteLine("MAC_HOST_CONTROL_RESUME_SCOPE_AND_OPT_OUT_OK");
         }
         finally{Directory.Delete(folder,true);}

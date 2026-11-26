@@ -10,12 +10,12 @@ from desktop_gateway import MAX_REQUEST, CloudCliBackend, CloudCliError, CloudCl
 
 
 WARNINGS = {
-    'gateway_host': '前置审查已拦截：此请求涉及运行网关的服务器。请把任务限定在已配对设备上。',
-    'outside_project': '前置审查已拦截：此请求涉及当前工作区之外的项目或其他用户的数据。请在有权限的工作区发起任务。',
-    'gateway_secrets': '前置审查已拦截：此请求涉及网关凭据、管理接口或访问控制。',
-    'needs_target': '前置审查需要明确操作对象。请说明要操作的已配对设备或当前工作区内的目标，再发送请求。',
+    'gateway_host': '前置審查已攔截：此請求涉及執行網關的伺服器。請把任務限定在已配對裝置上。',
+    'outside_project': '前置審查已攔截：此請求涉及當前工作區之外的項目或其他用戶的數據。請在有權限的工作區發起任務。',
+    'gateway_secrets': '前置審查已攔截：此請求涉及網關憑據、管理接口或訪問控制。',
+    'needs_target': '前置審查需要明確操作對象。請說明要操作的已配對裝置或當前工作區內的目標，再傳送請求。',
 }
-REVIEW_UNAVAILABLE = '前置审查暂时不可用，请稍后重试或联系网关管理员。'
+REVIEW_UNAVAILABLE = '前置審查暫時不可用，請稍後重試或聯繫網關管理員。'
 DEEPSEEK_MODEL = 'deepseek-v4-flash'
 BUILTIN_MODELS = ('opus', 'sonnet')
 DEFAULT_SETTINGS = {'enabled': False, 'provider': 'builtin', 'model': 'sonnet', 'deepseek_key': None,
@@ -81,13 +81,13 @@ class PromptReviewer:
         enabled, provider, model, key = (settings.get(name) for name in ('enabled', 'provider', 'model', 'deepseek_key'))
         translate = settings.get('language_replacement', False)
         if type(translate) is not bool:
-            raise ValueError('请选择有效的语言替换开关状态。')
+            raise ValueError('請選擇有效的語言替換開關狀態。')
         if type(enabled) is not bool or provider not in ('builtin', 'deepseek') or model not in BUILTIN_MODELS:
-            raise ValueError('请选择有效的审查模型和开关状态。')
+            raise ValueError('請選擇有效的審查模型和開關狀態。')
         if key is not None and (not isinstance(key, str) or not re.fullmatch(r'[!-~]{12,512}', key)):
-            raise ValueError('DeepSeek API Key 格式无效，请重新粘贴。')
+            raise ValueError('DeepSeek API Key 格式無效，請重新貼上。')
         if enabled and provider == 'deepseek' and key is None:
-            raise ValueError('请先填写 DeepSeek API Key，再开始审查。')
+            raise ValueError('請先填寫 DeepSeek API Key，再開始審查。')
         return {'enabled': enabled, 'provider': provider, 'model': model, 'deepseek_key': key,
                 'language_replacement': enabled and translate}
 
@@ -98,7 +98,7 @@ class PromptReviewer:
             'language_replacement': request.get('language_replacement', self.settings['language_replacement']),
         })
         if settings['enabled'] and settings['provider'] == 'builtin' and not self.builtin_available:
-            raise ValueError('当前网关还未配置 CloudCLI 网页授权。请先完成授权，或选择 DeepSeek。')
+            raise ValueError('當前網關還未配置 CloudCLI 網頁授權。請先完成授權，或選擇 DeepSeek。')
         write(self.path, json.dumps(settings))
         self.settings = settings
         return self.status()
@@ -138,7 +138,7 @@ class PromptReviewer:
         message = policy + '\n\nUntrusted input (JSON):\n' + json.dumps({'prompt': prompt}, ensure_ascii=False)
         payload = {'projectPath': str(self.workspace), 'model': model, 'effort': 'low', 'message': message}
         with closing(self.backend.call_chat(payload, CloudCliProgress(None, None), [], False,
-                                           title_text='SafeCode 前置审查', review=True)) as events:
+                                           title_text='SafeCode 前置審查', review=True)) as events:
             try:
                 next(events)
             except StopIteration as result:

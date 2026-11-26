@@ -85,7 +85,7 @@ WantedBy=multi-user.target
 def run(args, *, check=True, stdin=None, timeout=20):
     result = subprocess.run(args, input=stdin, text=True, capture_output=True, timeout=timeout)
     if check and result.returncode:
-        raise RuntimeError(f'{args[0]} 执行失败，请检查服务器网络组件。')
+        raise RuntimeError(f'{args[0]} 執行失敗，請檢查伺服器網絡組件。')
     return result
 
 
@@ -119,7 +119,7 @@ def parse_proxy(url):
             raise ValueError()
         return {'address': str(address), 'port': parts.port, 'username': username, 'password': password}
     except (ValueError, TypeError):
-        raise ValueError('请输入有效的 SOCKS5 地址，使用公网 IPv4 和端口，有认证时填写用户名与密码。') from None
+        raise ValueError('請輸入有效的 SOCKS5 地址，使用公網 IPv4 和連接埠，有認證時填寫用戶名與密碼。') from None
 
 
 def receive(sock, size, deadline):
@@ -131,7 +131,7 @@ def receive(sock, size, deadline):
         sock.settimeout(remaining)
         piece = sock.recv(size - len(data))
         if not piece:
-            raise OSError('SOCKS5 代理中断了连接。')
+            raise OSError('SOCKS5 代理中斷了連線。')
         data.extend(piece)
     return bytes(data)
 
@@ -146,11 +146,11 @@ def request_proxy(sock, proxy, command, destination, port):
     method = 2 if username else 0
     sock.sendall(bytes((5, 1, method)))
     if read(2) != bytes((5, method)):
-        raise OSError('代理不接受所选 SOCKS5 认证方式。')
+        raise OSError('代理不接受所選 SOCKS5 認證方式。')
     if username:
         sock.sendall(bytes((1, len(username))) + username + bytes((len(password),)) + password)
         if read(2) != b'\x01\x00':
-            raise OSError('SOCKS5 用户名或密码未通过认证。')
+            raise OSError('SOCKS5 用戶名或密碼未通過認證。')
     try:
         address = b'\x01' + socket.inet_aton(destination)
     except OSError:
@@ -159,7 +159,7 @@ def request_proxy(sock, proxy, command, destination, port):
     sock.sendall(bytes((5, command, 0)) + address + struct.pack('!H', port))
     version, reply, reserved, kind = read(4)
     if (version, reply, reserved) != (5, 0, 0):
-        raise OSError('代理拒绝了 SOCKS5 转发请求。')
+        raise OSError('代理拒絕了 SOCKS5 轉發請求。')
     if kind == 1:
         bound = socket.inet_ntoa(read(4))
     elif kind == 3:
@@ -167,7 +167,7 @@ def request_proxy(sock, proxy, command, destination, port):
     elif kind == 4:
         bound = socket.inet_ntop(socket.AF_INET6, read(16))
     else:
-        raise OSError('代理返回了无效的 SOCKS5 地址。')
+        raise OSError('代理返回了無效的 SOCKS5 地址。')
     return bound, struct.unpack('!H', read(2))[0]
 
 
@@ -180,7 +180,7 @@ def tcp_probe(proxy):
             response = http.client.HTTPResponse(encrypted)
             response.begin()
             if response.status != 200:
-                raise OSError('出口检测服务未返回成功。')
+                raise OSError('出口檢測服務未返回成功。')
             return str(ipaddress.IPv4Address(response.read(64).decode().strip()))
 
 
@@ -194,18 +194,18 @@ def dns_probe(relay=None):
         udp.send(header + query)
         packet = udp.recv(4096)
     if not packet.startswith(header):
-        raise OSError('UDP 中继返回了不匹配的目标地址。')
+        raise OSError('UDP 中繼返回了不匹配的目標地址。')
     answer = packet[len(header):]
     if (len(answer) < len(query) or answer[:2] != nonce or answer[2] & 0x82 != 0x80
             or answer[3] & 15 or answer[6:8] == b'\0\0' or answer[12:len(query)] != query[12:]):
-        raise OSError('未收到有效的 UDP DNS 应答。')
+        raise OSError('未收到有效的 UDP DNS 應答。')
 
 
 def udp_probe(proxy):
     with socket.create_connection((proxy['address'], proxy['port']), timeout=5) as control:
         relay, port = request_proxy(control, proxy, 3, '0.0.0.0', 0)
         if relay not in ('0.0.0.0', proxy['address']) or not port:
-            raise OSError('UDP 中继需要与 SOCKS5 接入地址使用同一个 IPv4。')
+            raise OSError('UDP 中繼需要與 SOCKS5 接入地址使用同一個 IPv4。')
         dns_probe((proxy['address'], port))
 
 
@@ -218,11 +218,11 @@ def probe(proxy):
             if protocol == 'tcp':
                 result['observedIp'] = value
         except TimeoutError:
-            result[protocol + 'Message'] = '等待代理转发超时。'
+            result[protocol + 'Message'] = '等待代理轉發超時。'
         except (OSError, ValueError, http.client.HTTPException) as error:
-            known = ('代理', 'SOCKS5', '出口检测', '未收到', 'UDP 中继')
+            known = ('代理', 'SOCKS5', '出口檢測', '未收到', 'UDP 中繼')
             message = str(error)
-            result[protocol + 'Message'] = message if message.startswith(known) else '未收到可验证的转发响应。'
+            result[protocol + 'Message'] = message if message.startswith(known) else '未收到可驗證的轉發響應。'
     return result
 
 
@@ -236,10 +236,10 @@ def existing_guard():
     if result.returncode:
         if 'No such file or directory' in result.stderr:
             return False
-        raise RuntimeError('无法检查 SOCKS5 防火墙规则。')
+        raise RuntimeError('無法檢查 SOCKS5 防火牆規則。')
     tables = json.loads(result.stdout)['nftables']
     if not any(item.get('table', {}).get('comment') == OWNER for item in tables):
-        raise RuntimeError('发现同名防火墙表，请由管理员确认。')
+        raise RuntimeError('發現同名防火牆表，請由管理員確認。')
     return True
 
 
@@ -255,7 +255,7 @@ def status():
     observed = state.get('observedIp', '')
     return {'enabled': True, 'guardActive': guarded, 'tunnelRunning': running,
             'endpoint': f"{state['address']}:{state['port']}", 'observedIp': observed,
-            'issue': '' if observed else '整机出站尚未通过验证。'}
+            'issue': '' if observed else '整機出站尚未通過驗證。'}
 
 
 def guard_rules(state):
@@ -313,23 +313,23 @@ def own_route_rule(rule):
 
 def preflight_routing():
     if run(['ip', 'link', 'show', 'dev', TUN], check=False).returncode == 0:
-        raise RuntimeError('专用隧道接口名称已被占用。')
+        raise RuntimeError('專用隧道接口名稱已被佔用。')
     for family in ('-4', '-6'):
         if any(str(rule.get('priority')) == RULE_PRIORITY or str(rule.get('table')) == ROUTE_TABLE
                for rule in routing_rules(family)):
-            raise RuntimeError('专用路由表或策略优先级已被占用。')
+            raise RuntimeError('專用路由表或策略優先級已被佔用。')
         routes = run(['ip', family, '-j', 'route', 'show', 'table', ROUTE_TABLE], check=False)
         if routes.returncode == 0 and json.loads(routes.stdout):
-            raise RuntimeError('专用路由表已有其他路由。')
+            raise RuntimeError('專用路由表已有其他路由。')
         if routes.returncode and 'FIB table does not exist' not in routes.stderr:
-            raise RuntimeError('无法检查专用路由表。')
+            raise RuntimeError('無法檢查專用路由表。')
 
 
 def ensure_rules():
     for family in ('-4', '-6'):
         rules = [rule for rule in routing_rules(family) if str(rule.get('priority')) == RULE_PRIORITY]
         if rules and not (len(rules) == 1 and own_route_rule(rules[0])):
-            raise RuntimeError('专用路由策略优先级已被占用。')
+            raise RuntimeError('專用路由策略優先級已被佔用。')
         if not rules:
             run(['ip', family, 'rule', 'add', 'priority', RULE_PRIORITY, 'fwmark', f'{MARK}/{MARK}', 'lookup', ROUTE_TABLE])
 
@@ -349,7 +349,7 @@ def tunnel_routes():
             break
         time.sleep(0.1)
     else:
-        raise RuntimeError('未能启动 SOCKS5 隧道网卡。')
+        raise RuntimeError('未能啟動 SOCKS5 隧道網卡。')
     Path(f'/proc/sys/net/ipv4/conf/{TUN}/rp_filter').write_text('2\n')
     for family in ('-4', '-6'):
         run(['ip', family, 'route', 'replace', 'table', ROUTE_TABLE, 'default', 'dev', TUN])
@@ -370,7 +370,7 @@ def relay_config(proxy):
 def download_relay():
     release = DOWNLOADS.get(platform.machine())
     if not release:
-        raise RuntimeError('SOCKS5 开发模式支持 x86_64 和 ARM64 服务器。')
+        raise RuntimeError('SOCKS5 開發模式支援 x86_64 和 ARM64 伺服器。')
     arch, digest = release
     tag = f'sing-box-{VERSION}-linux-{arch}'
     with tempfile.TemporaryDirectory(dir=INSTALL) as scratch:
@@ -381,17 +381,17 @@ def download_relay():
                  '-o', str(archive), f'https://github.com/SagerNet/sing-box/releases/download/v{VERSION}/{tag}.tar.gz'],
                 timeout=255)
         except (RuntimeError, subprocess.TimeoutExpired):
-            raise RuntimeError('下载 SOCKS5 隧道组件失败，请检查服务器是否能访问 GitHub Releases。') from None
+            raise RuntimeError('下載 SOCKS5 隧道組件失敗，請檢查伺服器是否能訪問 GitHub Releases。') from None
         checksum = hashlib.sha256()
         with archive.open('rb') as packed:
             for chunk in iter(lambda: packed.read(1024 * 1024), b''):
                 checksum.update(chunk)
         if checksum.hexdigest() != digest:
-            raise RuntimeError('SOCKS5 隧道组件校验失败。')
+            raise RuntimeError('SOCKS5 隧道組件校驗失敗。')
         with tarfile.open(archive, 'r:gz') as package:
             entry = package.getmember(f'{tag}/sing-box')
             if not entry.isfile():
-                raise RuntimeError('SOCKS5 隧道组件格式无效。')
+                raise RuntimeError('SOCKS5 隧道組件格式無效。')
             executable = Path(scratch) / 'sing-box'
             with package.extractfile(entry) as source, executable.open('xb') as target:
                 shutil.copyfileobj(source, target)
@@ -407,22 +407,22 @@ def relay_user():
              '--shell', '/usr/sbin/nologin', '--comment', OWNER, USER])
         user = pwd.getpwnam(USER)
     if not user.pw_uid or user.pw_gecos != OWNER or user.pw_shell != '/usr/sbin/nologin':
-        raise RuntimeError('专用隧道账户名称已被占用。')
+        raise RuntimeError('專用隧道帳戶名稱已被佔用。')
     return user
 
 
 def ensure_idle():
     if not Path('/dev/net/tun').exists():
-        raise RuntimeError('服务器未提供 /dev/net/tun，请先启用 TUN 设备。')
+        raise RuntimeError('伺服器未提供 /dev/net/tun，請先啟用 TUN 裝置。')
     if load_state():
-        raise RuntimeError('请先停用已配置的 SOCKS5 出口。')
+        raise RuntimeError('請先停用已配置的 SOCKS5 出口。')
     if any(STATE.glob('ip-pending-*.json')):
-        raise RuntimeError('已有出入口 IP 变更等待验证，请先完成该操作。')
+        raise RuntimeError('已有出入口 IP 變更等待驗證，請先完成該操作。')
     if existing_guard() or any((UNIT_DIR / name).exists() for name in (GUARD, RELAY)):
-        raise RuntimeError('发现未完成清理的 SOCKS5 配置，请检查服务器状态。')
+        raise RuntimeError('發現未完成清理的 SOCKS5 配置，請檢查伺服器狀態。')
     policy_file = STATE / 'ip-policy.json'
     if policy_file.exists() and json.loads(policy_file.read_text()).get('lockEgress'):
-        raise RuntimeError('请先在「更换 IP」中取消固定住宅出口，再启用 SOCKS5。')
+        raise RuntimeError('請先在「更換 IP」中取消固定住宅出口，再啟用 SOCKS5。')
     preflight_routing()
 
 
@@ -436,7 +436,7 @@ def enable(proxy):
     ensure_idle()
     checked = probe(proxy)
     if not (checked['tcp'] and checked['udp']):
-        raise RuntimeError('TCP 或 UDP 复检未通过，出站规则尚未启用。请重新检测代理。')
+        raise RuntimeError('TCP 或 UDP 複檢未通過，出站規則尚未啟用。請重新檢測代理。')
     INSTALL.mkdir(mode=0o755, exist_ok=True)
     download_relay()
     user = relay_user()
@@ -460,14 +460,14 @@ def enable(proxy):
     except Exception:
         if existing_guard():
             current = status()
-            return {**current, 'issue': '隧道未通过整机出站验证。阻断规则保持启用，请排查代理或手动停用。'}
+            return {**current, 'issue': '隧道未通過整機出站驗證。阻斷規則保持啟用，請排查代理或手動停用。'}
         (STATE / STATE_FILE).unlink(missing_ok=True)
         (INSTALL / 'relay.json').unlink(missing_ok=True)
         for name in (RELAY, GUARD):
             run(['systemctl', 'disable', name], check=False)
             (UNIT_DIR / name).unlink(missing_ok=True)
         run(['systemctl', 'daemon-reload'], check=False)
-        raise RuntimeError('未能启用 SOCKS5 出口，请检查服务器网络组件。') from None
+        raise RuntimeError('未能啟用 SOCKS5 出口，請檢查伺服器網絡組件。') from None
 
 
 def disable():
@@ -497,5 +497,5 @@ def disable():
 
 if __name__ == '__main__':
     if os.geteuid() != 0:
-        raise SystemExit('需要 root 权限。')
+        raise SystemExit('需要 root 權限。')
     {'guard': start_guard, 'routes': tunnel_routes}[sys.argv[1]]()

@@ -19,7 +19,7 @@ internal sealed class GatewayWindow : Window
     public GatewayWindow(CoreWebView2Environment environment, Func<JsonElement, Task<JsonElement>> manage)
     {
         this.manage = manage;
-        Title = "Safe Code API · 网关管理";
+        Title = "Safe Code API · 網關管理";
         UseLayoutRounding = SnapsToDevicePixels = true;
         Width = Math.Min(1100, SystemParameters.WorkArea.Width);
         Height = Math.Min(690, Math.Min(SystemParameters.WorkArea.Height, Width * 0.72));
@@ -85,7 +85,7 @@ internal sealed class GatewayWindow : Window
             switch (message.GetProperty("op").GetString())
             {
                 case "safeCodeApi.manage":
-                    if (Busy) throw new InvalidOperationException("请等待当前网关操作完成。");
+                    if (Busy) throw new InvalidOperationException("請等待當前網關操作完成。");
                     mutate = args.GetProperty("action").GetString() is "issue" or "update" or "unbind" or "revoke" or "delete" or "set_port" or "set_origin" or "set_concurrency" or "set_prompt_review" or "set_key_queue" or "refresh_ticket";
                     Busy = mutate;
                     result = await manage(args);
@@ -95,7 +95,7 @@ internal sealed class GatewayWindow : Window
                     result = true;
                     break;
                 default:
-                    throw new InvalidOperationException("未知网关管理操作。");
+                    throw new InvalidOperationException("未知網關管理操作。");
             }
         }
         catch (Exception exception) { error = ConnectionErrors.DescribeOperation(exception); }

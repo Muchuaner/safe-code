@@ -106,9 +106,9 @@ class KeyRegistry:
                 db.execute('BEGIN IMMEDIATE')
                 ids = db.execute('SELECT id FROM keys').fetchall()
                 if not activated and any(self.has_marker(row['id']) for row in ids):
-                    raise ValueError('添加更多 API Key 需要正确的激活码。')
+                    raise ValueError('添加更多 API Key 需要正確的啟用碼。')
                 if len(ids) >= 500:
-                    raise ValueError('Key 记录已达到 500 条上限。')
+                    raise ValueError('Key 記錄已達到 500 條上限。')
                 db.execute('INSERT INTO keys(id,note,rpm,created,budget_nanos,expires_at,allowed_models) VALUES(?,?,?,?,?,?,?)',
                            (key_id, note, rpm, int(time.time()), budget_nanos, expires_at, allowed_models))
                 marker.touch(mode=0o600, exist_ok=False)
@@ -146,7 +146,7 @@ class KeyRegistry:
     def update(self, key_id, note, rpm, *, budget_nanos=..., expires_at=..., allowed_models=...):
         with self.connect() as db:
             if not db.execute('UPDATE keys SET note=?, rpm=? WHERE id=?', (note,rpm,key_id)).rowcount:
-                raise ValueError('找不到该 Key。')
+                raise ValueError('找不到該 Key。')
             for column, value in (('budget_nanos', budget_nanos), ('expires_at', expires_at), ('allowed_models', allowed_models)):
                 if value is not ...:
                     db.execute(f'UPDATE keys SET {column}=? WHERE id=?', (value, key_id))
@@ -154,14 +154,14 @@ class KeyRegistry:
     def revoke(self, key_id):
         with self.connect() as db:
             if not db.execute('UPDATE keys SET revoked=1 WHERE id=?', (key_id,)).rowcount:
-                raise ValueError('找不到该 Key。')
+                raise ValueError('找不到該 Key。')
             (self.root/'keys'/key_id).unlink(missing_ok=True)
 
     def delete(self, key_id):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             if self.has_marker(key_id):
-                raise ValueError('请先撤销密钥，再彻底删除。')
+                raise ValueError('請先撤銷密鑰，再徹底刪除。')
             db.execute('DELETE FROM request_log WHERE key_id=?', (key_id,))
             db.execute('DELETE FROM usage WHERE key_id=?', (key_id,))
             db.execute('DELETE FROM keys WHERE id=?', (key_id,))
@@ -475,16 +475,16 @@ def peer_disconnected(connection):
 def read_admin_line(stream):
     line = stream.readline(8193)
     if not line.endswith(b'\n') or len(line)>8192:
-        raise ValueError('管理请求格式无效。')
+        raise ValueError('管理請求格式無效。')
     value = json.loads(line)
     if not isinstance(value,dict):
-        raise ValueError('管理请求格式无效。')
+        raise ValueError('管理請求格式無效。')
     return value
 
 
 def send_admin(root, request):
     if len(request)>8192:
-        raise ValueError('管理请求过长。')
+        raise ValueError('管理請求過長。')
     try:
         with socket.socket(socket.AF_UNIX) as connection:
             connection.settimeout(25)
@@ -493,7 +493,7 @@ def send_admin(root, request):
             with connection.makefile('rb') as stream:
                 response=stream.readline(6*1024*1024)
     except OSError as error:
-        raise ValueError('无法连接 Safe Code API 管理服务。请确认该 VPS 已更新并启动 Safe Code API。') from error
+        raise ValueError('無法連接 Safe Code API 管理服務。請確認該 VPS 已更新並啟動 Safe Code API。') from error
     if not response.endswith(b'\n'):
-        raise ValueError('Safe Code API 管理服务未返回完整结果。')
+        raise ValueError('Safe Code API 管理服務未返回完整結果。')
     return json.loads(response)

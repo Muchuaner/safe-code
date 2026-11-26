@@ -26,7 +26,7 @@ with sync_playwright() as p:
           if(m.op==='gateways.resume-settings')result=fixture.remembered?saved:null;
           if(m.op==='connect'){
             if(fixture.failure)error='fixture SSH unavailable';
-            else result={server:{osVersion:'24.04',statuses:{account:true},assignedIps:[],observedEgressIp:''},gatewayWarnings:fixture.warning?['Codex 网关恢复失败：fixture']:[]};
+            else result={server:{osVersion:'24.04',statuses:{account:true},assignedIps:[],observedEgressIp:''},gatewayWarnings:fixture.warning?['Codex 網關恢復失敗：fixture']:[]};
           }
           if(m.op==='bridge.status')result={running:!fixture.warning,connected:!fixture.warning,configuration:fixture.warning?'':'fixture'};
           queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result,error}));
@@ -42,15 +42,15 @@ with sync_playwright() as p:
                 page.wait_for_function("calls.includes('bridge.status')")
                 if warning:page.wait_for_selector('#app-message-dialog[open]')
             enabled=not failure and not warning
-            assert page.locator('#claude-gateway-status').inner_text()=='网关已就绪'
-            assert page.locator('#codex-gateway-status').inner_text()=='Codex网关'+('已启用' if enabled else '未启用')
+            assert page.locator('#claude-gateway-status').inner_text()=='網關已就緒'
+            assert page.locator('#codex-gateway-status').inner_text()=='Codex網關'+('已啟用' if enabled else '未啟用')
         else:
             page.wait_for_timeout(120)
             assert 'connect' not in page.evaluate('calls')
             assert page.locator('#claude-gateway-status').inner_text()=='Claude 未接入'
         assert not set(page.evaluate('calls')) & {'claudeDesktop.start','claudeDesktop.status','bridge.start'},'frontend must never forge fresh consent for restore'
         if remembered and notice and not failure and not warning:
-            for label,reason,connected in [('设备回连待确认','SSH 验证失败',False),('网关已就绪',None,False),('Claude 已连接',None,True)]:
+            for label,reason,connected in [('裝置回連待確認','SSH 驗證失敗',False),('網關已就緒',None,False),('Claude 已連線',None,True)]:
                 page.evaluate('(state)=>{window.connectionFixture=state;document.dispatchEvent(new Event("visibilitychange"))}',dict(startedAt=123,deviceProblem=reason,clientConnected=connected))
                 page.wait_for_function("label=>document.querySelector('#claude-gateway-status').textContent===label",arg=label)
                 assert page.locator('#claude-connection-reason').text_content()==(reason or '')

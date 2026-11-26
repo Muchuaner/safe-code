@@ -28,7 +28,7 @@ with sync_playwright() as p:
     case 'deploy':window.server.statuses.account=true;window.savedDraft=null;result=window.server;break;
     case 'metrics':result={latencyMs:40,lossPercent:0};break;
     case 'connection.info':result={host:'203.0.113.86',port:22,username:'root'};break;
-    case 'connection.reauthenticate':if(message.args.password==='wrong'){error='SSH 登录认证失败';}else result={ready:true,mount:{count:1,state:'connected',message:'挂载守护中'}};break;
+    case 'connection.reauthenticate':if(message.args.password==='wrong'){error='SSH 登入認證失敗';}else result={ready:true,mount:{count:1,state:'connected',message:'掛載守護中'}};break;
    }
    queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result,error}));
  }}};
@@ -45,30 +45,30 @@ with sync_playwright() as p:
  assert page.locator('#back').bounding_box()['y']+page.locator('#back').bounding_box()['height']<=490, page.locator('#back').bounding_box()
  page.set_viewport_size({'width':360,'height':536})
  page.locator('#login-help').click();page.set_viewport_size({'width':740,'height':634});page.wait_for_function("document.querySelector('#login-help-dialog img').naturalWidth>0")
- page.screenshot(path=str(evidence/'tutorial.png'));page.get_by_role('button',name='关闭教程').click()
+ page.screenshot(path=str(evidence/'tutorial.png'));page.get_by_role('button',name='關閉教程').click()
  page.locator('#advanced-connect').click();assert page.locator('#advanced-dialog').is_visible();page.locator('#advanced-dialog .close').click()
  page.locator('#ip').fill('203.0.113.86');page.locator('#username').fill('root');page.locator('#password').fill('fixture-old');page.locator('#connect').click();page.wait_for_function("!document.querySelector('#update-login-password').hidden")
- page.get_by_role('button',name='自定义工作用户和机器名称').click();page.locator('#account-settings-form [type=submit]').click()
+ page.get_by_role('button',name='自訂工作用戶和機器名稱').click();page.locator('#account-settings-form [type=submit]').click()
  page.wait_for_function("window.calls.filter(x=>x.op==='account.draft.save').length===1");assert not page.locator('#app-message-dialog').is_visible()
  assert page.evaluate("window.calls.filter(x=>x.op==='deploy').length")==0
  assert page.locator('#deploy-all').is_disabled()
- page.get_by_role('button',name='自定义本土化').click();page.locator('#locale-region').select_option('jp')
+ page.get_by_role('button',name='自訂本土化').click();page.locator('#locale-region').select_option('jp')
  page.locator('#localization-form [type=submit]').click();page.wait_for_function("!document.querySelector('#deploy-all').disabled")
- page.get_by_role('button',name='自定义工作用户和机器名称').click();page.locator('#custom-password').fill('fixture-new-password');page.locator('#account-settings-form [type=submit]').click()
+ page.get_by_role('button',name='自訂工作用戶和機器名稱').click();page.locator('#custom-password').fill('fixture-new-password');page.locator('#account-settings-form [type=submit]').click()
  page.get_by_role('button',name='我不改了',exact=True).wait_for();page.screenshot(path=str(evidence/'account-warning.png'));page.get_by_role('button',name='我不改了',exact=True).click()
  page.wait_for_function("!document.querySelector('#account-settings-form [type=submit]').disabled")
  assert page.evaluate("window.calls.filter(x=>x.op==='account.draft.save').length")==1
- page.locator('#account-settings-form [type=submit]').click();page.get_by_role('button',name='我知道自己在做什么，更改并应用',exact=True).click()
+ page.locator('#account-settings-form [type=submit]').click();page.get_by_role('button',name='我知道自己在做什麼，更改並應用',exact=True).click()
  page.wait_for_function("window.calls.filter(x=>x.op==='deploy').length===1")
  assert page.evaluate("window.calls.find(x=>x.op==='deploy').args.password")=='fixture-new-password'
  page.wait_for_function("!document.querySelector('#update-login-password').hidden && !document.querySelector('#steps button').disabled")
  assert page.locator('#steps .locale-settings-button').evaluate_all("els=>els.every(el=>getComputedStyle(el).borderTopColor!=='rgba(0, 0, 0, 0)' && getComputedStyle(el).borderTopWidth==='1px')")
  page.screenshot(path=str(evidence/'deployment.png'))
- page.locator('#update-login-password').click();page.locator('#credential-password').fill('wrong');page.locator('#credential-form [type=submit]').click();page.wait_for_function("document.querySelector('#credential-error').textContent.includes('认证失败')")
+ page.locator('#update-login-password').click();page.locator('#credential-password').fill('wrong');page.locator('#credential-form [type=submit]').click();page.wait_for_function("document.querySelector('#credential-error').textContent.includes('認證失敗')")
  assert page.locator('#credential-password').input_value()=='' and page.locator('#credential-dialog').is_visible()
  page.locator('#credential-password').fill('fixture-root-new');page.screenshot(path=str(evidence/'credential.png'));page.locator('#credential-form [type=submit]').click()
  page.wait_for_function("!document.querySelector('#credential-dialog').open");page.locator('#app-message-confirm').click()
- page.evaluate("window.safeCodeMountStatus({count:1,state:'attention',message:'SSH 登录认证失败',authenticationRequired:true})")
+ page.evaluate("window.safeCodeMountStatus({count:1,state:'attention',message:'SSH 登入認證失敗',authenticationRequired:true})")
  assert 'needs-credentials' in page.locator('#update-login-password').get_attribute('class')
  assert not errors,errors
  browser.close()

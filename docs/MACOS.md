@@ -1,32 +1,32 @@
 # Safe Code for macOS
 
-## 安装
+## 安裝
 
-支持 Apple 芯片（arm64）和 macOS 15 或更新版本。下载 `SafeCode-版本-macOS-arm64.dmg`，打开镜像后将 Safe Code 拖入「应用程序」。安装包自带 .NET，界面由系统的 WKWebView 和 AppKit 提供。[下载 macOS 安装包](https://github.com/Muchuaner/safe-code/releases)
+支援 Apple 芯片（arm64）和 macOS 15 或更新版本。下載 `SafeCode-版本-macOS-arm64.dmg`，開啟鏡像後將 Safe Code 拖入「應用程式」。安裝包自帶 .NET，介面由系統的 WKWebView 和 AppKit 提供。[下載 macOS 安裝包](https://github.com/Muchuaner/safe-code/releases)
 
-如果发布说明标明该版本尚未通过 Apple 公证，macOS 可能会拦截首次启动。核对来源和安装包 SHA-256 后，可在系统设置的「隐私与安全性」中按提示允许打开。
+如果發佈說明標明該版本尚未通過 Apple 公證，macOS 可能會攔截首次啟動。核對來源和安裝包 SHA-256 後，可在系統設定的「私隱與安全性」中按提示允許開啟。
 
-## 连接和部署
+## 連線和部署
 
-打开 Safe Code 并填写 Ubuntu VPS 的 SSH 地址、端口和管理员登录信息。首次连接时核对主机指纹。部署要求 Ubuntu 22.04 或 24.04 x86_64、可用的 systemd，以及 root 或具备免密 sudo 的登录账户。
+開啟 Safe Code 並填寫 Ubuntu VPS 的 SSH 地址、連接埠和管理員登入資料。首次連線時核對主機指紋。部署要求 Ubuntu 22.04 或 24.04 x86_64、可用的 systemd，以及 root 或具備免密 sudo 的登入帳戶。
 
-在部署页分别保存工作账户和本地化设置，再选择要安装的组件。重新连接同一台服务器后可以继续查看部署进度。维护模式提供 SSH 终端、远程桌面、目录挂载和 CloudCLI。
+在部署頁分別儲存工作帳戶和本地化設定，再選擇要安裝的組件。重新連接同一台伺服器後可以繼續查看部署進度。維護模式提供 SSH 終端機、遠端桌面、目錄掛載和 CloudCLI。
 
-SSH 终端调用 macOS 的 Terminal 和 SSH 客户端。登录信息与工作账户草稿在本机加密保存，密钥保存在登录钥匙串。更新 App 会保留本机加密登录记录。若 macOS 要求重新核验钥匙串权限，登录页会显示「解锁已保存的登录信息」，点击后按系统提示授权即可恢复。
+SSH 終端機調用 macOS 的 Terminal 和 SSH 客戶端。登入資料與工作帳戶草稿在本機加密儲存，密鑰儲存在登入鑰匙串。更新 App 會保留本機加密登入記錄。若 macOS 要求重新核驗鑰匙串權限，登入頁會顯示「解鎖已儲存的登入資料」，點擊後按系統提示授權即可恢復。
 
-## 远程桌面和目录挂载
+## 遠端桌面和目錄掛載
 
-远程桌面复用已验证的 SSH 隧道。可在「分辨率设置」中选择原始大小、等比缩放、动态分辨率及启动时全屏。安装 SDL FreeRDP 3 时可由 Safe Code 提交工作账户凭据。使用 Windows App 或其他默认 RDP 客户端时，由相应客户端处理凭据和显示设置。
+遠端桌面複用已驗證的 SSH 隧道。可在「解像度設定」中選擇原始大小、等比縮放、動態解像度及啟動時全螢幕。安裝 SDL FreeRDP 3 時可由 Safe Code 提交工作帳戶憑據。使用 Windows App 或其他預設 RDP 客戶端時，由相應客戶端處理憑據和顯示設定。
 
-目录挂载支持多组本机目录与服务器目录。关闭主窗口后，Safe Code 继续在后台运行。点击屏幕右上方的终端形菜单栏图标，可以查看状态、打开主界面、重连或安全退出。首次关闭主窗口时，macOS 会询问是否允许通知。允许后，点击后台运行通知也能回到主界面。安全退出会等待目录同步和卸载完成。
+目錄掛載支援多組本機目錄與伺服器目錄。關閉主視窗後，Safe Code 繼續在背景執行。點擊螢幕右上方的終端機形選單列圖示，可以查看狀態、開啟主介面、重連或安全退出。首次關閉主視窗時，macOS 會詢問是否允許通知。允許後，點擊背景執行通知也能回到主介面。安全退出會等待目錄同步和卸載完成。
 
 ## Claude Desktop 接入
 
 
-通过 SSH 登录 VPS 后，在维护模式打开 Claude Desktop 的「网关设置」，点击「启用」，再进入「管理网关」创建 API Key。
+透過 SSH 登入 VPS 後，在維護模式開啟 Claude Desktop 的「網關設定」，點擊「啟用」，再進入「管理網關」建立 API Key。
 
-回到 Safe Code 主界面或登录页，在「API Key 接入」粘贴完整密钥，点击「验证并启用」。已保存的 Key 可以更换、重新启用或停用。首次接入或修改配置后，请完全退出并重新打开 Claude Desktop。聊天期间请保持 Safe Code 运行。[网关与 Key 使用说明](https://github.com/Muchuaner/safe-code/blob/main/tools/desktop-api/README.md)
+回到 Safe Code 主介面或登入頁，在「API Key 接入」貼上完整密鑰，點擊「驗證並啟用」。已儲存的 Key 可以更換、重新啟用或停用。首次接入或修改配置後，請完全退出並重新開啟 Claude Desktop。聊天期間請保持 Safe Code 執行。[網關與 Key 使用說明](https://github.com/Muchuaner/safe-code/blob/main/tools/desktop-api/README.md)
 
-## 更新和反馈
+## 更新和回饋
 
-可在应用菜单打开「更新与反馈」，手动检查版本、提交反馈，或选择是否开启使用统计和匿名功能诊断。更新仅匹配 Apple 芯片安装包。下载并校验后退出旧版，再打开镜像替换应用。[在线更新](https://github.com/Muchuaner/safe-code/blob/main/docs/UPDATES.md) · [匿名功能诊断](https://github.com/Muchuaner/safe-code/blob/main/docs/DIAGNOSTICS.md)
+可在應用選單開啟「更新與回饋」，手動檢查版本、提交回饋，或選擇是否開啟使用統計和匿名功能診斷。更新僅匹配 Apple 芯片安裝包。下載並校驗後退出舊版，再開啟鏡像替換應用。[網上更新](https://github.com/Muchuaner/safe-code/blob/main/docs/UPDATES.md) · [匿名功能診斷](https://github.com/Muchuaner/safe-code/blob/main/docs/DIAGNOSTICS.md)

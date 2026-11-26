@@ -19,7 +19,7 @@ public static class DesktopImageWire
         if (parts.Count is < 1 or > 6 || parts.Any(p => !IsImageType(p.Mime) || p.Bytes.Length == 0)
             || parts.Select(p => p.Mime).Distinct().Count() != parts.Count
             || parts.Sum(p => (long)p.Bytes.Length) > MaxBytes)
-            throw new InvalidDataException("图片格式或大小超出限制（合计最多 32 MiB）。");
+            throw new InvalidDataException("圖片格式或大小超出限制（合計最多 32 MiB）。");
         var header = JsonSerializer.SerializeToUtf8Bytes(new { v = 1, formats = parts.Select(p => new { mime = p.Mime, size = p.Bytes.Length }) });
         await stream.WriteAsync(header, ct);
         await stream.WriteAsync(new byte[] { 10 }, ct);
@@ -34,11 +34,11 @@ public sealed partial class SshSession
     {
         SshClient owner;
         if (user == "root" || !Regex.IsMatch(user, @"\A[a-z_][a-z0-9_-]{0,31}\z"))
-            throw new InvalidOperationException("图片粘贴需要普通桌面工作账户。");
+            throw new InvalidOperationException("圖片貼上需要普通桌面工作帳戶。");
         lock (desktopForwardGate)
         {
             if (desktopForwardOwner is null || desktopForward?.BoundPort != port)
-                throw new InvalidOperationException("当前远程桌面隧道不可用。");
+                throw new InvalidOperationException("當前遠端桌面隧道不可用。");
             owner = desktopForwardOwner;
         }
         var privilege = prefix;
@@ -47,9 +47,9 @@ public sealed partial class SshSession
             lock (desktopForwardGate)
                 if (!ReferenceEquals(owner, desktopForwardOwner) || desktopForward?.BoundPort != port
                     || desktopForward?.IsStarted != true || !owner.IsConnected)
-                    throw new InvalidOperationException("当前桌面的 SSH 已断开，请重新打开远程桌面。");
+                    throw new InvalidOperationException("當前桌面的 SSH 已斷開，請重新開啟遠端桌面。");
             using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("SafeCode.Core.Remote.desktop_clipboard.py")
-                ?? throw new InvalidOperationException("缺少图片粘贴组件。");
+                ?? throw new InvalidOperationException("缺少圖片貼上組件。");
             using var scriptReader = new StreamReader(resource, Encoding.UTF8);
             string script = scriptReader.ReadToEnd();
             // No shell interpolation of image data, remote file, extra port, or persistent service.
@@ -64,13 +64,13 @@ public sealed partial class SshSession
                 using var stdout = new StreamReader(command.OutputStream, Encoding.UTF8);
                 // Resolve an unambiguous logged-in XRDP desktop and its X authority before sending any pixels.
                 if (await stdout.ReadLineAsync(token) != "SCIMAGE READY")
-                    throw new IOException("未找到唯一可用的远程桌面会话，或缺少 GTK 3。请登录云桌面后重试。");
+                    throw new IOException("未找到唯一可用的遠端桌面會話，或缺少 GTK 3。請登入雲桌面後重試。");
                 using (var input = command.CreateInputStream())
                     await DesktopImageWire.WriteAsync(input, parts, token);
                 var ack = await stdout.ReadLineAsync(token);
                 await execution;
                 if (command.ExitStatus != 0 || ack != "SCIMAGE OWNED")
-                    throw new IOException("云桌面未确认接收图片，这次没有发送粘贴按键。");
+                    throw new IOException("雲桌面未確認接收圖片，這次沒有傳送貼上按鍵。");
             }
             finally
             {

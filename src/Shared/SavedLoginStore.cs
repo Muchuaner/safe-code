@@ -24,7 +24,7 @@ internal sealed class SavedLoginStore(string path, Func<byte[], byte[]> protect,
             }
         }
         if (fault != null)
-            throw new IOException("无法解锁已保存的登录信息。请确认当前系统账户与保存时一致，或登录后重新保存。", fault);
+            throw new IOException("無法解鎖已儲存的登入資料。請確認當前系統帳戶與儲存時一致，或登入後重新儲存。", fault);
         return null;
     }
 

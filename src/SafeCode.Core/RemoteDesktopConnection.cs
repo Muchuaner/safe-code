@@ -33,21 +33,21 @@ public sealed partial class SshSession
             await stream.ReadExactlyAsync(header, deadline.Token);
             int size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(2));
             if (header[0] != 3 || header[1] != 0 || size is < 11 or > 256 || header[4] < 6 || header[5] != 0xd0)
-                throw new IOException("服务器没有返回有效的 RDP 握手。");
+                throw new IOException("伺服器沒有返回有效的 RDP 握手。");
 
             string? fingerprint = null;
             if (size > 11)
             {
                 byte[] negotiation = new byte[size - 11];
                 await stream.ReadExactlyAsync(negotiation, deadline.Token);
-                if (negotiation[0] == 3) throw new IOException("服务器拒绝 RDP 安全协议协商。");
+                if (negotiation[0] == 3) throw new IOException("伺服器拒絕 RDP 安全協定協商。");
                 if (acquireCertificate && (negotiation.Length != 8 || negotiation[0] != 2 ||
                     BinaryPrimitives.ReadUInt32LittleEndian(negotiation.AsSpan(4)) != 1))
-                    throw new IOException("服务器未协商 RDP TLS，无法安全传入桌面凭据。");
+                    throw new IOException("伺服器未協商 RDP TLS，無法安全傳入桌面憑據。");
             }
             else if (acquireCertificate)
             {
-                throw new IOException("服务器未协商 RDP TLS，无法安全传入桌面凭据。");
+                throw new IOException("伺服器未協商 RDP TLS，無法安全傳入桌面憑據。");
             }
 
             if (acquireCertificate)
@@ -64,7 +64,7 @@ public sealed partial class SshSession
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception error) when (error is OperationCanceledException or SocketException or IOException or AuthenticationException)
         {
-            throw new IOException("SSH 隧道已建立，但远程桌面握手失败。请检查服务器上的 xrdp 和 TLS 设置。", error);
+            throw new IOException("SSH 隧道已建立，但遠端桌面握手失敗。請檢查伺服器上的 xrdp 和 TLS 設定。", error);
         }
     }
 
@@ -82,7 +82,7 @@ public sealed partial class SshSession
             ct.ThrowIfCancellationRequested();
             ObjectDisposedException.ThrowIf(desktopForwardClosed, this);
             var current = client;
-            if (current?.IsConnected != true || trustedKey == null) throw new InvalidOperationException("SSH 已断开。");
+            if (current?.IsConnected != true || trustedKey == null) throw new InvalidOperationException("SSH 已斷開。");
             if (ReferenceEquals(current, desktopForwardOwner) && desktopForward?.IsStarted == true)
                 return desktopForward.BoundPort;
 

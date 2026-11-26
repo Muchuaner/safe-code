@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Safe Code API · 网关管理</title>
+  <title>Safe Code API · 網關管理</title>
   <link rel="stylesheet" href="gateway.css">
   <script src="gateway-charts.js" defer></script>
   <script src="gateway-status.js" defer></script>
@@ -13,54 +13,54 @@
 <body>
   <main>
     <header class="gateway-header">
-      <h1>网关总览</h1>
+      <h1>網關總覽</h1>
       <div class="actions">
-        <button id="refresh" type="button">刷新</button>
-        <button id="gateway-prompt-review" type="button" aria-haspopup="dialog" disabled>前置审查 <span id="prompt-review-state" hidden></span></button>
-        <button id="gateway-key-queue" type="button" aria-haspopup="dialog" disabled>API 排队 <span id="key-queue-state" hidden></span></button>
-        <button id="gateway-concurrency" type="button" aria-haspopup="dialog" disabled>处理槽位</button>
-        <div id="gateway-claude-limits" class="gateway-quota" role="group" aria-label="Claude 订阅用量">
-          <span>Claude 用量</span><span hidden>5 小时剩余 <strong data-limit="five_hour"></strong></span><span hidden>7 天剩余 <strong data-limit="seven_day"></strong></span><button type="button" class="quota-refresh" aria-label="查询 Claude 用量" title="查询 Claude 用量"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8a8 8 0 1 0 0 8m0-12v4h-4"/></svg></button>
+        <button id="refresh" type="button">重新整理</button>
+        <button id="gateway-prompt-review" type="button" aria-haspopup="dialog" disabled>前置審查 <span id="prompt-review-state" hidden></span></button>
+        <button id="gateway-key-queue" type="button" aria-haspopup="dialog" disabled>API 排隊 <span id="key-queue-state" hidden></span></button>
+        <button id="gateway-concurrency" type="button" aria-haspopup="dialog" disabled>處理槽位</button>
+        <div id="gateway-claude-limits" class="gateway-quota" role="group" aria-label="Claude 訂閱用量">
+          <span>Claude 用量</span><span hidden>5 小時剩餘 <strong data-limit="five_hour"></strong></span><span hidden>7 天剩餘 <strong data-limit="seven_day"></strong></span><button type="button" class="quota-refresh" aria-label="查詢 Claude 用量" title="查詢 Claude 用量"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8a8 8 0 1 0 0 8m0-12v4h-4"/></svg></button>
         </div>
-        <button id="refresh-ticket" type="button" aria-haspopup="dialog" disabled>更新旧 Key</button>
-        <button id="create-key" class="primary" type="button" disabled>＋ 创建密钥</button>
+        <button id="refresh-ticket" type="button" aria-haspopup="dialog" disabled>更新舊 Key</button>
+        <button id="create-key" class="primary" type="button" disabled>＋ 建立密鑰</button>
       </div>
     </header>
 
-    <div class="metrics" aria-label="网关概览">
-      <div><span>启用密钥</span><strong id="metric-keys">—</strong><small id="metric-keys-detail">全部密钥</small></div>
-      <div><span id="metric-requests-label">累计请求</span><strong id="metric-requests">—</strong><small id="metric-requests-detail">等待读取</small></div>
-      <div><span id="metric-tokens-label">累计 Token</span><strong id="metric-tokens">—</strong><small id="metric-tokens-detail">输入、输出及缓存</small></div>
-      <div><span>累计估算费用</span><strong id="metric-cost">—</strong><small id="metric-cost-detail">按 Claude API 官方标准价</small></div>
-      <div><span>执行中 / 排队</span><strong id="metric-queue">—</strong><small id="metric-queue-detail">等待读取</small></div>
+    <div class="metrics" aria-label="網關概覽">
+      <div><span>啟用密鑰</span><strong id="metric-keys">—</strong><small id="metric-keys-detail">全部密鑰</small></div>
+      <div><span id="metric-requests-label">累計請求</span><strong id="metric-requests">—</strong><small id="metric-requests-detail">等待讀取</small></div>
+      <div><span id="metric-tokens-label">累計 Token</span><strong id="metric-tokens">—</strong><small id="metric-tokens-detail">輸入、輸出及快取</small></div>
+      <div><span>累計估算費用</span><strong id="metric-cost">—</strong><small id="metric-cost-detail">按 Claude API 官方標準價</small></div>
+      <div><span>執行中 / 排隊</span><strong id="metric-queue">—</strong><small id="metric-queue-detail">等待讀取</small></div>
     </div>
 
     <div id="queue-strip" class="queue-strip" hidden>
       <div><span class="queue-dot" aria-hidden="true"></span><strong id="queue-current"></strong></div>
-      <progress id="queue-capacity" aria-label="并发占用" max="1" value="0"></progress>
+      <progress id="queue-capacity" aria-label="併發佔用" max="1" value="0"></progress>
       <span id="queue-waiting"></span>
     </div>
-    <p id="status" class="notice" role="status">正在连接网关…</p>
+    <p id="status" class="notice" role="status">正在連接網關…</p>
 
-    <nav class="tabs" aria-label="管理页面">
-      <button type="button" data-view="keys" aria-current="page">密钥管理</button>
+    <nav class="tabs" aria-label="管理頁面">
+      <button type="button" data-view="keys" aria-current="page">密鑰管理</button>
       <button type="button" data-view="analytics">用量分析</button>
-      <button type="button" data-view="requests">请求记录</button>
+      <button type="button" data-view="requests">請求記錄</button>
     </nav>
-    <section id="view-keys" aria-label="密钥管理">
+    <section id="view-keys" aria-label="密鑰管理">
       <div class="toolbar">
-        <input type="search" id="key-search" aria-label="搜索备注或密钥 ID" placeholder="搜索备注或密钥 ID">
-        <select id="key-filter" aria-label="密钥状态">
-          <option value="">全部状态</option><option value="enabled">已启用</option><option value="revoked">已撤销</option><option value="expired">已过期</option>
+        <input type="search" id="key-search" aria-label="搜尋備註或密鑰 ID" placeholder="搜尋備註或密鑰 ID">
+        <select id="key-filter" aria-label="密鑰狀態">
+          <option value="">全部狀態</option><option value="enabled">已啟用</option><option value="revoked">已撤銷</option><option value="expired">已過期</option>
         </select>
-        <select id="key-sort" aria-label="密钥排序">
+        <select id="key-sort" aria-label="密鑰排序">
           <option value="created">新建在前</option><option value="last_used">最近使用</option>
-          <option value="requests">请求数最多</option><option value="tokens">Token 最多</option>
+          <option value="requests">請求數最多</option><option value="tokens">Token 最多</option>
         </select>
       </div>
       <div class="table-frame">
         <table class="keys-table">
-          <thead><tr><th scope="col">备注 / 密钥 ID</th><th scope="col">状态</th><th scope="col">模型 / 失效时间</th><th scope="col" class="number">限频</th><th scope="col" class="number">请求</th><th scope="col" class="number">Token</th><th scope="col" class="number">已用 / 余额</th><th scope="col">最近使用</th><th scope="col">操作</th></tr></thead>
+          <thead><tr><th scope="col">備註 / 密鑰 ID</th><th scope="col">狀態</th><th scope="col">模型 / 失效時間</th><th scope="col" class="number">限頻</th><th scope="col" class="number">請求</th><th scope="col" class="number">Token</th><th scope="col" class="number">已用 / 餘額</th><th scope="col">最近使用</th><th scope="col">操作</th></tr></thead>
           <tbody id="key-rows"></tbody>
         </table>
         <p class="empty" id="key-empty" hidden></p>
@@ -68,55 +68,55 @@
       <div id="key-pagination" class="pagination" hidden>
         <span id="key-count" class="muted"></span>
         <div class="actions">
-          <button id="previous-keys" type="button" aria-label="上一页">‹</button>
+          <button id="previous-keys" type="button" aria-label="上一頁">‹</button>
           <span id="key-page" class="muted"></span>
-          <button id="next-keys" type="button" aria-label="下一页">›</button>
+          <button id="next-keys" type="button" aria-label="下一頁">›</button>
         </div>
       </div>
     </section>
 
     <section id="view-analytics" aria-label="用量分析" hidden>
       <div class="analysis-toolbar">
-        <div><h2>流量与性能</h2><p id="analysis-summary" class="muted" role="status"></p></div>
-        <div id="analytics-range" class="segments" role="group" aria-label="时间范围">
-          <button type="button" data-period="1h" aria-pressed="true">近 1 小时</button>
-          <button type="button" data-period="24h" aria-pressed="false">近 24 小时</button>
+        <div><h2>流量與性能</h2><p id="analysis-summary" class="muted" role="status"></p></div>
+        <div id="analytics-range" class="segments" role="group" aria-label="時間範圍">
+          <button type="button" data-period="1h" aria-pressed="true">近 1 小時</button>
+          <button type="button" data-period="24h" aria-pressed="false">近 24 小時</button>
           <button type="button" data-period="7d" aria-pressed="false">近 7 天</button>
         </div>
       </div>
       <div class="analysis-grid">
         <article class="panel traffic-panel">
           <div class="section-heading">
-            <div><h3>吞吐趋势</h3><p id="traffic-summary" class="muted"></p></div>
-            <select id="traffic-unit" aria-label="吞吐指标">
-              <option value="tokens-rate">Token / 分钟</option><option value="requests-rate">请求 / 分钟</option>
-              <option value="tokens-total">Token 总量</option><option value="requests-total">请求次数</option>
+            <div><h3>吞吐趨勢</h3><p id="traffic-summary" class="muted"></p></div>
+            <select id="traffic-unit" aria-label="吞吐指標">
+              <option value="tokens-rate">Token / 分鐘</option><option value="requests-rate">請求 / 分鐘</option>
+              <option value="tokens-total">Token 總量</option><option value="requests-total">請求次數</option>
             </select>
           </div>
           <div id="traffic-chart" class="line-chart" hidden>
-            <canvas tabindex="0" aria-label="吞吐趋势，可用方向键查看各时段"></canvas>
+            <canvas tabindex="0" aria-label="吞吐趨勢，可用方向鍵查看各時段"></canvas>
             <p class="chart-readout"></p>
           </div>
           <p id="traffic-empty" class="empty"></p>
         </article>
         <article class="panel live-panel">
-          <div class="section-heading"><h3>并发与排队</h3><span class="live-label">实时</span></div>
-          <div class="live-metric"><span>并发占用</span><strong id="analysis-running">—</strong><progress id="analysis-running-bar" aria-label="并发占用"></progress></div>
-          <div class="live-metric"><span>排队请求</span><strong id="analysis-waiting">—</strong><progress id="analysis-waiting-bar" aria-label="排队占用"></progress></div>
+          <div class="section-heading"><h3>併發與排隊</h3><span class="live-label">實時</span></div>
+          <div class="live-metric"><span>併發佔用</span><strong id="analysis-running">—</strong><progress id="analysis-running-bar" aria-label="併發佔用"></progress></div>
+          <div class="live-metric"><span>排隊請求</span><strong id="analysis-waiting">—</strong><progress id="analysis-waiting-bar" aria-label="排隊佔用"></progress></div>
           <ul id="analysis-queue" class="queue-keys"></ul>
           <p id="analysis-queue-empty" class="muted"></p>
           <p id="analysis-queue-policy" class="queue-policy muted" hidden></p>
         </article>
         <article class="panel latency-panel">
           <div class="section-heading">
-            <div><h3>耗时分布</h3><p id="latency-summary" class="muted"></p></div>
-            <select id="latency-metric" aria-label="耗时类型"><option value="duration_ms">处理耗时</option><option value="wait_ms">排队等待</option></select>
+            <div><h3>耗時分佈</h3><p id="latency-summary" class="muted"></p></div>
+            <select id="latency-metric" aria-label="耗時類型"><option value="duration_ms">處理耗時</option><option value="wait_ms">排隊等待</option></select>
           </div>
-          <div id="latency-bars" class="latency-bars" role="list" aria-label="耗时分布"></div>
+          <div id="latency-bars" class="latency-bars" role="list" aria-label="耗時分佈"></div>
           <p id="latency-empty" class="empty" hidden></p>
         </article>
         <article class="panel result-panel">
-          <div class="section-heading"><h3>请求结果</h3><button type="button" id="analysis-view-requests">查看记录</button></div>
+          <div class="section-heading"><h3>請求結果</h3><button type="button" id="analysis-view-requests">查看記錄</button></div>
           <div id="outcome-chart" class="donut-layout" hidden>
             <div class="donut" role="img"><div><strong></strong><small>成功率</small></div></div>
             <ul class="chart-legend"></ul>
@@ -124,19 +124,19 @@
           <p id="outcome-empty" class="empty" hidden></p>
         </article>
         <article class="panel errors-panel">
-          <div class="section-heading"><h3>错误与限流趋势</h3><div class="inline-legend"><span class="chart-swatch tone-rose">失败</span><span class="chart-swatch tone-gold">受限</span></div></div>
+          <div class="section-heading"><h3>錯誤與限流趨勢</h3><div class="inline-legend"><span class="chart-swatch tone-rose">失敗</span><span class="chart-swatch tone-gold">受限</span></div></div>
           <div id="error-chart" class="line-chart" hidden>
-            <canvas tabindex="0" aria-label="错误与限流趋势，可用方向键查看各时段"></canvas>
+            <canvas tabindex="0" aria-label="錯誤與限流趨勢，可用方向鍵查看各時段"></canvas>
             <p class="chart-readout"></p>
           </div>
           <p id="error-empty" class="empty" hidden></p>
         </article>
         <article id="model-panel" class="panel models-panel">
-          <div class="section-heading"><h3>模型用量</h3><span class="muted">历史累计</span></div>
+          <div class="section-heading"><h3>模型用量</h3><span class="muted">歷史累計</span></div>
           <div class="model-layout">
-            <div id="model-share" class="donut" role="img" hidden><div><strong></strong><small>总 Token</small></div></div>
+            <div id="model-share" class="donut" role="img" hidden><div><strong></strong><small>總 Token</small></div></div>
             <div class="table-scroll"><table class="model-table">
-              <thead><tr><th scope="col">模型</th><th scope="col" class="number">请求</th><th scope="col" class="number">失败</th><th scope="col" class="number">Token</th><th scope="col" class="number">估算费用</th></tr></thead>
+              <thead><tr><th scope="col">模型</th><th scope="col" class="number">請求</th><th scope="col" class="number">失敗</th><th scope="col" class="number">Token</th><th scope="col" class="number">估算費用</th></tr></thead>
               <tbody id="model-rows"></tbody>
             </table></div>
           </div>
@@ -145,17 +145,17 @@
       </div>
     </section>
 
-    <section id="view-requests" aria-label="请求记录" hidden>
+    <section id="view-requests" aria-label="請求記錄" hidden>
       <div class="toolbar">
-        <select id="request-filter" aria-label="请求结果">
-          <option value="">全部结果</option><option value="success">成功</option><option value="failed">失败</option><option value="limited">受限</option><option value="canceled">已取消</option>
+        <select id="request-filter" aria-label="請求結果">
+          <option value="">全部結果</option><option value="success">成功</option><option value="failed">失敗</option><option value="limited">受限</option><option value="canceled">已取消</option>
         </select>
-        <button id="clear-key-filter" type="button" hidden>显示所有密钥</button>
-        <span id="request-caption" class="muted">最近 30 条 · 新采集的请求</span>
+        <button id="clear-key-filter" type="button" hidden>顯示所有密鑰</button>
+        <span id="request-caption" class="muted">最近 30 條 · 新採集的請求</span>
       </div>
       <div class="table-frame">
         <table>
-          <thead><tr><th scope="col">时间</th><th scope="col">密钥</th><th scope="col">模型</th><th scope="col">结果</th><th scope="col" class="number">等待</th><th scope="col" class="number">处理耗时</th><th scope="col" class="number">Token</th></tr></thead>
+          <thead><tr><th scope="col">時間</th><th scope="col">密鑰</th><th scope="col">模型</th><th scope="col">結果</th><th scope="col" class="number">等待</th><th scope="col" class="number">處理耗時</th><th scope="col" class="number">Token</th></tr></thead>
           <tbody id="request-rows"></tbody>
         </table>
         <p id="request-empty" class="empty" hidden></p>
@@ -165,65 +165,65 @@
 
   <dialog id="prompt-review-dialog" aria-labelledby="prompt-review-title">
     <form id="prompt-review-form">
-      <header class="dialog-heading"><h2 id="prompt-review-title">前置审查</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
+      <header class="dialog-heading"><h2 id="prompt-review-title">前置審查</h2><button type="button" class="close" data-close aria-label="關閉">×</button></header>
       <div class="dialog-content">
-        <p class="muted">开启后，网关在转发前审查本轮用户文字。此设置对所有 API Key 生效。</p>
-        <label>审查方式
+        <p class="muted">開啟後，網關在轉發前審查本輪用戶文字。此設定對所有 API Key 生效。</p>
+        <label>審查方式
           <select id="prompt-review-provider">
-            <option value="builtin">内置模型 · 通过 CloudCLI</option>
-            <option value="deepseek">DeepSeek Flash · 独立 API</option>
+            <option value="builtin">內置模型 · 透過 CloudCLI</option>
+            <option value="deepseek">DeepSeek Flash · 獨立 API</option>
           </select>
         </label>
-        <label id="prompt-review-model-field">内置模型
+        <label id="prompt-review-model-field">內置模型
           <select id="prompt-review-model"><option value="sonnet">Sonnet</option><option value="opus">Opus</option></select>
         </label>
-        <p id="prompt-review-builtin-note" class="notice" hidden>当前网关需要先完成 CloudCLI 网页授权才能使用内置模型。</p>
+        <p id="prompt-review-builtin-note" class="notice" hidden>當前網關需要先完成 CloudCLI 網頁授權才能使用內置模型。</p>
         <label id="prompt-review-key-field" hidden>DeepSeek API Key
-          <input id="prompt-review-key" type="password" maxlength="512" autocomplete="new-password" placeholder="粘贴 DeepSeek API Key" spellcheck="false">
-          <small id="prompt-review-key-note">开启后，本轮提示词文字会发送给 DeepSeek。</small>
+          <input id="prompt-review-key" type="password" maxlength="512" autocomplete="new-password" placeholder="貼上 DeepSeek API Key" spellcheck="false">
+          <small id="prompt-review-key-note">開啟後，本輪提示詞文字會傳送給 DeepSeek。</small>
         </label>
         <label class="prompt-review-switch">
-          <span>安全审查</span><input id="prompt-review-enabled" type="checkbox" role="switch">
+          <span>安全審查</span><input id="prompt-review-enabled" type="checkbox" role="switch">
         </label>
         <label class="prompt-review-switch">
-          <span><span id="prompt-review-language-label">语言替换</span><small id="prompt-review-language-note">由上方模型把通过审查的提示词翻译成英文。</small></span>
+          <span><span id="prompt-review-language-label">語言替換</span><small id="prompt-review-language-note">由上方模型把通過審查的提示詞翻譯成英文。</small></span>
           <input id="prompt-review-language" type="checkbox" role="switch" aria-labelledby="prompt-review-language-label" aria-describedby="prompt-review-language-note" disabled>
         </label>
         <p id="prompt-review-status" class="notice" role="status" hidden></p>
       </div>
-      <footer class="dialog-footer"><button type="button" data-close>取消</button><button id="save-prompt-review" class="primary" type="submit">保存</button></footer>
+      <footer class="dialog-footer"><button type="button" data-close>取消</button><button id="save-prompt-review" class="primary" type="submit">儲存</button></footer>
     </form>
   </dialog>
 
   <dialog id="key-queue-dialog" aria-labelledby="key-queue-title">
     <form id="key-queue-form">
-      <header class="dialog-heading"><h2 id="key-queue-title">API 排队</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
+      <header class="dialog-heading"><h2 id="key-queue-title">API 排隊</h2><button type="button" class="close" data-close aria-label="關閉">×</button></header>
       <div class="dialog-content">
-        <label class="prompt-review-switch"><span>按 API Key 排队</span><input id="key-queue-enabled" type="checkbox" role="switch"></label>
-        <p class="muted">同一时间只让一把 Key 使用网关。该 Key 的请求全部结束后，连续空闲 60 秒才轮到下一把 Key。</p>
+        <label class="prompt-review-switch"><span>按 API Key 排隊</span><input id="key-queue-enabled" type="checkbox" role="switch"></label>
+        <p class="muted">同一時間只讓一把 Key 使用網關。該 Key 的請求全部結束後，連續空閒 60 秒才輪到下一把 Key。</p>
         <p id="key-queue-status" class="notice" role="status" hidden></p>
       </div>
-      <footer class="dialog-footer"><button type="button" data-close>取消</button><button class="primary" id="save-key-queue" type="submit">保存</button></footer>
+      <footer class="dialog-footer"><button type="button" data-close>取消</button><button class="primary" id="save-key-queue" type="submit">儲存</button></footer>
     </form>
   </dialog>
 
   <dialog id="concurrency-dialog" aria-labelledby="concurrency-title">
     <form id="concurrency-form">
-      <header class="dialog-heading"><h2 id="concurrency-title">处理槽位</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
+      <header class="dialog-heading"><h2 id="concurrency-title">處理槽位</h2><button type="button" class="close" data-close aria-label="關閉">×</button></header>
       <div class="dialog-content">
-        <label>最大同时处理请求数<input id="concurrency-value" type="text" inputmode="numeric" pattern="0|[1-9][0-9]*" required></label>
-        <p class="muted">默认 0，表示网关不设处理槽位上限。设置正整数时，所有密钥共享槽位，调低上限不会中断正在处理的请求。</p>
+        <label>最大同時處理請求數<input id="concurrency-value" type="text" inputmode="numeric" pattern="0|[1-9][0-9]*" required></label>
+        <p class="muted">預設 0，表示網關不設處理槽位上限。設定正整數時，所有密鑰共享槽位，調低上限不會中斷正在處理的請求。</p>
         <p id="concurrency-status" class="notice" role="status"></p>
       </div>
-      <footer class="dialog-footer"><button type="button" data-close>关闭</button><button class="primary" id="save-concurrency" type="submit">保存</button></footer>
+      <footer class="dialog-footer"><button type="button" data-close>關閉</button><button class="primary" id="save-concurrency" type="submit">儲存</button></footer>
     </form>
   </dialog>
 
   <dialog id="refresh-ticket-dialog" aria-labelledby="refresh-ticket-title">
     <form id="refresh-ticket-form">
-      <header class="dialog-heading"><h2 id="refresh-ticket-title">更新旧 Key</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
+      <header class="dialog-heading"><h2 id="refresh-ticket-title">更新舊 Key</h2><button type="button" class="close" data-close aria-label="關閉">×</button></header>
       <div class="dialog-content">
-        <p>网关地址、端口或证书变更后，粘贴原 Key 以更新接入地址。原有用量和额度会继续保留。</p>
+        <p>網關地址、連接埠或證書變更後，貼上原 Key 以更新接入地址。原有用量和額度會繼續保留。</p>
         <label>原接入 Key<input id="old-ticket" type="password" maxlength="2048" autocomplete="off" spellcheck="false" required></label>
         <p id="refresh-ticket-status" class="notice" role="status" hidden></p>
       </div>
@@ -233,66 +233,66 @@
 
   <dialog id="key-editor" aria-labelledby="editor-title">
     <form id="key-form">
-      <header class="dialog-heading"><h2 id="editor-title">创建密钥</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
+      <header class="dialog-heading"><h2 id="editor-title">建立密鑰</h2><button type="button" class="close" data-close aria-label="關閉">×</button></header>
       <div class="dialog-content">
-        <label>备注<input type="text" id="note" maxlength="120" placeholder="例如：工作笔记本"></label>
-        <label>每分钟请求上限<input type="number" id="rpm" min="0" max="600" step="1" value="0" required><small>设为 0 时不限频。</small></label>
-        <label id="budget-field" hidden>累计额度（美元）<input type="number" id="budget" min="0" max="1000000" step="0.01" placeholder="留空不限额" disabled><small id="budget-detail">从额度扣除估算费用。余额用完后暂停新请求。</small></label>
+        <label>備註<input type="text" id="note" maxlength="120" placeholder="例如：工作筆記本"></label>
+        <label>每分鐘請求上限<input type="number" id="rpm" min="0" max="600" step="1" value="0" required><small>設為 0 時不限頻。</small></label>
+        <label id="budget-field" hidden>累計額度（美元）<input type="number" id="budget" min="0" max="1000000" step="0.01" placeholder="留空不限額" disabled><small id="budget-detail">從額度扣除估算費用。餘額用完後暫停新請求。</small></label>
         <label id="device-policy-field" hidden>接入用途<select id="device-policy" disabled>
           <option value="desktop">Safe Code 桌面接入</option><option value="api">普通 API</option>
-        </select><small id="device-policy-help">桌面接入允许设备配对，使用者仍须在本机确认授权。</small></label>
+        </select><small id="device-policy-help">桌面接入允許裝置配對，使用者仍須在本機確認授權。</small></label>
         <div class="key-policy-fields">
-          <label><span id="model-policy-label">模型管理</span><select id="model-policy" aria-labelledby="model-policy-label"><option value="all">全部模型</option><option value="selected">仅允许所选模型</option></select></label>
-          <label><span id="expiry-policy-label">失效时间</span><select id="expiry-policy" aria-labelledby="expiry-policy-label"><option value="never">永不过期</option><option value="scheduled">指定时间</option></select></label>
+          <label><span id="model-policy-label">模型管理</span><select id="model-policy" aria-labelledby="model-policy-label"><option value="all">全部模型</option><option value="selected">僅允許所選模型</option></select></label>
+          <label><span id="expiry-policy-label">失效時間</span><select id="expiry-policy" aria-labelledby="expiry-policy-label"><option value="never">永不過期</option><option value="scheduled">指定時間</option></select></label>
         </div>
         <div id="model-picker" hidden>
-          <div class="model-picker-status"><p id="model-status" class="muted" role="status"></p><button id="reload-models" type="button" hidden>重试</button></div>
-          <div id="allowed-models" class="model-options" role="group" aria-label="允许使用的模型"></div>
-          <small>「Default」「Best」等自动选项由 CloudCLI 决定实际使用的模型。</small>
+          <div class="model-picker-status"><p id="model-status" class="muted" role="status"></p><button id="reload-models" type="button" hidden>重試</button></div>
+          <div id="allowed-models" class="model-options" role="group" aria-label="允許使用的模型"></div>
+          <small>「Default」「Best」等自動選項由 CloudCLI 決定實際使用的模型。</small>
         </div>
-        <label id="expiry-field" hidden>到期日期与时间<input id="key-expiry" type="datetime-local" max="9999-12-31T23:59" disabled required><small>按本机时区显示，到期后停止接受新请求。</small></label>
-        <p id="key-policy-upgrade" class="muted" hidden>请先在 Safe Code 的「网关设置」升级 VPS 网关，以设置模型权限和失效时间。</p>
+        <label id="expiry-field" hidden>到期日期與時間<input id="key-expiry" type="datetime-local" max="9999-12-31T23:59" disabled required><small>按本機時區顯示，到期後停止接受新請求。</small></label>
+        <p id="key-policy-upgrade" class="muted" hidden>請先在 Safe Code 的「網關設定」升級 VPS 網關，以設定模型權限和失效時間。</p>
         <div id="activation-field" class="activation-field" hidden>
           <div class="activation-heading">
-            <label for="activation-code">激活码</label>
-            <a href="https://space.bilibili.com/49985881" referrerpolicy="no-referrer">关注主播</a>
+            <label for="activation-code">啟用碼</label>
+            <a href="https://space.bilibili.com/49985881" referrerpolicy="no-referrer">關注主播</a>
           </div>
           <input id="activation-code" type="password" maxlength="128" autocomplete="off" spellcheck="false" aria-describedby="activation-detail" disabled>
-          <small id="activation-detail">创建更多密钥需要激活码，关注主播可以获得激活码。</small>
+          <small id="activation-detail">建立更多密鑰需要啟用碼，關注主播可以獲得啟用碼。</small>
         </div>
         <p id="editor-status" class="notice" role="status" hidden></p>
       </div>
-      <footer class="dialog-footer"><button type="button" data-close>取消</button><button class="primary" id="save-key" type="submit">创建密钥</button></footer>
+      <footer class="dialog-footer"><button type="button" data-close>取消</button><button class="primary" id="save-key" type="submit">建立密鑰</button></footer>
     </form>
   </dialog>
 
   <dialog id="issued-dialog" aria-labelledby="issued-title">
-    <header class="dialog-heading"><h2 id="issued-title">密钥已创建</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
+    <header class="dialog-heading"><h2 id="issued-title">密鑰已建立</h2><button type="button" class="close" data-close aria-label="關閉">×</button></header>
     <div class="dialog-content">
-      <p id="issued-help">完整密钥仅在这里显示。请复制后回到 Safe Code 主界面的「API Key 接入」粘贴。</p>
+      <p id="issued-help">完整密鑰僅在這裏顯示。請複製後回到 Safe Code 主介面的「API Key 接入」貼上。</p>
       <p id="issued-origin" class="muted" hidden></p>
       <textarea id="ticket" rows="6" readonly aria-label="Safe Code API Key"></textarea>
       <p id="copy-status" class="notice" role="status" hidden></p>
     </div>
-    <footer class="dialog-footer"><button type="button" data-close>完成</button><button id="copy-key" class="primary" type="button">复制密钥</button></footer>
+    <footer class="dialog-footer"><button type="button" data-close>完成</button><button id="copy-key" class="primary" type="button">複製密鑰</button></footer>
   </dialog>
 
   <dialog id="usage-dialog" class="details-dialog" aria-labelledby="usage-title">
-    <header class="dialog-heading"><div><h2 id="usage-title">用量详情</h2><p id="usage-key" class="muted"></p></div><button type="button" class="close" data-close aria-label="关闭用量详情">×</button></header>
+    <header class="dialog-heading"><div><h2 id="usage-title">用量詳情</h2><p id="usage-key" class="muted"></p></div><button type="button" class="close" data-close aria-label="關閉用量詳情">×</button></header>
     <div class="dialog-content">
       <p id="usage-status" class="notice" role="status"></p>
       <div class="table-frame">
-        <table><thead><tr><th scope="col">模型</th><th scope="col" class="number">请求</th><th scope="col" class="number">失败</th><th scope="col" class="number">输入</th><th scope="col" class="number">输出</th><th scope="col" class="number">缓存读</th><th scope="col" class="number">缓存写</th><th scope="col" class="number">总 Token</th><th scope="col" class="number">估算费用</th></tr></thead>
+        <table><thead><tr><th scope="col">模型</th><th scope="col" class="number">請求</th><th scope="col" class="number">失敗</th><th scope="col" class="number">輸入</th><th scope="col" class="number">輸出</th><th scope="col" class="number">快取讀</th><th scope="col" class="number">快取寫</th><th scope="col" class="number">總 Token</th><th scope="col" class="number">估算費用</th></tr></thead>
         <tbody id="usage-rows"></tbody></table>
       </div>
     </div>
-    <footer class="dialog-footer"><button type="button" id="view-key-requests">查看此密钥的请求</button><button type="button" data-close>关闭</button></footer>
+    <footer class="dialog-footer"><button type="button" id="view-key-requests">查看此密鑰的請求</button><button type="button" data-close>關閉</button></footer>
   </dialog>
 
   <dialog id="revoke-dialog" aria-labelledby="revoke-title">
-    <header class="dialog-heading"><h2 id="revoke-title">撤销密钥</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
+    <header class="dialog-heading"><h2 id="revoke-title">撤銷密鑰</h2><button type="button" class="close" data-close aria-label="關閉">×</button></header>
     <div class="dialog-content"><p id="revoke-message"></p><p id="revoke-status" class="notice" role="status" hidden></p></div>
-    <footer class="dialog-footer"><button type="button" data-close>取消</button><button type="button" id="revoke-key" class="danger">撤销密钥</button></footer>
+    <footer class="dialog-footer"><button type="button" data-close>取消</button><button type="button" id="revoke-key" class="danger">撤銷密鑰</button></footer>
   </dialog>
 </body>
 </html>

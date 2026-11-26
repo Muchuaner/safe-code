@@ -30,7 +30,7 @@ public sealed record PublicGatewayTicket(string Url, string Pin, string Key)
         }
         catch (Exception error) when (error is ArgumentException or FormatException or JsonException or CryptographicException)
         {
-            throw new InvalidDataException("请输入完整的 SafeCode 接入 Key。");
+            throw new InvalidDataException("請輸入完整的 SafeCode 接入 Key。");
         }
     }
 

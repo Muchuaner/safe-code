@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""真实 SSH 握手轮换服务器密钥；确认前不得密码认证，确认后只读 Debian 检查。"""
+"""真實 SSH 握手輪換伺服器密鑰；確認前不得密碼認證，確認後只讀 Debian 檢查。"""
 import base64,hashlib,json,socket,subprocess,tempfile,threading,time
 from pathlib import Path
 import paramiko

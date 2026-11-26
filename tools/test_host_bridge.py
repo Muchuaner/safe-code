@@ -21,7 +21,7 @@ class HostBridge(unittest.TestCase):
         self.assertEqual((ssh/'config').read_text(),'Host personal\n  HostName untouched.example\n');self.assertFalse((self.home/self.relative).with_name('config').exists())
     def test_public_listener_is_rejected_before_alias_write(self):
         with patch.object(a,'run',return_value=subprocess.CompletedProcess([],0,'LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*','')),patch.object(a,'user_files') as helper:
-            with self.assertRaisesRegex(RuntimeError,'回环'):a.host_bridge({'clientId':self.client,'action':'configure','port':2222})
+            with self.assertRaisesRegex(RuntimeError,'迴環'):a.host_bridge({'clientId':self.client,'action':'configure','port':2222})
             helper.assert_not_called()
     def test_actual_key_login_host_pinning_and_dedicated_config(self):
         key=self.call('prepare')['publicKey'];host=self.home/'fixture-host-key';subprocess.run(['/usr/bin/ssh-keygen','-q','-t','ed25519','-N','','-f',str(host)],check=True)

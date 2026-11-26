@@ -6,7 +6,7 @@ namespace SafeCode.Core;
 public sealed class ClaudePermissionSettings(string settingsPath,string backupPath)
 {
     private const string Mode="auto";
-    private static JsonObject Read(string path)=>File.Exists(path)?JsonNode.Parse(File.ReadAllText(path)) as JsonObject??throw new IOException("Claude 设置格式无效，未修改。"):new();
+    private static JsonObject Read(string path)=>File.Exists(path)?JsonNode.Parse(File.ReadAllText(path)) as JsonObject??throw new IOException("Claude 設定格式無效，未修改。"):new();
     private static void Save(string path,JsonObject json)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);string temp=path+".new";
@@ -15,7 +15,7 @@ public sealed class ClaudePermissionSettings(string settingsPath,string backupPa
     public void Enable()
     {
         var settings=Read(settingsPath);
-        if(settings["permissions"] is not null and not JsonObject)throw new IOException("Claude permissions 设置格式无效，未修改。");
+        if(settings["permissions"] is not null and not JsonObject)throw new IOException("Claude permissions 設定格式無效，未修改。");
         var permissions=settings["permissions"] as JsonObject??new();
         if(!File.Exists(backupPath))Save(backupPath,new JsonObject{["original"]=permissions["defaultMode"]?.DeepClone()});
         if(permissions["defaultMode"]?.ToString()==Mode)return;

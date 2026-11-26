@@ -7,19 +7,19 @@ internal sealed class MacClients(string directory)
     public static async Task<string> Run(string file,IEnumerable<string> args,CancellationToken ct=default)
     {
         var start=new ProcessStartInfo(file){RedirectStandardOutput=true,RedirectStandardError=true,UseShellExecute=false};foreach(var arg in args)start.ArgumentList.Add(arg);
-        using var process=Process.Start(start)??throw new IOException("无法启动系统工具。");var output=process.StandardOutput.ReadToEndAsync(ct);var error=process.StandardError.ReadToEndAsync(ct);
+        using var process=Process.Start(start)??throw new IOException("無法啟動系統工具。");var output=process.StandardOutput.ReadToEndAsync(ct);var error=process.StandardError.ReadToEndAsync(ct);
         try{await process.WaitForExitAsync(ct);}catch{try{process.Kill(true);}catch{}throw;}
-        if(process.ExitCode!=0)throw new IOException("系统工具执行失败："+await error);return await output;
+        if(process.ExitCode!=0)throw new IOException("系統工具執行失敗："+await error);return await output;
     }
     public static async Task<string> OpenLocalClientAsync(string name,CancellationToken ct)
     {
-        if(name != "Codex")throw new ArgumentException("未知客户端。");
-        try{await Run("/usr/bin/open",["-a",name],ct);return "已请求打开 "+name+" 客户端。";}
-        catch(IOException){throw new InvalidOperationException("未能打开 "+name+"，请先安装官方客户端，或从应用程序目录启动。");}
+        if(name != "Codex")throw new ArgumentException("未知客戶端。");
+        try{await Run("/usr/bin/open",["-a",name],ct);return "已請求開啟 "+name+" 客戶端。";}
+        catch(IOException){throw new InvalidOperationException("未能開啟 "+name+"，請先安裝官方客戶端，或從應用程式目錄啟動。");}
     }
     public async Task OpenTerminalAsync(SshSession session,CancellationToken ct)
     {
-        if(session.Server?.Statuses.GetValueOrDefault("account")!=true)throw new InvalidOperationException("请先部署工作用户。");
+        if(session.Server?.Statuses.GetValueOrDefault("account")!=true)throw new InvalidOperationException("請先部署工作用戶。");
         await session.DeployAsync("ssh",null,ct:ct);await session.VerifyWorkspaceKeyAsync(ct);
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         var config=Path.Combine(directory,"terminal-config");File.WriteAllText(config,"# Safe Code isolated SSH client\n");MacFiles.Protect(config);
@@ -32,7 +32,7 @@ internal sealed class MacClients(string directory)
     public async Task<string?> DesktopAsync(SshSession session,DesktopResolution resolution,
         RdpResizePreferences display,CancellationToken ct)
     {
-        if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("请先安装虚拟桌面。");
+        if(session.Server?.DesktopReady!=true)throw new InvalidOperationException("請先安裝虛擬桌面。");
         var account=await session.RequestAsync<AccountInfo>("account_info",null,ct);
         string? freeRdp=FindFreeRdp();
         var endpoint=await session.PrepareRemoteDesktopAsync(account.Username,freeRdp!=null,ct);
@@ -82,9 +82,9 @@ internal sealed class MacClients(string directory)
         DesktopResolution resolution, RdpResizeMode mode, bool fullscreen)
     {
         if (endpoint.CertificateFingerprint is not { Length: 64 })
-            throw new InvalidOperationException("缺少经 SSH 获取的 RDP 证书指纹。");
+            throw new InvalidOperationException("缺少經 SSH 獲取的 RDP 證書指紋。");
         if (account.Username.IndexOfAny(['\r','\n','\0'])>=0 || account.Password.IndexOfAny(['\r','\n','\0'])>=0)
-            throw new InvalidOperationException("远程桌面凭据包含不支持的换行或空字符。");
+            throw new InvalidOperationException("遠端桌面憑據包含不支援的換行或空字符。");
         var arguments=new List<string> {
             $"/v:127.0.0.1:{endpoint.Port}", "/u:"+account.Username, "/p:"+account.Password,
             $"/size:{resolution.Width}x{resolution.Height}", "/sec:tls",
@@ -105,7 +105,7 @@ internal sealed class MacClients(string directory)
             UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true
         };
         start.ArgumentList.Add("/args-from:stdin");
-        using var process=Process.Start(start)??throw new IOException("无法启动 FreeRDP。");
+        using var process=Process.Start(start)??throw new IOException("無法啟動 FreeRDP。");
         process.OutputDataReceived+=(_,_)=>{};
         process.ErrorDataReceived+=(_,_)=>{};
         process.BeginOutputReadLine();process.BeginErrorReadLine();
@@ -115,7 +115,7 @@ internal sealed class MacClients(string directory)
                 await process.StandardInput.WriteLineAsync(argument.AsMemory(),ct);
             process.StandardInput.Close();
             await Task.Delay(350,ct);
-            if(process.HasExited)throw new IOException("FreeRDP 未能打开桌面。请确认已安装支持 SDL 的 FreeRDP 3，并检查 xrdp 的 TLS 和登录设置。");
+            if(process.HasExited)throw new IOException("FreeRDP 未能開啟桌面。請確認已安裝支援 SDL 的 FreeRDP 3，並檢查 xrdp 的 TLS 和登入設定。");
         }
         catch
         {

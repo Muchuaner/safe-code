@@ -145,8 +145,8 @@ class MacWorkspaceTests(unittest.TestCase):
                                         capture_output=True, check=True, text=True, timeout=5)
                 return json.loads(result.stdout)
 
-            self.assertEqual(run('create_text_file', path='你好.txt', text='内容'), {'created': True})
-            self.assertEqual(run('read_text_file', path='你好.txt'), {'text': '内容'})
+            self.assertEqual(run('create_text_file', path='你好.txt', text='內容'), {'created': True})
+            self.assertEqual(run('read_text_file', path='你好.txt'), {'text': '內容'})
             self.assertIn('error', run('create_text_file', path='你好.txt', text='replacement'))
             self.assertIn('error', run('read_text_file', path='out'))
             self.assertIn('error', run('read_text_file', path='escape/outside.txt'))

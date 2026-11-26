@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在服务器通过 SSH 读取报表；不暴露公网管理接口。"""
+"""在伺服器透過 SSH 讀取報表；不暴露公網管理接口。"""
 import argparse,json,sqlite3,uuid
 
 p=argparse.ArgumentParser()
@@ -7,9 +7,9 @@ p.add_argument('database')
 k=p.add_mutually_exclusive_group()
 k.add_argument('--feedback',action='store_true')
 k.add_argument('--diagnostics',action='store_true')
-k.add_argument('--summary',action='store_true',help='按操作、结果、错误分类汇总全部保留诊断')
+k.add_argument('--summary',action='store_true',help='按操作、結果、錯誤分類彙總全部保留診斷')
 p.add_argument('--per-installation',action='store_true')
-p.add_argument('--issue',type=lambda value:str(uuid.UUID(value)),help='按问题编号查询诊断或反馈')
+p.add_argument('--issue',type=lambda value:str(uuid.UUID(value)),help='按問題編號查詢診斷或回饋')
 a=p.parse_args()
 if a.issue and not (a.feedback or a.diagnostics):p.error('--issue 需要 --feedback 或 --diagnostics')
 db=sqlite3.connect('file:'+a.database+'?mode=ro',uri=True)

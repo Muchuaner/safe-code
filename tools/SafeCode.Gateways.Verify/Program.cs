@@ -8,7 +8,7 @@ try
     {
         bool hostRequired=false;
         try{session.RequireVerifiedHostControl();}
-        catch(InvalidOperationException error){hostRequired=error.Message.Contains("本机远程控制",StringComparison.Ordinal);}
+        catch(InvalidOperationException error){hostRequired=error.Message.Contains("本機遠端控制",StringComparison.Ordinal);}
         Assert(hostRequired,"Desktop host control was accepted without a verified session");
     }
     string path=Path.Combine(root,"enabled.json");

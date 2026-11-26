@@ -18,7 +18,7 @@ internal static class WindowsClaudeDesktop
         var shellType = Type.GetTypeFromProgID("Shell.Application", throwOnError: true)!;
         dynamic shell = Activator.CreateInstance(shellType)!;
         dynamic folder = shell.NameSpace("shell:AppsFolder")
-            ?? throw new IOException("无法读取 Windows 应用列表，请从开始菜单检查 Claude Desktop。");
+            ?? throw new IOException("無法讀取 Windows 應用列表，請從開始選單檢查 Claude Desktop。");
         foreach (dynamic item in folder.Items())
         {
             string? id = item.Path as string;
@@ -81,7 +81,7 @@ internal static class WindowsClaudeDesktop
             "if($s.Status -ne 'Valid' -or $s.SignerCertificate.GetNameInfo('SimpleName',$false) -notmatch '^Anthropic(,? (PBC|Inc\\.?))?$'){exit 1}" })
             start.ArgumentList.Add(arg);
         start.Environment["SAFECODE_DESKTOP_TARGET"] = path;
-        using var check = Process.Start(start) ?? throw new IOException("无法检查 Claude Desktop 的数字签名。");
+        using var check = Process.Start(start) ?? throw new IOException("無法檢查 Claude Desktop 的數字簽名。");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         try { await check.WaitForExitAsync(deadline.Token); }
@@ -89,10 +89,10 @@ internal static class WindowsClaudeDesktop
         {
             if (!check.HasExited) check.Kill();
             ct.ThrowIfCancellationRequested();
-            throw new IOException("检查 Claude Desktop 签名超时，请稍后重试。");
+            throw new IOException("檢查 Claude Desktop 簽名超時，請稍後重試。");
         }
         if (check.ExitCode != 0)
-            throw new InvalidOperationException("此 Claude.exe 的 Anthropic 数字签名未获 Windows 确认。请检查系统时间及安装来源，或重新安装官方客户端。");
+            throw new InvalidOperationException("此 Claude.exe 的 Anthropic 數字簽名未獲 Windows 確認。請檢查系統時間及安裝來源，或重新安裝官方客戶端。");
     }
 
     // Activation returns an HRESULT if Windows cannot open this registered entry.
@@ -124,8 +124,8 @@ internal static class WindowsClaudeDesktop
         if (appId == null && exe == null)
         {
             try { using var browser = Process.Start(new ProcessStartInfo(DownloadPage) { UseShellExecute = true }); }
-            catch (Win32Exception) { throw new InvalidOperationException("未找到 Claude Desktop。请在浏览器打开 "+DownloadPage); }
-            return new { installationRequired = true, message = "未找到 Claude Desktop，已打开官方下载页。安装后请回到 SafeCode 再次打开。" };
+            catch (Win32Exception) { throw new InvalidOperationException("未找到 Claude Desktop。請在瀏覽器開啟 "+DownloadPage); }
+            return new { installationRequired = true, message = "未找到 Claude Desktop，已開啟官方下載頁。安裝後請回到 SafeCode 再次開啟。" };
         }
 
         bool packaged = appId != null && (exe == null || (access.Configured && access.UsesPackagedProfile()));
@@ -145,11 +145,11 @@ internal static class WindowsClaudeDesktop
                 timeout.CancelAfter(TimeSpan.FromSeconds(15));
                 try { await Task.WhenAll(desktop.Select(p => p.WaitForExitAsync(timeout.Token))); }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                { throw new InvalidOperationException("请从系统托盘完全退出 Claude Desktop，再点击「打开 Claude Desktop」。"); }
+                { throw new InvalidOperationException("請從系統匣完全退出 Claude Desktop，再點擊「開啟 Claude Desktop」。"); }
                 await access.PrepareLaunchAsync(ct);
             }
             else if (desktop.Any(app => !app.HasExited && new DateTimeOffset(app.StartTime).ToUnixTimeMilliseconds() < readySince))
-                throw new InvalidOperationException("Claude Desktop 在本次网关启用前就已运行。请从系统托盘完全退出，再点击打开以载入当前配置。");
+                throw new InvalidOperationException("Claude Desktop 在本次網關啟用前就已執行。請從系統匣完全退出，再點擊開啟以載入當前配置。");
 
             if (packaged)
             {
@@ -168,20 +168,20 @@ internal static class WindowsClaudeDesktop
             else
             {
                 using var child = Process.Start(new ProcessStartInfo(exe!) { UseShellExecute = false,
-                    WorkingDirectory = Path.GetDirectoryName(exe!)! }) ?? throw new IOException("无法启动 Claude Desktop。");
+                    WorkingDirectory = Path.GetDirectoryName(exe!)! }) ?? throw new IOException("無法啟動 Claude Desktop。");
             }
             for (int i = 0; i < 40; i++)
             {
                 var started = Process.GetProcessesByName("Claude");
                 try { if (started.Any(p => IsDesktopProcess(p, self.SessionId) && p.MainWindowHandle != IntPtr.Zero))
-                    return "已打开 Claude Desktop。"; }
+                    return "已開啟 Claude Desktop。"; }
                 finally { foreach (var p in started) p.Dispose(); }
                 await Task.Delay(250, ct);
             }
-            throw new InvalidOperationException("已找到 Claude Desktop，但尚未检测到桌面窗口。请检查首次启动提示或系统托盘。");
+            throw new InvalidOperationException("已找到 Claude Desktop，但尚未檢測到桌面視窗。請檢查首次啟動提示或系統匣。");
         }
         catch (Exception error) when (error is COMException or Win32Exception)
-        { throw new InvalidOperationException("Windows 未能启动已安装的 Claude Desktop。请从开始菜单检查该应用是否能正常打开。", error); }
+        { throw new InvalidOperationException("Windows 未能啟動已安裝的 Claude Desktop。請從開始選單檢查該應用是否能正常開啟。", error); }
         finally { foreach (var p in apps) p.Dispose(); }
     }
 }

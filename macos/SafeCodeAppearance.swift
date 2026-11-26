@@ -144,7 +144,7 @@ final class GatewayButton: NSButton {
         let textColor = primary ? NSColor.white : kind == .dangerLink ? GatewayStyle.danger
             : isLink || selected ? GatewayStyle.accent : kind == .tab || kind == .segment || kind == .quota ? GatewayStyle.muted : GatewayStyle.ink
         let shownTitle = kind == .quota && bounds.width+1 < intrinsicContentSize.width
-            ? title.replacingOccurrences(of: "剩余", with: "") : title
+            ? title.replacingOccurrences(of: "剩餘", with: "") : title
         let text = NSAttributedString(string: shownTitle, attributes: [.foregroundColor: textColor.withAlphaComponent(opacity), .font: textFont])
         let size = text.size()
         let iconWidth: CGFloat = image == nil ? 0 : 21
@@ -167,7 +167,7 @@ final class GatewayColumnHeader: NSTableHeaderCell {
         NSRect(x: cellFrame.minX, y: cellFrame.maxY-1, width: cellFrame.width, height: 1).fill()
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = .byTruncatingTail
-        if ["限频", "请求", "Token", "已用 / 余额", "等待", "处理耗时", "估算费用"].contains(stringValue) {
+        if ["限頻", "請求", "Token", "已用 / 餘額", "等待", "處理耗時", "估算費用"].contains(stringValue) {
             style.alignment = .right
         }
         let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: SafeCodeType.small, weight: .semibold),

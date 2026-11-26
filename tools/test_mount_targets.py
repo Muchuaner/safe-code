@@ -24,18 +24,18 @@ class Targets(unittest.TestCase):
         self.assertTrue((self.home/'empty').is_dir());self.assertFalse((self.home/'missing').exists())
     def test_nonempty_is_preserved(self):
         target=self.home/'project';target.mkdir();(target/'source.txt').write_text('keep')
-        with self.assertRaisesRegex(RuntimeError,'服务器目录不是空目录'):self.helper('check_alias','project',destination=str(self.destination))
+        with self.assertRaisesRegex(RuntimeError,'伺服器目錄不是空目錄'):self.helper('check_alias','project',destination=str(self.destination))
         self.assertEqual((target/'source.txt').read_text(),'keep')
     def test_managed_alias_can_be_validated_and_removed(self):
         self.helper('alias','shared',destination=str(self.destination));self.helper('check_alias','shared',destination=str(self.destination))
         self.helper('remove_alias','shared',destination=str(self.destination));self.assertTrue((self.home/'shared').is_dir());self.assertFalse((self.home/'shared').is_symlink())
     def test_foreign_symlink_is_preserved(self):
         (self.home/'shared').symlink_to(self.destination)
-        with self.assertRaisesRegex(RuntimeError,'其他符号链接'):self.helper('check_alias','shared',destination=str(self.base/'other'))
+        with self.assertRaisesRegex(RuntimeError,'其他符號連結'):self.helper('check_alias','shared',destination=str(self.base/'other'))
         self.assertTrue((self.home/'shared').is_symlink())
     def test_parent_symlink_outside_home_is_rejected(self):
         (self.home/'outside').symlink_to(self.destination)
-        with self.assertRaisesRegex(RuntimeError,'主目录之外'):self.helper('check_alias','outside/child',destination=str(self.destination))
+        with self.assertRaisesRegex(RuntimeError,'主目錄之外'):self.helper('check_alias','outside/child',destination=str(self.destination))
     def test_invalid_target_does_not_remove_existing_mounts(self):
         target=self.home/'project';target.mkdir();(target/'source').write_text('keep')
         with patch.object(agent,'account',return_value={'username':'fixture'}),patch.object(agent,'home',return_value=self.home),patch.object(agent,'package_installed',return_value=True),patch.object(agent,'log'),patch.object(agent,'STATE',self.base),patch.object(agent,'user_files',side_effect=self.helper),patch.object(agent,'remove_mounts') as remove,patch.object(agent,'run',return_value=subprocess.CompletedProcess([],0,'127.0.0.1:12345','')):

@@ -1,4 +1,4 @@
-"""Desktop 桥接协议检查：真实角色/工具往返、续接、权限与失败路径。"""
+"""Desktop 橋接協定檢查：真實角色/工具往返、續接、權限與失敗路徑。"""
 import importlib.util
 import http.client
 import io
@@ -234,7 +234,7 @@ class Tests(unittest.TestCase):
         self.assertFalse(FakeChannel.instances[-1].transient)
         self.assertEqual(g.desktop_title([{'role':'user','content':[
             {'type':'text','text':'<system-reminder>context</system-reminder>'},
-            {'type':'text','text':'检查  连接状态'}]}]),'检查 连接状态')
+            {'type':'text','text':'檢查  連線狀態'}]}]),'檢查 連線狀態')
 
     def test_webfetch_summary_has_separate_capacity_and_preserves_pending_turn(self):
         web_scope = '16b2d1af-f0be-45ac-93e7-eb41e242bb9b'

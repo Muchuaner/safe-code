@@ -297,7 +297,7 @@ def bridge_arguments(client_id):
                 or not re.fullmatch(re.escape(alias) + r' ssh-ed25519 [A-Za-z0-9+/=]+\n?', pin)):
             raise ValueError()
     except (KeyError, OSError, ValueError):
-        raise ToolError('Enable or reconnect SafeCode 本机远程控制 on the selected Mac.') from None
+        raise ToolError('Enable or reconnect SafeCode 本機遠端控制 on the selected Mac.') from None
     # Use only validated fields from SafeCode's connection. Do not run directives
     # from an SSH config or use a connection agent, inherited proxy, or fallback.
     return [
@@ -342,7 +342,7 @@ def exchange_ssh(args, body, *, timeout=SSH_TIMEOUT):
                             if len(output) > MAX_FRAME:
                                 raise ToolError('The Mac file tool response is too large.')
             if proc.wait(timeout=max(0, deadline - time.monotonic())):
-                raise ToolError('The Mac file tool could not run. Check SafeCode 本机远程控制 and Python 3 on the Mac.')
+                raise ToolError('The Mac file tool could not run. Check SafeCode 本機遠端控制 and Python 3 on the Mac.')
             result = json.loads(output)
             if not isinstance(result, dict):
                 raise ValueError()
@@ -368,7 +368,7 @@ def call_tool(client_id, workspace, name, arguments):
     except subprocess.TimeoutExpired:
         raise ToolError('The Mac file tool timed out.') from None
     except (OSError, ValueError):
-        raise ToolError('The Mac file tool could not run. Check SafeCode 本机远程控制 and Python 3 on the Mac.') from None
+        raise ToolError('The Mac file tool could not run. Check SafeCode 本機遠端控制 and Python 3 on the Mac.') from None
 
 
 def mac_workspace_path(value):

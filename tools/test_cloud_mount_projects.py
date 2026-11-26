@@ -16,9 +16,9 @@ class CloudProjects(unittest.TestCase):
         if success:self.assertEqual(p.returncode,0,p.stderr);return json.loads(p.stdout)
         self.assertNotEqual(p.returncode,0);return p
     def test_multiple_directories_unicode_and_repeat_keep_ids(self):
-        projects=[{'path':'/mnt/safe-code/workspace/c/p1','name':'项目 中文'},{'path':'/mnt/safe-code/workspace/c/p2','name':'second'}]
+        projects=[{'path':'/mnt/safe-code/workspace/c/p1','name':'項目 中文'},{'path':'/mnt/safe-code/workspace/c/p2','name':'second'}]
         self.assertTrue(self.sync(projects)['changed']);first=self.c.execute('SELECT * FROM projects ORDER BY project_path').fetchall()
-        self.assertFalse(self.sync(projects[::-1])['changed']);self.assertEqual(first,self.c.execute('SELECT * FROM projects ORDER BY project_path').fetchall());self.assertEqual(first[0][2],'项目 中文')
+        self.assertFalse(self.sync(projects[::-1])['changed']);self.assertEqual(first,self.c.execute('SELECT * FROM projects ORDER BY project_path').fetchall());self.assertEqual(first[0][2],'項目 中文')
     def test_unmount_archives_history_and_remount_restores_same_id(self):
         project={'path':'/mnt/safe-code/workspace/c/p1','name':'one'};self.sync([project]);identifier=self.c.execute('SELECT project_id FROM projects').fetchone()[0]
         self.c.execute('INSERT INTO sessions VALUES(?,?,?)',('s1',project['path'],'keep history'));self.c.execute('UPDATE projects SET custom_project_name="My title",isStarred=1');self.c.commit()
@@ -43,7 +43,7 @@ class CloudProjects(unittest.TestCase):
     def test_invalid_saved_paths_fail_before_mount_changes(self):
         client='a'*20;alias=str(self.home/'one');(self.home/('mount-project-paths-'+client+'.json')).write_text(json.dumps({alias:'/etc/unsafe'}))
         with patch.object(a,'STATE',self.home),patch.object(a,'account',return_value={'username':'workspace'}):
-            with self.assertRaisesRegex(RuntimeError,'保留现有挂载'):a.mount_project_paths(client,[alias],{})
+            with self.assertRaisesRegex(RuntimeError,'保留現有掛載'):a.mount_project_paths(client,[alias],{})
     def test_database_absent_is_not_created(self):
         self.c.close();self.db.unlink();self.assertEqual(self.sync([]),{'ready':False,'changed':False});self.assertFalse(self.db.exists())
     def test_only_mounted_paths_for_current_user_are_registered_without_stat(self):

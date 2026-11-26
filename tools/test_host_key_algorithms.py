@@ -1,4 +1,4 @@
-"""真实握手：服务器新增高优先级密钥后仍使用原信任密钥，替换密钥则拒绝认证。"""
+"""真實握手：伺服器新增高優先級密鑰後仍使用原信任密鑰，替換密鑰則拒絕認證。"""
 import json,os,re,socket,subprocess,tempfile,threading,time
 from pathlib import Path
 import paramiko
@@ -35,7 +35,7 @@ class Server(paramiko.ServerInterface):
             if job_id==jobs[0]:
                 reply['value']={'architecture':'x86_64','statuses':{'claude':True}}
             else:
-                reply.update(error='VPS 下载失败',errorCode='dns_failure')
+                reply.update(error='VPS 下載失敗',errorCode='dns_failure')
         else:
             raise AssertionError(command)
         payload=('SC_RESULT:'+json.dumps(reply,ensure_ascii=False)+'\n').encode()

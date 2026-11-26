@@ -19,7 +19,7 @@ with sync_playwright() as p:
     queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));return;
    }
    if(message.op==='host.enable'||message.op==='host.disable'){hostCalls.push(message);return;}
-   const result=message.op==='host.status'?{enabled:false,state:'disabled',alias:'win-test',command:'',message:'未启用'}:
+   const result=message.op==='host.status'?{enabled:false,state:'disabled',alias:'win-test',command:'',message:'未啟用'}:
     message.op==='connect'?{server:{statuses:{account:true},osVersion:'24.04',assignedIps:[],observedEgressIp:''}}:
     message.op==='services.preferences'?{enabled:false,serviceAvailable:false}:message.op==='notice.state'?{accepted:false}:null;
    queueMicrotask(()=>window.safeCodeNativeResponse({id:message.id,result}));
@@ -50,11 +50,11 @@ with sync_playwright() as p:
  page.evaluate("switchMode('maintenance');document.querySelector('#host-manage').onclick()")
  page.locator('#host-dialog').wait_for()
  assert page.locator('#host-dialog').is_visible();assert not page.locator('#host-risk').is_checked();assert page.locator('#host-enable').is_disabled()
- assert '删除' in page.locator('.host-permission-note').inner_text();assert '管理员' in page.locator('.host-permission-note').inner_text()
+ assert '刪除' in page.locator('.host-permission-note').inner_text();assert '管理員' in page.locator('.host-permission-note').inner_text()
  page.evaluate("document.querySelector('#host-form').onsubmit({preventDefault(){}})");assert page.evaluate('hostCalls.length')==0
  page.locator('#host-risk').check();page.locator('#host-alias').fill('win');page.locator('#host-enable').click();page.wait_for_function('hostCalls.length===1')
  assert page.evaluate('hostCalls[0].args.riskAccepted') is True;assert page.locator('#host-close').is_disabled();page.keyboard.press('Escape');assert page.locator('#host-dialog').is_visible()
- page.evaluate("window.safeCodeNativeResponse({id:hostCalls[0].id,result:{enabled:true,state:'connected',alias:'win',command:'ssh -F /home/fixture/.ssh/safe-code-host/test/config win',message:'已验证'}})")
+ page.evaluate("window.safeCodeNativeResponse({id:hostCalls[0].id,result:{enabled:true,state:'connected',alias:'win',command:'ssh -F /home/fixture/.ssh/safe-code-host/test/config win',message:'已驗證'}})")
  page.wait_for_function("!document.querySelector('#host-disable').disabled")
  assert page.locator('#host-enable').is_hidden();assert page.locator('#host-copy').is_enabled();assert page.locator('#host-command').input_value().startswith('ssh -F ')
  command_box=page.locator('#host-command').bounding_box();copy_box=page.locator('#host-copy').bounding_box();disable_box=page.locator('#host-disable').bounding_box()

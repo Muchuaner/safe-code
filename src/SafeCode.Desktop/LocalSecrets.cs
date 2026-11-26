@@ -4,7 +4,7 @@ using SafeCode.Core;
 
 namespace SafeCode.Desktop;
 
-// DPAPI CurrentUser: 密文只可由当前 Windows 用户在此系统解密。
+// DPAPI CurrentUser: 密文只可由當前 Windows 用戶在此係統解密。
 internal static class LocalSecrets
 {
     internal static string? DirectoryOverride {get;set;}

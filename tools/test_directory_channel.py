@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""真实 SSH 通道验证：安装队列被占用时仍能浏览目录，慢请求可取消。"""
+"""真實 SSH 通道驗證：安裝佇列被佔用時仍能瀏覽目錄，慢請求可取消。"""
 import base64,hashlib,json,socket,subprocess,tempfile,threading,time
 from pathlib import Path
 import paramiko
