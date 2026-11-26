@@ -1,12 +1,29 @@
 name: Build macOS Installer
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - codex/release-049
-    paths:
-      - '.github/workflows/build-macos.yml'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'GitHub Release tag to create or update (e.g. v0.4.9-tc; leave empty to only upload workflow artifact)'
+        required: false
+        default: ''
+        type: string
+      release_title:
+        description: 'Optional GitHub Release title (defaults to "Safe Code <version> (TC)")'
+        required: false
+        default: ''
+        type: string
+      draft:
+        description: 'Create the GitHub Release as a draft (only applies when creating a new release)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
 
 jobs:
   build-macos:
@@ -23,17 +40,119 @@ jobs:
       - name: Build macOS app and DMG
         run: python3 tools/build_macos.py
 
-      - name: Verify build outputs
+      - name: Prepare release files and verify outputs
+        id: build_meta
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          INPUT_RELEASE_TITLE: ${{ inputs.release_title }}
         run: |
+          set -euo pipefail
+          VERSION=$(python3 -c "import json; print(json.load(open('dist/macos/arm64/build-report.json'))['version'])")
+          DMG_NAME="SafeCode-${VERSION}-macOS-arm64.dmg"
+          DMG_PATH="dist/macos/${DMG_NAME}"
+          SHA_PATH="dist/macos/${DMG_NAME}.sha256"
+          SUMS_PATH="dist/macos/SHA256SUMS.txt"
+
+          test -f "$DMG_PATH"
+          test -f "$SHA_PATH"
+          cp "$SHA_PATH" "$SUMS_PATH"
+
           ls -lh dist/macos/
-          cat dist/macos/SafeCode-0.4.9-macOS-arm64.dmg.sha256
+          cat "$SUMS_PATH"
+
+          RELEASE_TAG=""
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${INPUT_RELEASE_TAG}" ]]; then
+            RELEASE_TAG="${INPUT_RELEASE_TAG}"
+          fi
+
+          RELEASE_TITLE="${INPUT_RELEASE_TITLE}"
+          if [[ -z "$RELEASE_TITLE" ]]; then
+            RELEASE_TITLE="Safe Code ${VERSION} (TC)"
+          fi
+
+          {
+            echo "version=${VERSION}"
+            echo "dmg_name=${DMG_NAME}"
+            echo "dmg_path=${DMG_PATH}"
+            echo "sha_path=${SHA_PATH}"
+            echo "sums_path=${SUMS_PATH}"
+            echo "release_tag=${RELEASE_TAG}"
+            echo "release_title=${RELEASE_TITLE}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload macOS DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SafeCode-0.4.9-macOS-arm64
+          name: SafeCode-${{ steps.build_meta.outputs.version }}-macOS-arm64
           path: |
-            dist/macos/SafeCode-0.4.9-macOS-arm64.dmg
-            dist/macos/SafeCode-0.4.9-macOS-arm64.dmg.sha256
+            ${{ steps.build_meta.outputs.dmg_path }}
+            ${{ steps.build_meta.outputs.sha_path }}
+            ${{ steps.build_meta.outputs.sums_path }}
             dist/macos/arm64/build-report.json
           if-no-files-found: error
+
+      - name: Publish macOS installer to GitHub Release
+        if: steps.build_meta.outputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.build_meta.outputs.release_tag }}
+          RELEASE_TITLE: ${{ steps.build_meta.outputs.release_title }}
+          VERSION: ${{ steps.build_meta.outputs.version }}
+          DMG_NAME: ${{ steps.build_meta.outputs.dmg_name }}
+          DMG_PATH: ${{ steps.build_meta.outputs.dmg_path }}
+          SHA_PATH: ${{ steps.build_meta.outputs.sha_path }}
+          SUMS_PATH: ${{ steps.build_meta.outputs.sums_path }}
+          IS_DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Updating existing release ${RELEASE_TAG}..."
+            TMP_DIR=$(mktemp -d)
+            if gh release download "$RELEASE_TAG" --pattern 'SHA256SUMS.txt' --dir "$TMP_DIR" >/dev/null 2>&1 && [[ -f "$TMP_DIR/SHA256SUMS.txt" ]]; then
+              grep -vF "  ${DMG_NAME}" "$TMP_DIR/SHA256SUMS.txt" > "$TMP_DIR/merged.txt" || true
+              cat "$SHA_PATH" >> "$TMP_DIR/merged.txt"
+              mv "$TMP_DIR/merged.txt" "$SUMS_PATH"
+            fi
+            gh release upload "$RELEASE_TAG" "$DMG_PATH" "$SUMS_PATH" --clobber
+          else
+            echo "Creating release ${RELEASE_TAG}..."
+            NOTES_FILE=$(mktemp)
+            python3 - "$NOTES_FILE" "$VERSION" "$DMG_NAME" <<'PY'
+          import sys
+          notes_file, version, dmg_name = sys.argv[1], sys.argv[2], sys.argv[3]
+          notes = (
+              f"Safe Code {version}（香港繁體中文版）macOS 安裝檔，參考 "
+              "[Muchuaner/safe-code](https://github.com/Muchuaner/safe-code) 建置。\n\n"
+              "### 安裝檔案\n"
+              f"- `{dmg_name}`：Apple Silicon（arm64，macOS 15 或更新版本）安裝映像\n"
+              "- `SHA256SUMS.txt`：下載檔案 SHA-256 校驗值\n\n"
+              "### 安裝說明\n"
+              f"1. 下載 `{dmg_name}`，並可對照 `SHA256SUMS.txt` 驗證 SHA-256。\n"
+              "2. 開啟鏡像後，將 **Safe Code** 拖入「應用程式」。\n"
+              "3. 本版本為 ad-hoc 簽署（尚未通過 Apple 公證）；首次啟動如被 macOS 攔截，"
+              "核對來源與 SHA-256 後，請在系統設定的「私隱與安全性」中允許開啟。\n"
+          )
+          with open(notes_file, "w", encoding="utf-8") as f:
+              f.write(notes)
+          PY
+
+            if [[ "$IS_DRAFT" == "true" ]]; then
+              gh release create "$RELEASE_TAG" \
+                "$DMG_PATH" \
+                "$SUMS_PATH" \
+                --target "$GITHUB_SHA" \
+                --title "$RELEASE_TITLE" \
+                --notes-file "$NOTES_FILE" \
+                --draft
+            else
+              gh release create "$RELEASE_TAG" \
+                "$DMG_PATH" \
+                "$SUMS_PATH" \
+                --target "$GITHUB_SHA" \
+                --title "$RELEASE_TITLE" \
+                --notes-file "$NOTES_FILE"
+            fi
+          fi
