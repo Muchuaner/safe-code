@@ -83,6 +83,15 @@ def require_paired_device(state, owner, device):
         raise DeviceAlreadyBound('这把 Key 已绑定其他 Safe Code 设备，请先解除原设备绑定。')
 
 
+def workspace_machine(platform, username, host_key):
+    """Identify the already verified SSH host account across device enrollments."""
+    if not username or not isinstance(host_key, str) or not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+', host_key):
+        return None
+    if platform == 'windows':
+        username = username.casefold()
+    return hashlib.sha256(json.dumps([platform, username, host_key]).encode()).hexdigest()
+
+
 def write_file(path, content):
     with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as stream:
         staged = Path(stream.name)
@@ -196,7 +205,22 @@ class OwnerHosts:
         alias, identity, command, login = self.identity(device)
         if not hmac.compare_digest(identity, record['identity']):
             raise DeviceError('The SSH device was changed')
-        return {'id':device,'platform':platform,'hostname':record['hostname'],'username':login,'alias':alias,'command':command}
+        return {'id':device,'platform':platform,'hostname':record['hostname'],'username':login,'alias':alias,
+                'command':command,'workspace_machine':self.workspace_machine(device, platform, login)}
+
+    def workspace_machine(self, device, platform, username):
+        path = self.home/'.ssh/safe-code-host'/device[4:]/'known_hosts'
+        try:
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+                    return None
+                entry = stream.read(1024).decode().strip().split()
+            if len(entry) == 3 and entry[0] == 'safe-code-host-'+device[4:]:
+                return workspace_machine(platform, username, ' '.join(entry[1:]))
+        except (OSError, UnicodeError):
+            pass
+        return None
 
     def revoke(self, owner, platform, device, proof):
         with pairing_lock(self.state, owner):
@@ -223,20 +247,7 @@ class Devices:
         return db
 
     def permitted(self, owner):
-        return bool(KEY_ID.fullmatch(owner) and (self.state/'keys'/owner).is_file()
-                    and (self.state/'device-access'/owner).is_file())
-
-    def set_access(self, owner, enabled):
-        if not KEY_ID.fullmatch(owner):
-            raise DeviceError('Invalid Key ID')
-        access = self.state/'device-access'
-        flag = access/owner
-        if enabled:
-            access.mkdir(mode=0o700,exist_ok=True)
-            flag.touch(mode=0o600,exist_ok=True)
-        else:
-            flag.unlink(missing_ok=True)
-            self.clear_pairings(owner)
+        return bool(KEY_ID.fullmatch(owner) and (self.state/'keys'/owner).is_file())
 
     def clear_pairings(self, owner):
         with closing(self.connect()) as db, db:
@@ -244,9 +255,6 @@ class Devices:
             for row in db.execute('SELECT id FROM devices WHERE owner=?',(owner,)):
                 self.remove_identity(row['id'])
             db.execute('DELETE FROM devices WHERE owner=?',(owner,))
-
-    def required(self, owner):
-        return bool(KEY_ID.fullmatch(owner) and (self.state/'device-required'/owner).is_file())
 
     def ssh_folder(self, device):
         return self.home/'.ssh/safe-code-devices'/device
@@ -422,7 +430,14 @@ class Devices:
         except OSError:
             raise DeviceOffline('SafeCode device control is offline') from None
         return {'id': row['id'], 'platform': row['platform'], 'hostname': row['hostname'],
-                'username': row['username'], 'alias': row['alias'], 'command': self.command(row)}
+                'username': row['username'], 'alias': row['alias'], 'command': self.command(row),
+                'workspace_machine':workspace_machine(row['platform'], row['username'], row['hostkey'])}
+
+    def workspace_machine(self, owner, platform, device):
+        with closing(self.connect()) as db:
+            row = db.execute('SELECT username, hostkey FROM devices WHERE owner=? AND platform=? AND id=? AND ready=1',
+                             (owner, platform, device)).fetchone()
+        return workspace_machine(platform, row['username'], row['hostkey']) if row else None
 
 
 def read_json(handler):

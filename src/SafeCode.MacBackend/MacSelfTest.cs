@@ -1,8 +1,14 @@
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using SafeCode.Core;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging;
 namespace SafeCode.Desktop;
 internal static class MacSelfTest
 {
@@ -129,6 +135,7 @@ internal static class MacSelfTest
             Console.WriteLine("MAC_CLAUDE_LAUNCH_AUTO_DEFAULT_OK");
         }
         finally { Directory.Delete(profileTest, true); }
+        await CheckKeyHistoryAsync();
         string fingerprint=new('A',64);
         var rdp=MacClients.FreeRdpArguments(new(22119,"fixture",fingerprint),new("workspace","fixture password"),
             new(2560,1600),RdpResizeMode.Dynamic,true);
@@ -161,5 +168,90 @@ internal static class MacSelfTest
             Console.WriteLine("MAC_HOST_CONTROL_RESUME_SCOPE_AND_OPT_OUT_OK");
         }
         finally{Directory.Delete(folder,true);}
+    }
+
+    private static async Task CheckKeyHistoryAsync()
+    {
+        using var key=RSA.Create(2048);
+        var request=new CertificateRequest("CN=localhost",key,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
+        using var certificate=request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1),DateTimeOffset.UtcNow.AddMinutes(5));
+        var builder=WebApplication.CreateSlimBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(options=>options.Listen(IPAddress.Loopback,0,listener=>listener.UseHttps(certificate)));
+        await using var gateway=builder.Build();
+        gateway.MapGet("/v1/cloudcli/models",()=>new {data=new[]{new {id="claude-fixture"}}});
+        gateway.MapGet("/v1/models",()=>new {data=new[]{new {id="claude-fixture"}}});
+        await gateway.StartAsync();
+        string directory=Directory.CreateTempSubdirectory("safecode-key-history-").FullName;
+        try
+        {
+            string library=Path.Combine(directory,"configLibrary");
+            var json=new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            var pin=Convert.ToHexStringLower(SHA256.HashData(certificate.RawData));
+            var first=new PublicGatewayTicket(gateway.Urls.Single(),pin,new string('a',43));
+            var second=first with {Key=new string('b',43)};
+            string Encode(PublicGatewayTicket ticket)=>"sc1."+Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(ticket,json))
+                .TrimEnd('=').Replace('+','-').Replace('/','_');
+            string legacyProfile=Guid.NewGuid().ToString("D");
+            using var portCheck=new TcpListener(IPAddress.Loopback,0);
+            portCheck.Start();
+            int originalPort=((IPEndPoint)portCheck.LocalEndpoint).Port;
+            portCheck.Stop();
+            DesktopKeyAccess.WriteProfileFile(Path.Combine(directory,"desktop-key.state"),
+                LocalSecrets.Protect(JsonSerializer.SerializeToUtf8Bytes(
+                    new {Remote=first,Local="fixture-local",Port=originalPort,Profile=legacyProfile,Previous=""},json)));
+            using var access=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,library);
+            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            string CurrentHistory()
+            {
+                string id=(string)DesktopKeyAccess.ReadProfileMeta(library)["appliedId"]!;
+                var profile=JsonNode.Parse(File.ReadAllText(Path.Combine(library,id+".json")))!;
+                if((bool?)profile["claudeAiImport"]?["automatic3pImport"]!=false)
+                    throw new Exception("切换 Key 时允许了共享历史的自动导入。");
+                return (string)profile["deploymentOrganizationUuid"]!;
+            }
+            await access.EnableAsync("",deadline.Token,useSaved:true);
+            var firstHistory=CurrentHistory();
+            if(firstHistory!=legacyProfile)throw new Exception("已接入 Key 的历史标识没有保留。");
+            var savedProfile=Path.Combine(library,legacyProfile+".json");
+            var originalProfile=JsonNode.Parse(File.ReadAllText(savedProfile))!;
+            var endpoint=new Uri((string)originalProfile["inferenceGatewayBaseUrl"]!);
+            var bearer=(string)originalProfile["inferenceGatewayApiKey"]!;
+            await DesktopKeyAccess.CheckLaunchRouteAsync(endpoint.Port,bearer,deadline.Token);
+            await access.StopAsync();
+
+            // Simulate a SafeCode restart while Desktop keeps its original URL and bearer.
+            using(var recovered=new DesktopKeyAccess(directory,LocalSecrets.Protect,LocalSecrets.Unprotect,library))
+            {
+                using(var blocker=new TcpListener(IPAddress.Loopback,endpoint.Port))
+                {
+                    blocker.Start();
+                    try
+                    {
+                        await recovered.EnableAsync("",deadline.Token,useSaved:true);
+                        throw new Exception("已保存的本机端口被占用时更改了接入地址。");
+                    }
+                    catch(InvalidOperationException error)when(error.Message.Contains("已被占用"))
+                    {
+                        if(!JsonNode.DeepEquals(originalProfile,JsonNode.Parse(File.ReadAllText(savedProfile))))
+                            throw new Exception("接入失败时覆盖了桌面原有配置。");
+                    }
+                }
+                await recovered.EnableAsync("",deadline.Token,useSaved:true);
+                var models=await DesktopKeyAccess.CheckLaunchRouteAsync(endpoint.Port,bearer,deadline.Token);
+                if(models.Count!=1||CurrentHistory()!=firstHistory)
+                    throw new Exception("恢复同一把 Key 后，原桌面地址或历史失效。");
+            }
+            Console.WriteLine("MAC_DESKTOP_RELAY_RESTART_PRESERVES_ENDPOINT_OK");
+            await access.DisableAsync(deadline.Token);
+            await access.EnableAsync(Encode(second),deadline.Token);
+            var secondHistory=CurrentHistory();
+            if(secondHistory==firstHistory)throw new Exception("同一个网关的不同 Key 共用了历史标识。");
+            await access.DisableAsync(deadline.Token);
+            await access.EnableAsync(Encode(first),deadline.Token);
+            if(CurrentHistory()!=firstHistory)throw new Exception("切回原 Key 没有加载原来的历史标识。");
+            Console.WriteLine("MAC_DESKTOP_KEY_HISTORY_ISOLATION_AND_RESTORE_OK");
+        }
+        finally { await gateway.StopAsync(); Directory.Delete(directory,true); }
     }
 }

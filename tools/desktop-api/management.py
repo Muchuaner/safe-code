@@ -45,10 +45,16 @@ class KeyRegistry:
                 );
                 CREATE INDEX IF NOT EXISTS request_log_time ON request_log(at, id);
                 CREATE INDEX IF NOT EXISTS request_log_key ON request_log(key_id, at, id);
+                CREATE TABLE IF NOT EXISTS desktop_history_devices (
+                    key_id TEXT NOT NULL, platform TEXT NOT NULL, machine TEXT NOT NULL, device TEXT NOT NULL,
+                    PRIMARY KEY (key_id, platform, machine)
+                );
             """)
             db.execute('BEGIN IMMEDIATE')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(keys)')}
-            for column, kind in (('budget_nanos', 'INTEGER'), ('expires_at', 'INTEGER'), ('allowed_models', 'TEXT')):
+            for column, kind in (('budget_nanos', 'INTEGER'), ('expires_at', 'INTEGER'), ('allowed_models', 'TEXT'),
+                                 ('project_bindings', 'TEXT'), ('developer_mode', 'INTEGER NOT NULL DEFAULT 0'),
+                                 ('raw_messages', 'INTEGER NOT NULL DEFAULT 0')):
                 if column not in columns:
                     db.execute(f'ALTER TABLE keys ADD COLUMN {column} {kind}')
             if 'cost_nanos' not in {row['name'] for row in db.execute('PRAGMA table_info(usage)')}:
@@ -98,7 +104,7 @@ class KeyRegistry:
                        (key_id, note, rpm, int(time.time()), budget_nanos))
 
     def issue(self, key_id, note='', rpm=0, budget_nanos=None, *, activated=False,
-              expires_at=None, allowed_models=None):
+              expires_at=None, allowed_models=None, project_bindings=None, developer_mode=False, raw_messages=False):
         marker = self.root/'keys'/key_id
         created = False
         try:
@@ -109,8 +115,10 @@ class KeyRegistry:
                     raise ValueError('添加更多 API Key 需要正确的激活码。')
                 if len(ids) >= 500:
                     raise ValueError('Key 记录已达到 500 条上限。')
-                db.execute('INSERT INTO keys(id,note,rpm,created,budget_nanos,expires_at,allowed_models) VALUES(?,?,?,?,?,?,?)',
-                           (key_id, note, rpm, int(time.time()), budget_nanos, expires_at, allowed_models))
+                db.execute('INSERT INTO keys(id,note,rpm,created,budget_nanos,expires_at,allowed_models,project_bindings,'
+                           'developer_mode,raw_messages) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                           (key_id, note, rpm, int(time.time()), budget_nanos, expires_at, allowed_models,
+                            project_bindings, developer_mode, developer_mode and raw_messages))
                 marker.touch(mode=0o600, exist_ok=False)
                 created = True
         except BaseException:
@@ -143,13 +151,48 @@ class KeyRegistry:
         return {'budget_nanos': budget, 'used_nanos': used,
                 'remaining_nanos': None if budget is None else max(0, budget-used), 'models': models}
 
-    def update(self, key_id, note, rpm, *, budget_nanos=..., expires_at=..., allowed_models=...):
+    def project_bindings(self, key_id):
+        with self.connect() as db:
+            row = db.execute('SELECT project_bindings FROM keys WHERE id=? AND revoked=0', (key_id,)).fetchone()
+        return json.loads(row['project_bindings']) if row and row['project_bindings'] else []
+
+    def desktop_history_device(self, key_id, platform, machine, device):
+        # Keep the first verified pairing's state directory for existing sessions and imports.
+        if not machine:
+            return device
+        with self.connect() as db:
+            db.execute('INSERT OR IGNORE INTO desktop_history_devices VALUES (?, ?, ?, ?)',
+                       (key_id, platform, machine, device))
+            return db.execute('SELECT device FROM desktop_history_devices WHERE key_id=? AND platform=? AND machine=?',
+                              (key_id, platform, machine)).fetchone()['device']
+
+    def key_note(self, key_id):
+        with self.connect() as db:
+            row = db.execute('SELECT note FROM keys WHERE id=? AND revoked=0', (key_id,)).fetchone()
+        return row['note'] if row else ''
+
+    def desktop_policy(self, key_id):
+        with self.connect() as db:
+            row = db.execute('SELECT developer_mode,raw_messages FROM keys WHERE id=? AND revoked=0 '
+                             'AND (expires_at IS NULL OR expires_at>?)', (key_id, time.time())).fetchone()
+        developer = bool(row and row['developer_mode'])
+        return developer, developer and bool(row['raw_messages'])
+
+    def update(self, key_id, note, rpm, *, budget_nanos=..., expires_at=..., allowed_models=...,
+               project_bindings=..., developer_mode=..., raw_messages=...):
         with self.connect() as db:
             if not db.execute('UPDATE keys SET note=?, rpm=? WHERE id=?', (note,rpm,key_id)).rowcount:
                 raise ValueError('找不到该 Key。')
-            for column, value in (('budget_nanos', budget_nanos), ('expires_at', expires_at), ('allowed_models', allowed_models)):
+            for column, value in (('budget_nanos', budget_nanos), ('expires_at', expires_at),
+                                  ('allowed_models', allowed_models), ('project_bindings', project_bindings),
+                                  ('developer_mode', developer_mode), ('raw_messages', raw_messages)):
                 if value is not ...:
                     db.execute(f'UPDATE keys SET {column}=? WHERE id=?', (value, key_id))
+            if developer_mode is not ... or raw_messages is not ...:
+                if raw_messages is True and not db.execute(
+                        'SELECT developer_mode FROM keys WHERE id=?', (key_id,)).fetchone()[0]:
+                    raise ValueError('请先启用开发者模式。')
+                db.execute('UPDATE keys SET raw_messages=0 WHERE id=? AND developer_mode=0', (key_id,))
 
     def revoke(self, key_id):
         with self.connect() as db:
@@ -201,10 +244,11 @@ class KeyRegistry:
         with self.connect() as db:
             db.execute('DELETE FROM request_log WHERE at < ?', (int(time.time()) - LOG_RETENTION_SECONDS,))
 
-    def list(self):
+    def list(self, *, include_project_bindings=False):
         with self.connect() as db:
             rows = db.execute('''
-                SELECT k.id,k.note,k.rpm,k.created,k.budget_nanos,k.expires_at,k.allowed_models,k.revoked,
+                SELECT k.id,k.note,k.rpm,k.created,k.budget_nanos,k.expires_at,k.allowed_models,k.project_bindings,k.revoked,
+                       k.developer_mode,k.raw_messages,
                        COALESCE(SUM(u.cost_nanos),0) AS cost_nanos,
                        COALESCE(SUM(u.unpriced_tokens),0) AS unpriced_tokens,
                        COALESCE(SUM(u.requests),0) AS requests,COALESCE(SUM(u.failures),0) AS failures,
@@ -220,8 +264,16 @@ class KeyRegistry:
             enabled = not key.pop('revoked') and self.has_marker(key['id'])
             key['enabled'] = enabled
             key['expired'] = enabled and key['expires_at'] is not None and key['expires_at'] <= now
+            key['developer_mode'] = bool(key['developer_mode'])
+            key['raw_messages'] = key['developer_mode'] and bool(key['raw_messages'])
             if key['allowed_models'] is not None:
                 key['allowed_models'] = json.loads(key['allowed_models'])
+            stored_bindings = key.pop('project_bindings')
+            if include_project_bindings and stored_bindings:
+                key['project_bindings'] = [
+                    {'project_id': item['project_id'], 'directory': item['directory'], 'name': item['name']}
+                    for item in json.loads(stored_bindings)
+                ]
             keys.append(key)
         return keys
 

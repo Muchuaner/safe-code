@@ -86,7 +86,7 @@ with sync_playwright() as p:
     assert page.locator('#desktop-key-input').input_value()==''
     assert page.locator('#desktop-key-form .config-description br').count()==1
     assert page.locator('#desktop-key-progress').inner_text().startswith('网关已就绪。\n工具目标：已授权的本机设备 mac-fixture\n首次接入')
-    assert page.locator('#desktop-key-open').inner_text()=='打开\nClaude Desktop'
+    assert page.locator('#desktop-key-open').inner_text()=='打开 Claude Desktop'
     page.locator('#desktop-key-refresh').click()
     expect(page.locator('#desktop-key-progress')).to_contain_text('模型列表已更新')
     assert page.evaluate("calls.filter(m=>m.op==='desktopKey.refreshModels').map(m=>m.args)")==[{}]
@@ -175,13 +175,12 @@ with sync_playwright() as p:
     classes=[cards.nth(i).get_attribute('class') for i in range(cards.count())]
     assert classes[-3].endswith('host-control-card') and classes[-2]=='advanced-card claude-desktop-card' and classes[-1]=='advanced-card bridge-card',classes
     assert 'Claude Desktop 接入' in page.locator('.claude-desktop-card h3').inner_text()
-    # The client launch controls follow active integration status.
-    for card,launch in [('.claude-desktop-card','#claude-desktop-launch'),('.bridge-card','#codex-launch')]:
-        settings='网关设置' if card=='.claude-desktop-card' else '设置'
-        assert page.locator(card+' .bridge-card-actions button').all_text_contents()==['打开客户端',settings]
+    for card in ('.claude-desktop-card','.bridge-card'):
         assert page.locator(card+' .client-logo').evaluate('e=>e.complete&&e.naturalWidth>0')
-        assert page.locator(launch).is_disabled()
-    assert page.locator('.claude-desktop-card .client-card-heading #desktop-key-settings').is_visible()
+    assert page.locator('.claude-desktop-card .bridge-card-actions button').all_text_contents()==['API Key 接入','网关设置']
+    assert page.locator('.bridge-card .bridge-card-actions button').all_text_contents()==['打开客户端','设置']
+    assert page.locator('#codex-launch').is_disabled()
+    assert page.locator('#desktop-key-settings').is_visible()
     assert '使用 API Key 或 SSH' not in page.locator('.claude-desktop-card').inner_text()
     workspace_key.click()
     page.locator('#desktop-key-input').fill('sc1.fixture')
@@ -190,15 +189,19 @@ with sync_playwright() as p:
     page.evaluate("showScreen('workspace');switchMode('maintenance')")
     expect(page.locator('#claude-gateway-status')).to_have_text('网关已就绪')
     page.evaluate("window.safeCodeClaudeBridgeStatus({running:true,connected:true,configuration:'fixture'})")
-    for launch in ['#claude-desktop-launch','#codex-launch']:page.locator(launch).click()
+    page.locator('#desktop-key-settings').click()
+    page.locator('#api-open-claude').click()
+    page.evaluate("showScreen('workspace');switchMode('maintenance')")
+    page.locator('#codex-launch').click()
     page.wait_for_function('window.clientOpenCalls.length===2')
     assert page.evaluate('window.clientOpenCalls')==['claudeDesktop.open','codex.open']
     page.evaluate("window.clientOpenResult={installationRequired:true,message:'未找到 Claude Desktop，已打开官方下载页。'}")
-    page.locator('#claude-desktop-launch').click()
+    page.locator('#desktop-key-settings').click()
+    page.locator('#api-open-claude').click()
     expect(page.locator('#app-message-dialog')).to_contain_text('已打开官方下载页')
     page.locator('#app-message-confirm').click()
     page.evaluate('window.clientOpenResult=null')
-    page.evaluate("window.clientOpenError='未检测到 Codex，请先安装官方客户端。'")
+    page.evaluate("showScreen('workspace');switchMode('maintenance');window.clientOpenError='未检测到 Codex，请先安装官方客户端。'")
     page.locator('#codex-launch').click()
     page.wait_for_selector('#app-message-dialog[open]')
     assert '请先安装官方客户端' in page.locator('#app-message-dialog').inner_text()
@@ -287,7 +290,7 @@ with sync_playwright() as p:
     page.locator('#enter-preview').click()
     page.evaluate("switchMode('maintenance')")
     before=page.evaluate('window.clientOpenCalls.length')
-    assert page.locator('#claude-desktop-launch').is_disabled()
+    assert page.locator('#claude-desktop-launch').count()==0
     assert page.evaluate('window.clientOpenCalls.length')==before
     evidence=root/'.local/evidence/client-cards'
     evidence.mkdir(parents=True,exist_ok=True)

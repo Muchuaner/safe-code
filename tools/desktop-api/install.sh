@@ -101,7 +101,7 @@ if [[ ! -e "$state/key.pem" && ! -e "$state/cert.pem" ]]; then
     runuser -u "$user" -- openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 730 -subj '/CN=SafeCode Desktop API' -keyout "$state/key.pem" -out "$state/cert.pem"
 fi
 if ! /usr/bin/python3 -B "$app/device_service.py" "$user" "$app" "$state"; then
-    printf '私有设备服务尚未就绪，继续安装普通 API。请在网关设置中运行故障修复后签发桌面接入 Key。\n' >&2
+    printf '设备服务尚未就绪。请在网关设置中运行故障修复后签发 Key。\n' >&2
 fi
 write_unit /etc/systemd/system/safe-code-desktop-api.service
 systemctl daemon-reload

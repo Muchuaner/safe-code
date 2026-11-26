@@ -8,6 +8,7 @@ import argparse
 import base64
 import binascii
 import copy
+from collections import Counter
 from contextlib import contextmanager, closing, nullcontext, suppress
 from itertools import groupby
 from contextvars import ContextVar
@@ -233,6 +234,8 @@ DEFAULT_CLOUDCLI_MODELS = ('claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku
 CLOUDCLI_REQUIRED = '请先在当前 VPS 配置 CloudCLI 后端。Safe Code 的 Claude Desktop 接入需要 CloudCLI。'
 CLOUDCLI_MCP_SCRIPT = '/opt/safe-code/desktop-api/host_control_mcp.py'
 CLOUDCLI_SESSION_ID = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}')
+IMPORTED_SESSION_NAMESPACE = uuid.UUID('d964ec67-6066-452b-8ae5-b8c59ad94a10')
+IMPORTED_SESSIONS_FILE = 'imported-cloudcli-sessions.json'
 CLOUDCLI_ERROR_STATUS = {400, 401, 402, 403, 404, 409, 413, 422, 429, 500, 502, 503, 504, 529}
 CLOUDCLI_USAGE_FIELDS = {
     'input_tokens': 'inputTokens',
@@ -244,6 +247,9 @@ CLOUDCLI_MEDIA = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif'
                   'application/pdf': '.pdf', 'text/plain': '.txt', 'text/markdown': '.md',
                   'text/csv': '.csv', 'text/tab-separated-values': '.tsv', 'application/json': '.json'}
 SYSTEM_REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.S)
+DESKTOP_MESSAGE_PREAMBLE = re.compile(
+    r'\A<system-reminder>\s*Attribution for git commits and pull requests you create\b'
+    r'.*?</system-reminder>[ \t]*(?:\r?\n){1,2}', re.S)
 DESKTOP_LOCAL_COMMAND = re.compile(
     r'<(local-command-caveat|local-command-stdout|command-name|command-message|command-args)>.*?</\1>', re.S)
 DESKTOP_MODEL_COMMAND = re.compile(
@@ -656,6 +662,23 @@ def conversation_scope(data, header=None):
     return body_id or header_id or ''
 
 
+def desktop_permission_mode(data):
+    """Read Claude Code's turn mode without transferring its local permission rules."""
+    safeguards = data.get('safeguards')
+    if not isinstance(safeguards, list):
+        return None
+    contexts = [item.get('classifier_context') for item in safeguards
+                if isinstance(item, dict) and item.get('type') == 'dangerous_tool_use']
+    if len(contexts) != 1 or not isinstance(contexts[0], dict):
+        return None
+    context = contexts[0]
+    version = context.get('v')
+    mode = context.get('permission_mode')
+    if type(version) is int and version == 1 and mode in ('auto', 'plan'):
+        return mode
+    return None
+
+
 def desktop_model_probe(data, messages, content):
     maximum = data.get('max_tokens')
     if (type(maximum) is not int or maximum != 1 or len(messages) != 1 or data.get('tools')
@@ -777,6 +800,12 @@ def without_desktop_model_commands(messages):
     return clean if changed else messages
 
 
+def gateway_activity_block(block):
+    marker = block.get('id') if block.get('type') == 'server_tool_use' else block.get('tool_use_id')
+    return (block.get('type') in ('server_tool_use', 'bash_code_execution_tool_result')
+            and isinstance(marker, str) and re.fullmatch(r'srvtoolu_sc[0-9a-f]{32}', marker) is not None)
+
+
 def history_signature(messages, scope):
     if not scope:
         return signature(messages)
@@ -785,7 +814,7 @@ def history_signature(messages, scope):
     for msg in messages:
         visible = []
         for item in blocks(msg['content']):
-            if item.get('type') in ('thinking', 'redacted_thinking'):
+            if item.get('type') in ('thinking', 'redacted_thinking') or gateway_activity_block(item):
                 continue
             if item.get('type') == 'text':
                 value = SYSTEM_REMINDER.sub('', item['text'])
@@ -884,7 +913,7 @@ def desktop_assistant_text(message):
     if not isinstance(message, dict) or message.get('role') != 'assistant':
         return None
     visible = [item for item in blocks(message.get('content', []))
-               if item.get('type') not in ('thinking', 'redacted_thinking')]
+               if item.get('type') not in ('thinking', 'redacted_thinking') and not gateway_activity_block(item)]
     if any(item.get('type') != 'text' or not isinstance(item.get('text'), str) for item in visible):
         return None
     return ''.join(item['text'] for item in visible)
@@ -1410,12 +1439,17 @@ class CloudCliProgress:
         self.thinking_chars = 0
         self.tools = {}
         self.tool_failures = set()
+        self.bash_cards = False
+        self.bash_ids = {}
+        self.reported_results = set()
+        self.activity_detail_bytes = 0
         self.device_command = shlex.split(device['command']) if device else ()
         self.device_name = 'Windows' if device and device['platform'] == 'windows' else '本机设备'
         self.device_tools = {}
         self.device_failure = False
         self.device_retry_reported = False
         self.tasks = {}
+        self.followup_cutoff = None
         self.activity_reported = False
         self.permissions = {}
         self.questions = {}
@@ -1451,6 +1485,23 @@ class CloudCliProgress:
             if kind == 'thinking':
                 block['signature'] = ''
             self.parts.append(block)
+
+    def remote_block(self, block):
+        if self.output_closed:
+            return
+        self.reply_bytes += len(json.dumps(block, ensure_ascii=False).encode())
+        if self.reply_bytes > MAX_CLOUDCLI_REPLY:
+            raise CloudCliError('CloudCLI reply exceeds the gateway response size limit')
+        if self.stream is not None and not self.client_detached.is_set():
+            try:
+                self.stream.remote_block(block)
+            except ConnectionAbortedError:
+                if self.on_disconnect is None:
+                    raise
+                self.on_disconnect(self.stream)
+                if self.output_closed:
+                    return
+        self.parts.append(block)
 
     def notice(self, title, output=None, *, action=None):
         body = '\n\n> **SafeCode** · '+title
@@ -1551,15 +1602,36 @@ class CloudCliProgress:
         self.notice(f'`{tool}` {title}', event.get('reason'))
 
     def task(self, event):
-        status = event.get('status') or event.get('event')
+        status = event.get('status')
+        if not status and event.get('event') in ('started', 'progress'):
+            status = 'running'
         task = event.get('taskId')
-        self.tasks[task if isinstance(task, str) else None] = status
+        task = task if isinstance(task, str) else None
+        previous = self.tasks.get(task)
+        self.tasks[task] = status
         self.activity()
+        labels = {'running': '运行中', 'completed': '已完成', 'failed': '失败', 'stopped': '已停止'}
+        if isinstance(status, str) and status in labels and status != previous and not event.get('parentToolUseId'):
+            detail = event.get('summary') or event.get('description')
+            self.activity_detail('后台任务' + labels[status], self.preview(detail, 800) if isinstance(detail, str) else None)
 
     def activity(self):
         if not self.activity_reported:
             self.activity_reported = True
             self.notice('正在执行工具操作')
+
+    def activity_detail(self, title, output):
+        # Keep room for the assistant reply, decisions and completion notices.
+        budget = min(32000, MAX_CLOUDCLI_REPLY // 4)
+        if self.activity_detail_bytes >= budget:
+            return
+        cost = 80 + len(title.encode()) + 6 * (output or '').count('\n') + len((output or '').encode())
+        if self.activity_detail_bytes + cost > budget:
+            self.activity_detail_bytes = budget
+            self.notice('更多工具详情可在 CloudCLI 原会话查看')
+            return
+        self.activity_detail_bytes += cost
+        self.notice(title, output)
 
     def summarize_activity(self):
         if not self.activity_reported:
@@ -1592,6 +1664,22 @@ class CloudCliProgress:
             self.device_retry_reported = True
             self.notice(f'正在再次尝试连接 {self.device_name}')
 
+    @staticmethod
+    def result_preview(content):
+        # CloudCLI also serializes multimodal result blocks as a JSON string.
+        if isinstance(content, str) and content.lstrip().startswith('['):
+            try:
+                decoded = json.loads(content)
+            except (ValueError, RecursionError):
+                decoded = None
+            if isinstance(decoded, list) and all(isinstance(block, dict) and 'type' in block for block in decoded):
+                content = decoded
+        if isinstance(content, list):
+            content = '\n'.join(block['text'] for block in content if isinstance(block, dict)
+                                and block.get('type') == 'text' and isinstance(block.get('text'), str))
+        if isinstance(content, str):
+            return CloudCliProgress.preview(content.strip(), 1600)
+
     def tool_result(self, event):
         identifier = event.get('toolId')
         if not isinstance(identifier, str):
@@ -1615,6 +1703,20 @@ class CloudCliProgress:
                 self.notice(f'{self.device_name} 的后续命令已返回结果')
         if failed:
             self.tool_failures.add(identifier)
+        if not event.get('parentToolUseId') and identifier not in self.reported_results:
+            self.reported_results.add(identifier)
+            tool = self.tools[identifier]
+            card = self.bash_ids.pop(identifier, None)
+            if card:
+                preview = self.result_preview(output) or ''
+                code = nested.get('exitCode')
+                self.remote_block({'type':'bash_code_execution_tool_result', 'tool_use_id':card, 'content':{
+                    'type':'bash_code_execution_result', 'stdout':'' if failed else preview,
+                    'stderr':preview if failed else '', 'return_code':code if type(code) is int else int(failed),
+                    'content':[]}})
+            elif tool != 'AskUserQuestion':
+                state = '失败' if failed else '已返回'
+                self.activity_detail(f'`{tool}` {state}', self.result_preview(output))
 
     def incomplete(self, message, status=502):
         if self.device_failure:
@@ -1709,6 +1811,21 @@ class CloudCliProgress:
                 if tool == 'ExitPlanMode' and isinstance(data, dict) and isinstance(data.get('plan'), str):
                     self.plan_candidate = data
                 self.activity()
+                if not parent:
+                    if (tool == 'Bash' and self.bash_cards and isinstance(data, dict)
+                            and isinstance(data.get('command'), str)):
+                        # Reserve space for both halves before emitting a native server tool.
+                        if self.activity_detail_bytes + 3200 <= min(32000, MAX_CLOUDCLI_REPLY // 4):
+                            self.activity_detail_bytes += 3200
+                            card = 'srvtoolu_sc'+uuid.uuid4().hex
+                            self.bash_ids[identifier] = card
+                            self.remote_block({'type':'server_tool_use', 'name':'bash_code_execution',
+                                               'id':card, 'input':{'command':self.preview(data['command'], 600)}})
+                        else:
+                            self.activity_detail('Bash 运行中', None)
+                    else:
+                        detail = self.fields(data, {'description': '说明', 'command': '命令', 'file_path': '文件'})
+                        self.activity_detail(f'正在运行 `{tool}`', self.preview(detail, 600))
         elif kind == 'tool_result':
             self.tool_result(event)
             self.activity()
@@ -1816,6 +1933,9 @@ def cloudcli_events(response, progress, expected_session=None, *, transport_sock
             raise CloudCliError('CloudCLI returned an invalid event')
         kind, event_type = event.get('kind'), event.get('type')
         if kind == 'error' or event_type == 'error' or (kind != 'tool_result' and event.get('is_error') is True):
+            if complete and isinstance(response, CloudCliSocketEvents) and response.following:
+                progress.notice('CloudCLI 的后台阶段返回了错误', event.get('message') or event.get('content'))
+                continue
             raise cloudcli_failure(event, progress)
         if event_type == 'status' and event.get('message') not in ('Session started', 'Repository cloned and session started'):
             progress.notice('CloudCLI 状态', event.get('message'))
@@ -1906,14 +2026,22 @@ class CloudCliSocketEvents:
     """Expose the chat WebSocket's normalized turn events to the Messages adapter."""
 
     PAUSED_HEARTBEAT_SECONDS = 10
+    BACKGROUND_POLL_SECONDS = 3
+    BACKGROUND_QUIET_SECONDS = 18
 
-    def __init__(self, connection, session, review_deadline=None):
+    def __init__(self, connection, session, review_deadline=None, *, background_state=None, progress=None):
         self.connection = connection
         self.session = session
         self.review_deadline = review_deadline
         self.started = False
         self.complete = False
         self.first_frame = None
+        self.background_state = background_state
+        self.progress = progress
+        self.following = False
+        self.quiet_since = None
+        self.background_history = None
+        self.followup_texts = Counter()
 
     @contextmanager
     def keepalive(self):
@@ -1947,9 +2075,54 @@ class CloudCliSocketEvents:
         if self.first_frame is not None:
             event, self.first_frame = self.first_frame, None
             return event
+        if self.following:
+            return self.read_followup(limit)
         if self.complete:
             return b'data: {"type":"done"}'
         return self.read_event(limit, deadline)
+
+    def close_followup(self, finished):
+        self.following = False
+        if finished:
+            try:
+                if self.background_history:
+                    for row in self.background_history(self.progress.followup_cutoff):
+                        value = row['text']
+                        if self.followup_texts[value]:
+                            self.followup_texts[value] -= 1
+                        else:
+                            if not self.progress.pending:
+                                self.progress.write('\n\n')
+                            self.progress.assistant({'content':value,'model':row.get('model')},None)
+                self.progress.followup_cutoff = None
+            except CloudCliError:
+                # Preserve the foreground checkpoint for launch-time recovery.
+                pass
+            self.progress.notice('后台任务已结束')
+        return b'data: {"type":"done"}'
+
+    def read_followup(self, limit):
+        _, websocket_error = cloudcli_websocket()
+        while True:
+            if self.progress.client_detached.is_set() or self.progress.stop_requested.is_set():
+                return self.close_followup(False)
+            try:
+                frame = self.read_event(limit, time.monotonic()+self.BACKGROUND_POLL_SECONDS)
+            except TimeoutError:
+                alive = self.background_state()
+                if alive is not False:
+                    self.quiet_since = None
+                elif self.quiet_since is None:
+                    self.quiet_since = time.monotonic()
+                elif time.monotonic()-self.quiet_since >= self.BACKGROUND_QUIET_SECONDS:
+                    return self.close_followup(True)
+                continue
+            except (OSError, websocket_error):
+                return self.close_followup(False)
+            if not frame:
+                return self.close_followup(False)
+            self.quiet_since = None
+            return frame
 
     def read_event(self, limit, deadline):
         from websocket import ABNF, WebSocketTimeoutException
@@ -1994,7 +2167,19 @@ class CloudCliSocketEvents:
                 raise CloudCliError('CloudCLI did not accept the Desktop chat message', 400)
             if session == self.session and kind not in ('session_upserted', 'chat_subscribed', 'side_question',
                                                         'scheduled_messages_changed', 'loading_progress'):
-                self.complete = kind == 'complete'
+                if kind == 'complete':
+                    self.complete = True
+                    succeeded = event.get('exitCode') == 0 and event.get('success') is not False and not event.get('aborted')
+                    if succeeded and not self.following and self.background_state and self.background_state() is True:
+                        self.following = True
+                        self.progress.followup_cutoff = time.time()
+                        self.progress.notice('后台任务仍在运行，后续进度会在本对话更新')
+                elif (self.following and kind == 'text' and event.get('role') == 'user'
+                      and not event.get('isSynthetic') and '<task-notification>' not in (event.get('content') or '')):
+                    return b''
+                elif (self.following and kind == 'text' and event.get('role') == 'assistant'
+                      and not event.get('parentToolUseId') and isinstance(event.get('content'),str)):
+                    self.followup_texts[event['content']] += 1
                 return b'data: '+(line.encode() if isinstance(line, str) else line)
 
 
@@ -2116,6 +2301,10 @@ class CloudCliBackend:
     def __init__(self, directory, config, device=None):
         self.config = config
         self.device = device
+        self.project_bindings = None
+        self.desktop_policy = None
+        self.desktop_key = None
+        self.desktop_key_note = None
         self.parallel = False
         self.active_conversations = {}
         self.active_lock = threading.Lock()
@@ -2152,6 +2341,12 @@ class CloudCliBackend:
                        'session TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (scope, history))')
             db.execute('CREATE TABLE IF NOT EXISTS session_projects (session TEXT PRIMARY KEY NOT NULL, '
                        'project TEXT NOT NULL, workspace TEXT, updated REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS desktop_projects (path TEXT PRIMARY KEY, project_id TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS desktop_web_history (scope TEXT PRIMARY KEY, '
+                       'project_id TEXT NOT NULL, session TEXT NOT NULL, path TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS desktop_followups (scope TEXT PRIMARY KEY, '
+                       'session TEXT NOT NULL, after REAL NOT NULL, replies TEXT)')
+            db.execute('CREATE TABLE IF NOT EXISTS imported_session_receipts (scope TEXT PRIMARY KEY, session TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS requests (identity TEXT PRIMARY KEY, scope TEXT NOT NULL, '
                        'reply TEXT, created REAL NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS compact_receipts (scope TEXT PRIMARY KEY, history TEXT NOT NULL, '
@@ -2211,7 +2406,13 @@ class CloudCliBackend:
 
     def model_choices(self):
         provider, custom_only = self.verified_model_options()
-        if not self.automatic_models:
+        if provider and not self.automatic_models:
+            choices = dict(provider)
+            if not custom_only:
+                for model in self.config['models']:
+                    if cloudcli_model_family(model) in provider:
+                        choices.setdefault(model, {})
+        elif not self.automatic_models:
             choices = {model: provider.get(model, {}) for model in self.config['models']}
         elif custom_only:
             choices = dict(provider)
@@ -2316,7 +2517,7 @@ class CloudCliBackend:
     def resolve_model(self, requested, context_1m=False, effort=None):
         base = requested.removesuffix('[1m]')
         extended = context_1m or base != requested
-        if self.automatic_models or base.startswith(DESKTOP_ULTRACODE_PREFIX) or effort == 'ultracode':
+        if self.automatic_models or self.config.get('desktopQuestions') or base.startswith(DESKTOP_ULTRACODE_PREFIX) or effort == 'ultracode':
             choices = self.model_choices()
         else:
             choices = dict.fromkeys(self.config['models'], {})
@@ -2399,6 +2600,13 @@ class CloudCliBackend:
             pass
         return cwd
 
+    def desktop_project_identity(self, cwd):
+        machine = self.device.get('workspace_machine') if self.device else None
+        if not (machine and self.desktop_key and self.config.get('desktopQuestions') and self.allowed_workspace(cwd)):
+            return None
+        folder = cwd.as_posix().casefold() if cwd.drive else cwd.as_posix()
+        return hashlib.sha256(json.dumps(['desktop-project-v1', self.desktop_key, machine, folder]).encode()).hexdigest()
+
     def project_for_directory(self, cwd):
         project, workspace = self.default_project()
         host = self.config['hostControl']
@@ -2410,13 +2618,23 @@ class CloudCliBackend:
         folder = cwd.as_posix() if cwd is not None else None
         if cwd is not None and cwd.drive:
             folder = folder.casefold()
-        identity = hashlib.sha256(json.dumps([device, folder]).encode()).hexdigest()
+        automatic = self.desktop_project_identity(cwd)
+        identity = automatic or hashlib.sha256(json.dumps([device, folder]).encode()).hexdigest()
         # CloudCLI uses the basename as the initial display name. Keep the
         # identity in a separate component so equally named folders stay distinct.
         label = cwd.name.encode()[:160].decode('utf-8', errors='ignore').strip() if cwd is not None else 'Desktop Chat'
         if not label or label in ('.', '..'):
             label = 'Desktop project'
-        if self.device:
+        if automatic:
+            def component(value, fallback):
+                value = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', '_', value)
+                return value.encode()[:72].decode('utf-8', errors='ignore').strip(' .') or fallback
+
+            hostname = component(self.device.get('hostname') or '', 'This computer')
+            key_label = component((self.desktop_key_note() if self.desktop_key_note else '') or '',
+                                  'Key-'+self.desktop_key[:8])
+            label = ' · '.join((hostname, key_label, component(cwd.name, 'Desktop project')))
+        elif self.device:
             label += ' · '+self.device['alias']
         root = Path.home()/CLOUDCLI_CONFIG.parent/'cloudcli-projects'
         bucket = root/identity
@@ -2433,6 +2651,277 @@ class CloudCliBackend:
         except (OSError, ValueError):
             raise CloudCliError('SafeCode could not resolve the CloudCLI project directory', 409) from None
         return str(path), self.allowed_workspace(cwd)
+
+    def managed_projects(self, *, strict=False):
+        projects = self.web_request('GET', '/api/projects?skipSync=1&sessionsLimit=1', timeout=5)
+        if not isinstance(projects, list):
+            raise CloudCliError('CloudCLI 返回了无效的项目列表。')
+        result = []
+        for entry in projects:
+            if (not isinstance(entry, dict) or not all(isinstance(entry.get(field), str)
+                    for field in ('projectId', 'displayName', 'fullPath'))
+                    or not (valid_mac_workspace(entry['fullPath']) or entry['fullPath'] == '/')):
+                if strict:
+                    raise CloudCliError('网页项目清单不完整，稍后重试。', 502)
+                continue
+            result.append({'project_id': entry['projectId'], 'name': entry['displayName'], 'path': entry['fullPath']})
+        return result
+
+    def ensure_desktop_project(self, path):
+        with self.project_lock, closing(sqlite3.connect(self.path)) as db:
+            saved = db.execute('SELECT project_id FROM desktop_projects WHERE path=?', (path,)).fetchone()
+            matches = [row['project_id'] for row in self.managed_projects() if row['path'] == path]
+            if not matches and saved is None:
+                try:
+                    self.web_request('POST', '/api/projects/create-project', json.dumps({'path': path}).encode())
+                except CloudCliError as error:
+                    if error.status != 409:
+                        raise
+                matches = [row['project_id'] for row in self.managed_projects() if row['path'] == path]
+            if len(matches) != 1 or saved and saved[0] != matches[0]:
+                raise CloudCliError('原 CloudCLI 项目已移动或归档，无法使用原绑定。', 409)
+            with db:
+                db.execute('INSERT OR IGNORE INTO desktop_projects VALUES (?, ?)', (path, matches[0]))
+
+    def desktop_history_index(self, *, mirror=False):
+        projects = self.managed_projects(strict=mirror)
+        with closing(sqlite3.connect(self.path)) as db:
+            own = {row[0] for row in db.execute(
+                'SELECT s.session FROM session_projects s LEFT JOIN imported_session_receipts i ON i.session=s.session '
+                'LEFT JOIN desktop_web_history w ON w.session=s.session WHERE i.session IS NULL AND w.session IS NULL')}
+            native = {}
+            for namespace, session in db.execute('SELECT DISTINCT scope,session FROM sessions WHERE scope GLOB ?',
+                                                 (self.identity+':*',)):
+                scope = namespace.rpartition(':')[2]
+                if re.fullmatch(r'[a-f0-9-]{36}', scope):
+                    native.setdefault(session, set()).add(scope)
+            known = {scope: {session} for scope, session in db.execute('SELECT scope,session FROM desktop_web_history')}
+        if mirror:
+            try:
+                with (self.path.parent / IMPORTED_SESSIONS_FILE).open() as handle:
+                    old = json.load(handle)
+            except FileNotFoundError:
+                old = {}
+            for scope, row in old.items():
+                session = str(uuid.UUID(row['session']))
+                project = str(uuid.UUID(row['project']))
+                if scope == str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, f'{project}/{session}')):
+                    known.setdefault(scope, set()).add(session)
+        directories = {entry['project_id']: entry['directory'] for entry in
+                       (self.project_bindings() if mirror and self.project_bindings else [])}
+        for session, scopes in native.items():
+            for scope in scopes:
+                known.setdefault(scope,set()).add(session)
+        live = set()
+        index = []
+        for project in projects:
+            project_id = project['project_id']
+            if not re.fullmatch(r'[a-f0-9-]{36}', project_id):
+                if mirror:
+                    raise CloudCliError('网页项目清单不完整，稍后重试。', 502)
+                continue
+            sessions = []
+            offset = 0
+            while True:
+                page = self.web_request('GET', f'/api/projects/{project_id}/sessions?limit=100&offset={offset}',
+                                        response_limit=2 * 1024 * 1024)
+                rows = page.get('sessions') if isinstance(page, dict) else None
+                if not isinstance(rows, list) or not isinstance(page.get('sessionMeta'), dict):
+                    raise CloudCliError('CloudCLI 返回了无效的历史列表。')
+                if mirror and type(page['sessionMeta'].get('hasMore')) is not bool:
+                    raise CloudCliError('网页分页清单不完整，稍后重试。', 502)
+                for row in rows:
+                    session = row.get('id') if isinstance(row, dict) else None
+                    if mirror and (not isinstance(row, dict) or not isinstance(session, str)
+                                   or not isinstance(row.get('provider'), str)):
+                        raise CloudCliError('网页会话清单不完整，稍后重试。', 502)
+                    if (isinstance(session, str) and re.fullmatch(r'[a-f0-9-]{36}', session)
+                            and row.get('provider') == 'claude' and not row.get('isArchived')):
+                        live.add(session)
+                        if session in own and not mirror:
+                            continue
+                        scope = str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, f'{project_id}/{session}'))
+                        sessions.append({'id': session, 'scope': scope, 'title': row.get('summary'),
+                                         'localScopes': sorted(native.get(session, ())),
+                                         'updated': row.get('lastActivity'), 'count': row.get('messageCount')})
+                if not page['sessionMeta'].get('hasMore'):
+                    break
+                offset += len(rows)
+                if not rows or offset > 20000:
+                    raise CloudCliError('CloudCLI 项目历史超出同步容量。', 413)
+            entry = {'id': project_id, 'name': project['name'], 'sessions': sessions}
+            if project_id in directories:
+                entry['directory'] = directories[project_id]
+            index.append(entry)
+        if mirror:
+            removed = [scope for scope, sessions in known.items() if sessions.isdisjoint(live)]
+            return {'projects': index, 'removedScopes': removed}
+        return index
+
+    def desktop_history_export(self, project_id, session):
+        path = next((item['path'] for item in self.managed_projects() if item['project_id'] == project_id), None)
+        if path is None:
+            raise CloudCliError('网页项目不存在或已归档。', 404)
+        self.verify_imported_session(project_id, path, session)
+        pages, size = [], 0
+        for rows, _ in self.history_pages(session, 12):
+            size += sum(len(json.dumps(row).encode()) for row in rows)
+            if size > 32 * 1024 * 1024:
+                raise CloudCliError('该网页会话超出单次同步容量。', 413)
+            pages.append(rows)
+        scope = str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, f'{project_id}/{session}'))
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute('INSERT OR REPLACE INTO desktop_web_history VALUES (?, ?, ?, ?)',
+                       (scope, project_id, session, path))
+        return {'scope': scope, 'messages': [row for page in reversed(pages) for row in page]}
+
+    def desktop_followup_scopes(self, include_imported):
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute('SELECT scope FROM sessions LEFT JOIN imported_session_receipts USING(scope) '
+                              'WHERE scope GLOB ? AND (? OR imported_session_receipts.scope IS NULL) '
+                              'GROUP BY scope ORDER BY MAX(created) DESC LIMIT 512',
+                              (self.identity+':*',include_imported)).fetchall()
+        return [scope for (name,) in rows if re.fullmatch(r'[a-f0-9-]{36}', scope := name.rpartition(':')[2])]
+
+    def desktop_followup_export(self, scope, include_imported):
+        namespace = self.identity+':'+scope
+        with closing(sqlite3.connect(self.path)) as db:
+            states = db.execute('SELECT DISTINCT s.session,t.tip_anchor,t.updated,f.after FROM sessions s '
+                                'JOIN session_state t USING(scope,session) '
+                                'LEFT JOIN desktop_followups f USING(scope,session) '
+                                'LEFT JOIN imported_session_receipts i USING(scope) '
+                                'WHERE s.scope=? AND (? OR i.scope IS NULL) LIMIT 2',
+                                (namespace,include_imported)).fetchall()
+        if len(states) != 1 or not states[0][1]:
+            return {'messages': []}
+        session, _, finished, cutoff = states[0]
+        after = int(1000 * (cutoff if cutoff is not None else finished))
+        messages = self.read_followup_history(session,after)
+        return self.save_desktop_followups(namespace, session, finished, cutoff, messages)
+
+    def read_followup_history(self, session, after):
+        pages = []
+        for rows, _ in self.history_pages(session, 10):
+            stamped = [(self.history_timestamp(row), row) for row in rows if isinstance(row, dict)]
+            pages.append([(stamp, row) for stamp, row in stamped if stamp is not None and stamp > after])
+            if any(stamp is not None and stamp <= after for stamp, _ in stamped):
+                break
+        messages, size = [], 0
+        for page in reversed(pages):
+            for timestamp, row in page:
+                if row.get('kind') != 'text' or row.get('sessionId') != session or row.get('parentToolUseId'):
+                    continue
+                if row.get('role') == 'user':
+                    if isinstance(row.get('content'),str) and '<task-notification>' in row['content']:
+                        continue
+                    return messages
+                value, identifier = row.get('content'), row.get('id')
+                if row.get('role') == 'assistant' and isinstance(value, str) and value.strip() and isinstance(identifier, str):
+                    size += len(value.encode())
+                    if size > 2 * 1024 * 1024 or len(messages) >= 200:
+                        raise CloudCliError('待回填的桌面消息超出容量。', 413)
+                    messages.append({'id': str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, f'{session}/{identifier}')),
+                                     'text': value, 'timestamp': timestamp, 'model': row.get('model')})
+        return messages
+
+    def save_desktop_followups(self, namespace, session, finished, cutoff, messages):
+        with closing(sqlite3.connect(self.path)) as db, db:
+            state = db.execute('SELECT updated FROM session_state WHERE scope=? AND session=?', (namespace,session)).fetchone()
+            if not state or state[0] != finished:
+                raise CloudCliError('本轮桌面会话已更新，请重新读取待回填消息。', 409)
+            if messages:
+                db.execute('INSERT OR REPLACE INTO desktop_followups VALUES (?,?,?,?)',
+                           (namespace,session,cutoff if cutoff is not None else finished,
+                            json.dumps([row['text'] for row in messages],ensure_ascii=False)))
+        return {'session': session, 'after': int(1000*(cutoff if cutoff is not None else finished)), 'messages': messages}
+
+    @staticmethod
+    def desktop_followup_prefixes(db, namespace, history):
+        entry = db.execute('SELECT replies FROM desktop_followups WHERE scope=?', (namespace,)).fetchone()
+        if not entry or not entry[0]:
+            return ()
+        remaining = list(history)
+        candidates = []
+        for value in reversed(json.loads(entry[0])):
+            text = desktop_assistant_text(remaining[-1]) if remaining else None
+            if not text or not text.endswith(value):
+                if candidates:
+                    break
+                continue
+            prefix = text[:-len(value)].removesuffix('\n\n')
+            if prefix:
+                remaining[-1] = {'role': 'assistant', 'content': prefix}
+            else:
+                remaining.pop()
+            candidates.append(history_signature(remaining, 'cloudcli'))
+        return tuple(candidates)
+
+    def bound_project(self, bindings, *, cwd=None, saved_path=None, project_id=None):
+        if project_id is not None:
+            field, target = 'project_id', project_id
+        elif saved_path is not None:
+            field, target = 'path', saved_path
+        elif cwd is not None:
+            field, target = 'directory', str(cwd)
+        else:
+            return None
+        for binding in bindings:
+            if binding[field] == target:
+                if not self.device or not self.config.get('desktopQuestions'):
+                    raise CloudCliError('绑定项目需要通过已配对的 SafeCode 设备访问。', 403)
+                path = Path(binding['path'])
+                if (not path.is_dir() or path.resolve() != path or not any(
+                        entry['project_id'] == binding['project_id'] and entry['path'] == str(path)
+                        for entry in self.managed_projects())):
+                    raise CloudCliError('原 CloudCLI 项目已移动或归档，请在 Key 设置中重新绑定。', 409)
+                return str(path)
+        if saved_path is not None or project_id is not None:
+            raise CloudCliError('此 Key 已解除原 CloudCLI 项目的绑定。', 403)
+        return None
+
+    def verify_imported_session(self, project_id, project_path, session):
+        result = self.web_request('GET', f'/api/providers/sessions/{session}', timeout=5)
+        row = result.get('data') if isinstance(result, dict) else None
+        project = row.get('project') if isinstance(row, dict) else None
+        if (not isinstance(project, dict) or project.get('projectId') != project_id
+                or project.get('fullPath') != project_path or project.get('isArchived') is not False
+                or row.get('sessionId') != session or row.get('provider') != 'claude'
+                or row.get('isArchived') is not False):
+            raise CloudCliHistoryMismatch('网页原会话已移动或归档，请重新同步后再继续。', 409)
+
+    def imported_session(self, db, namespace, scope, developer):
+        if not scope or not self.device:
+            return None
+        recorded = db.execute('SELECT session FROM imported_session_receipts WHERE scope=?', (namespace,)).fetchone()
+        synced = db.execute('SELECT project_id,session,path FROM desktop_web_history WHERE scope=?', (scope,)).fetchone()
+        if self.desktop_policy is not None and not developer:
+            if synced or recorded:
+                raise CloudCliError('此 Key 的开发者模式已关闭。', 403)
+            return None
+        if synced:
+            if recorded is not None and recorded[0] != synced[1]:
+                raise CloudCliHistoryMismatch('此网页会话的绑定已变更。', 409)
+            return synced
+        try:
+            with (self.path.parent / IMPORTED_SESSIONS_FILE).open() as stream:
+                imports = json.loads(stream.read(65537))
+        except FileNotFoundError:
+            imports = {}
+        except (OSError, ValueError, RecursionError):
+            raise CloudCliError('网关无法读取网页历史的会话绑定。', 503) from None
+        entry = imports.get(scope) if isinstance(imports, dict) else None
+        if entry is not None:
+            try:
+                project = uuid.UUID(entry['project'])
+                session = uuid.UUID(entry['session'])
+                if scope == str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, f'{project}/{session}')):
+                    if recorded is None or recorded[0] == str(session):
+                        return str(project), str(session), None
+            except (KeyError, AttributeError, TypeError, ValueError):
+                pass
+        if entry is not None or recorded is not None:
+            raise CloudCliError('此桌面会话的网页历史绑定已变更，请重新同步。', 409)
+        return None
 
     @staticmethod
     def private_project_directory(path):
@@ -2736,6 +3225,14 @@ class CloudCliBackend:
                      and entry.get('background') is not True and entry.get('canInterrupt') is not False
                      and type(entry.get('startedAt')) is int), None)
 
+    def background_active(self, session, *, following=False):
+        try:
+            matches = [item for item in self.running_sessions() if isinstance(item, dict)
+                       and item.get('sessionId') == session and item.get('provider') == 'claude']
+        except CloudCliError:
+            return None
+        return any(item.get('background') is True or bool(item.get('tasks')) or following for item in matches)
+
     @contextmanager
     def observe_turn(self, progress, dispatch_ms):
         if progress.stream is None:
@@ -2784,7 +3281,8 @@ class CloudCliBackend:
                        header={'Authorization': 'Bearer '+self.question_token()}, timeout=timeout,
                        suppress_origin=True, http_no_proxy=['127.0.0.1'])
 
-    def call_chat(self, payload, progress, attachments, plan_mode, edit=None, *, title_text, review=False, unrestricted=False):
+    def call_chat(self, payload, progress, attachments, plan_mode, edit=None, *, title_text, review=False,
+                  unrestricted=False, existing_project=False, desktop_project=False, auto_mode=False):
         connect, websocket_error = cloudcli_websocket()
         session = payload.get('sessionId')
         try:
@@ -2798,20 +3296,25 @@ class CloudCliBackend:
                 if progress.stream is not None and progress.stream.disconnected():
                     raise ConnectionAbortedError('Desktop disconnected before CloudCLI dispatch')
                 if session is None:
-                    try:
-                        self.web_request('POST', '/api/projects/create-project',
-                                         json.dumps({'path': payload['projectPath']}).encode())
-                    except CloudCliError as error:
-                        if error.status != 409:
-                            raise
+                    if desktop_project:
+                        self.ensure_desktop_project(payload['projectPath'])
+                    elif not existing_project:
+                        try:
+                            self.web_request('POST', '/api/projects/create-project',
+                                             json.dumps({'path': payload['projectPath']}).encode())
+                        except CloudCliError as error:
+                            if error.status != 409:
+                                raise
                     fields = {'provider': 'claude', 'projectPath': payload['projectPath'],
                               'initialMessage': title_text}
                     created = self.web_request('POST', '/api/providers/sessions', json.dumps(fields).encode())
                     session = created.get('data', {}).get('sessionId')
                     if not isinstance(session, str) or not CLOUDCLI_SESSION_ID.fullmatch(session):
                         raise CloudCliError('CloudCLI did not return an attachment session identifier')
-                permission = ('default' if not unrestricted and (progress.native_tools or progress.tool_approvals)
+                permission = ('default' if existing_project or not unrestricted and (progress.native_tools or progress.tool_approvals)
                               else 'bypassPermissions')
+                if existing_project and auto_mode:
+                    permission = 'auto'
                 options = {'model': payload['model'], 'attachments': descriptors, 'unattended': True,
                            'permissionMode': 'plan' if plan_mode else permission}
                 if review:
@@ -2829,7 +3332,10 @@ class CloudCliBackend:
                     command.update(type='chat.edit-send', anchorId=edit[0])
                 ws.send(json.dumps(command, ensure_ascii=False))
                 diagnostic(stage='cloudcli_response')
-                source = CloudCliSocketEvents(ws, session, time.monotonic()+20 if review else None)
+                source = CloudCliSocketEvents(ws, session, time.monotonic()+20 if review else None, progress=progress)
+                if not review and progress.stream is not None:
+                    source.background_state = lambda: self.background_active(session, following=source.following)
+                    source.background_history = lambda cutoff: self.read_followup_history(session,int(cutoff*1000))
                 try:
                     with self.observe_turn(progress, dispatch_ms):
                         return (yield from cloudcli_events(source, progress, session))
@@ -3124,6 +3630,9 @@ class CloudCliBackend:
                        (namespace,session,prefix,progress.turn_position,fingerprint,progress.dispatch_ms,int(now*1000)))
         db.execute('INSERT OR REPLACE INTO session_state VALUES (?, ?, ?, ?, ?)',
                    (namespace, session, progress.model, anchor, now))
+        db.execute('DELETE FROM desktop_followups WHERE scope=?', (namespace,))
+        if progress.followup_cutoff is not None:
+            db.execute('INSERT INTO desktop_followups VALUES (?,?,?,NULL)', (namespace,session,progress.followup_cutoff))
         if progress.edit_anchor is not None:
             db.execute('DELETE FROM edit_turns WHERE scope=? AND session=? AND position>=?',
                        (namespace, session, progress.turn_position))
@@ -3223,10 +3732,43 @@ class CloudCliBackend:
             if position:
                 branch = self.desktop_branch_source(db, namespace, prefix, interrupted_prefixes)
                 if branch is not None:
+                    if self.legacy_tail_matches(db, branch, prefix, partial_history):
+                        return branch[1:6], None
                     return self.fork_desktop_branch(branch)
         if position and history_signature([], 'cloudcli') not in interrupted_prefixes:
             raise CloudCliHistoryMismatch('No matching CloudCLI session; start a new Desktop conversation', 409)
         return None, None
+
+    def legacy_tail_matches(self, db, branch, prefix, history):
+        # A Desktop rewind at the last reply can assign a fresh scope even
+        # though it has retained the complete conversation. Older CloudCLI
+        # records may hide the user row containing an attribution reminder.
+        scope, session, project, workspace, model, tip, edit = branch
+        if workspace != '' or tip is not None or edit is not None or not history:
+            return False
+        reply = desktop_assistant_text(history[-1])
+        if not reply:
+            return False
+        receipt = db.execute("""
+            SELECT r.dispatched, r.ended FROM sessions s
+            JOIN anchor_receipts r USING (scope, session)
+            WHERE s.scope=? AND s.session=? AND s.history=?
+            """, (scope, session, prefix)).fetchone()
+        if not receipt:
+            return False
+        if any(row.get('sessionId') == session for row in self.running_sessions()):
+            raise CloudCliError('The original CloudCLI conversation is still running', 409)
+        rows, _ = next(self.history_pages(session, 5))
+        if not rows:
+            return False
+        last = rows[-1]
+        if not isinstance(last, dict) or last.get('sessionId') != session:
+            return False
+        seen = self.history_timestamp(last)
+        content = last.get('content')
+        return (last.get('role') == 'assistant' and last.get('kind') == 'text'
+                and seen is not None and receipt[0] <= seen <= receipt[1]
+                and isinstance(content, str) and bool(content.strip()) and content in reply)
 
     def stopped_before_user_message(self, db, namespace, prefix, session):
         checkpoint = db.execute('SELECT prior_anchor FROM stopped_before_anchor WHERE scope=? AND session=? AND prefix=?',
@@ -3576,14 +4118,21 @@ class CloudCliBackend:
             else:
                 raise CloudCliError('CloudCLI cannot use this Desktop content block', 400)
         plan_mode = any(PLAN_MODE_REMINDER.search(text) for text in texts)
-        task = '\n'.join(SYSTEM_REMINDER.sub('', text) for text in texts).strip()
-        if scope and self.device and self.device['platform'] == 'macos':
+        developer, raw = self.desktop_policy() if self.device and self.desktop_policy is not None else (False, False)
+        task = '\n'.join(texts) if raw else '\n'.join(SYSTEM_REMINDER.sub('', text) for text in texts).strip()
+        if not raw and scope and self.device and self.device['platform'] == 'macos':
             attachments.extend(desktop_read_attachments(messages, task, len(attachments)+1))
         if len(attachments) > 10:
             raise CloudCliError('Desktop can send up to 10 attachments per turn', 413)
         # The composer can include an already executed /compact command in
         # the next message. Keep its raw text only for request identity.
-        dispatch_task = DESKTOP_LOCAL_COMMAND.sub('', task).strip() if '<local-command-caveat>' in task else task
+        dispatch_task = (DESKTOP_LOCAL_COMMAND.sub('', task).strip()
+                         if not raw and '<local-command-caveat>' in task else task)
+        if raw and scope:
+            # Claude Desktop prefixes transport metadata to the typed message.
+            # CloudCLI hides rows starting with a system reminder. Remove only
+            # the leading envelope while leaving the actual input and retry key intact.
+            dispatch_task = DESKTOP_MESSAGE_PREAMBLE.sub('', dispatch_task, count=1)
         chat_mode = bool(attachments) or plan_mode
         unrestricted = manager.unrestricted_tools and not plan_mode and bool(self.config.get('desktopQuestions'))
         approval_transport = self.config.get('desktopToolApprovals', False)
@@ -3630,8 +4179,8 @@ class CloudCliBackend:
                     excerpt = portable_history(transcript, 24000).replace('<',r'\u003c')
                     return self.local_reply(data['model'], '<summary>'+excerpt+'</summary>')
         forwarded_task = (manager.review_prompt(dispatch_task)
-                          if dispatch_task and manager.review_prompt is not None else dispatch_task)
-        payload = {'provider': 'claude', 'message': forwarded_task or '请查看本轮附加的文件。',
+                          if not raw and dispatch_task and manager.review_prompt is not None else dispatch_task)
+        payload = {'provider': 'claude', 'message': forwarded_task if raw else forwarded_task or '请查看本轮附加的文件。',
                    'model': model, 'stream': True}
         family = cloudcli_model_family(model)
         diagnostic(stage='session_route', **({'modelFamily': family} if family else {}))
@@ -3716,20 +4265,54 @@ class CloudCliBackend:
                 saved = self.closed_question_binding(db, namespace, interrupted_prefixes) if interrupted_prefixes else None
                 edit = None
                 recovering = False
-                may_restore = (manager.restore_desktop_history and position
+                imported = self.imported_session(db, namespace, scope, developer)
+                bindings = self.project_bindings() if self.project_bindings is not None else []
+                synced_import = False
+                if imported is not None:
+                    project_id, imported_id, imported_path = imported
+                    synced_import = imported_path is not None
+                    if imported_path is None:
+                        imported_path = self.bound_project(bindings, project_id=project_id)
+                    if saved is None and db.execute('SELECT 1 FROM sessions WHERE scope=?', (namespace,)).fetchone() is None:
+                        if not position:
+                            raise CloudCliHistoryMismatch('请从桌面打开已导入的网页历史再发送。', 409)
+                        saved = (imported_id, imported_path, '', None, None)
+                    self.verify_imported_session(project_id, imported_path, imported_id)
+                    if any(item.get('sessionId') == imported_id and item.get('background') is not True
+                           for item in self.running_sessions() if isinstance(item, dict)):
+                        raise CloudCliError('网页原会话正在执行，请等当前回复结束再发送。', 409)
+                may_restore = (imported is None and not raw and manager.restore_desktop_history and position
                             and not db.execute('SELECT 1 FROM requests JOIN request_operations USING(identity) '
                                                'WHERE scope=? AND pending=1 LIMIT 1', (namespace,)).fetchone()
                             and not db.execute('SELECT 1 FROM question_receipts WHERE scope=?', (namespace,)).fetchone())
 
                 if saved is None:
                     try:
+                        followup_prefixes = self.desktop_followup_prefixes(db, namespace, messages[:-1])
                         saved, edit = self.session_binding(db, namespace, before, position, compact_context,
-                                                           interrupted_prefixes, partial_history, legacy_prefix)
+                                                           (*interrupted_prefixes,*followup_prefixes), partial_history, legacy_prefix)
                     except (CloudCliHistoryMismatch, CloudCliSessionMissing):
-                        if not may_restore:
+                        if synced_import and position:
+                            visible_users = [row for row in messages[:-1] if row.get('role') == 'user']
+                            visible_tip = ('\n'.join(part['text'] for part in blocks(visible_users[-1]['content'])
+                                                     if part.get('type') == 'text') if visible_users else None)
+                            head = self.history_users(imported_id)
+                            if visible_tip is None or not head or visible_tip != head[-1].get('content'):
+                                raise CloudCliHistoryMismatch('网页原会话已更新，请重新打开桌面端同步后继续。', 409)
+                            saved = (imported_id, imported_path, '', None, None)
+                        elif not may_restore:
                             raise
-                        recovering = True
-                if saved:
+                        else:
+                            recovering = True
+                if imported is not None and (saved is None or saved[:3] != (imported_id, imported_path, '') or edit is not None):
+                    raise CloudCliHistoryMismatch('已导入的网页会话只支持在末尾继续发送。', 409)
+                existing_project = bool(saved and saved[2] == '')
+                if existing_project:
+                    payload['sessionId'], project, workspace, _, _ = saved
+                    if imported is None and not (developer and any(
+                            entry['path'] == project for entry in self.managed_projects())):
+                        self.bound_project(bindings, saved_path=project)
+                elif saved:
                     payload['sessionId'], project, workspace, previous_model, _ = saved
                     if scope and self.config.get('desktopQuestions') and previous_model != model:
                         chat_mode = True
@@ -3756,16 +4339,39 @@ class CloudCliBackend:
                             if routed_project == project:
                                 workspace = routed_workspace
                 else:
-                    project, workspace = self.project_for_directory(self.desktop_directory(data, scope))
+                    cwd = self.desktop_directory(data, scope)
+                    bound = self.bound_project(bindings, cwd=cwd) if scope else None
+                    if bound is None and developer and scope and isinstance(cwd, PurePosixPath) and len(cwd.parts) >= 5:
+                        if cwd.parts[-4] == 'CloudCLI Projects' and all(
+                                re.fullmatch(r'[a-f0-9-]{36}', part) for part in cwd.parts[-3:-1]):
+                            catalog = self.managed_projects()
+                            bound = next((entry['path'] for entry in catalog if entry['project_id'] == cwd.parts[-2]), None)
+                            if bound is None:
+                                raise CloudCliError('网页项目已移除，请重新同步。', 409)
+
+                    if bound is None:
+                        project, workspace = self.project_for_directory(cwd)
+                    else:
+                        project, workspace = bound, ''
+                        existing_project = True
                 # The Agent API runs unattended in bypassPermissions and can skip
                 # the permission event that carries a pending AskUserQuestion.
-                chat_mode = chat_mode or bool(native_tools) or edit is not None or approval_transport
+                workspace_path = (PureWindowsPath if self.device and self.device['platform'] == 'windows'
+                                  else PurePosixPath)(workspace) if workspace else None
+                automatic = self.desktop_project_identity(workspace_path)
+                desktop_project = bool(automatic and Path(project).parent.name == automatic)
+                chat_mode = (chat_mode or bool(native_tools) or edit is not None or approval_transport
+                             or existing_project or desktop_project
+                             or bool(scope and self.desktop_key and self.config.get('desktopQuestions')))
                 if chat_mode:
                     cloudcli_websocket()
                     self.question_token()
                 payload['projectPath'] = project
-                host_instruction = self.host_instruction(project, workspace)
-                if host_instruction:
+                host_instruction = (
+                    f'当前项目在 VPS 的 CloudCLI 工作目录 `{project}`。处理该项目的文件时，使用 VPS 上的项目目录。'
+                    if existing_project else self.host_instruction(project, workspace)
+                )
+                if host_instruction and imported is None and not raw:
                     fingerprint = hashlib.sha256(host_instruction.encode()).hexdigest()
                     known = db.execute('SELECT 1 FROM workspace_prompts '
                                        'WHERE scope=? AND session=? AND position<? AND fingerprint=?',
@@ -3774,7 +4380,7 @@ class CloudCliBackend:
                         # Keep the user's opening words available for the CloudCLI title.
                         payload['message'] += '\n\n'+host_instruction
                         workspace_prompt_fingerprint = fingerprint
-                if attachments:
+                if attachments and not raw:
                     payload['message'] += ('\n\n本轮上传的文件请通过 CloudCLI 提供的附件读取。'
                                            '附带的本机路径只是原始引用，本机项目文件仍走已授权设备。')
                 label = desktop_session_label(data.get('_safeCodeLabels'), messages, scope or identity)
@@ -3796,22 +4402,28 @@ class CloudCliBackend:
                         user_task = manager.review_prompt(user_task)
                     suffix = base_message[len(forwarded_task):] if forwarded_task else base_message
                     payload['message'] = (user_task or '')+suffix
-                    if label and 'sessionId' not in payload and not self.config.get('desktopQuestions'):
+                    if label and not raw and 'sessionId' not in payload and not self.config.get('desktopQuestions'):
                         # Agent-only CloudCLI derives its title from exactly four words.
                         user, gateway_name, topic = label.split('·')
                         payload['message'] = f'{user} · {gateway_name} ·{topic}\n\n'+payload['message']
                 prepare_message(recovering)
-                self.prepare_project(project, workspace)
+                if not existing_project:
+                    self.prepare_project(project, workspace)
                 # Commit before POST. A lost connection or process exit cannot
                 # cause an automatic second dispatch of this scoped task.
                 db.execute('DELETE FROM question_receipts WHERE scope=? OR created<?', (namespace, now-30*86400))
                 db.execute('INSERT INTO requests VALUES (?, ?, NULL, ?)', (identity, namespace, now))
+                if imported is not None:
+                    db.execute('INSERT OR IGNORE INTO imported_session_receipts VALUES (?, ?)', (namespace, imported_id))
                 if legacy_identity is not None:
                     db.execute('INSERT INTO request_operations VALUES (?, ?, 1)', (identity, legacy_identity))
             with manager.lock:
                 manager.started += 1
-            progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model, tool_approvals,
-                                        self.device)
+            progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model,
+                                        approval_transport if existing_project else tool_approvals,
+                                        None if existing_project else self.device)
+            progress.bash_cards = bool(scope and isinstance(offered, list) and any(
+                isinstance(tool, dict) and tool.get('name') == 'Bash' for tool in offered))
             progress.account_footer = manager.account_footer
             progress.stop_requested = active_turn.stop_requested
             progress.client_detached = active_turn.client_detached
@@ -3820,8 +4432,12 @@ class CloudCliBackend:
             progress.turn_position = position
             progress.edit_anchor = edit[0] if edit is not None else None
             def dispatch():
+                if existing_project:
+                    return self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=label or task,
+                                          existing_project=True, auto_mode=desktop_permission_mode(data) == 'auto')
                 return (self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=label or task,
-                                       unrestricted=unrestricted) if chat_mode or attachments else self.call(payload, progress))
+                                       unrestricted=unrestricted, desktop_project=desktop_project)
+                        if chat_mode or attachments else self.call(payload, progress))
             def native_events():
                 nonlocal edit
                 if recovering:
@@ -4390,16 +5006,33 @@ class CloudCliMessagesStream:
         with self.wire_lock:
             self.write_part(kind, part)
 
+    def start_message(self):
+        if not self.started:
+            self.started = True
+            self.handler.start_sse()
+            self.handler.send_sse('message_start', {'type': 'message_start', 'message': {
+                'id': self.message_id, 'type': 'message', 'role': 'assistant', 'model': self.model,
+                'content': [], 'stop_reason': None, 'stop_sequence': None,
+                'usage': dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0),
+            }})
+
+    def remote_block(self, block):
+        if not self.send_events:
+            return
+        with self.wire_lock:
+            try:
+                self.start_message()
+                self.close_block()
+                for event, payload in sse_content_block(block, self.index):
+                    self.handler.send_sse(event, payload)
+                self.index += 1
+                self.last_output = time.monotonic()
+            except OSError:
+                raise ConnectionAbortedError('Desktop disconnected during a CloudCLI stream') from None
+
     def write_part(self, kind, part):
         try:
-            if not self.started:
-                self.started = True
-                self.handler.start_sse()
-                self.handler.send_sse('message_start', {'type': 'message_start', 'message': {
-                    'id': self.message_id, 'type': 'message', 'role': 'assistant', 'model': self.model,
-                    'content': [], 'stop_reason': None, 'stop_sequence': None,
-                    'usage': dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0),
-                }})
+            self.start_message()
             if self.open_kind != kind:
                 self.close_block()
                 block = {'type': kind, kind: ''}

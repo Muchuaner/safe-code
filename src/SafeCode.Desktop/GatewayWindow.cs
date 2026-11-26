@@ -90,7 +90,7 @@ internal sealed class GatewayWindow : Window
             {
                 case "safeCodeApi.manage":
                     if (Busy) throw new InvalidOperationException("请等待当前网关操作完成。");
-                    mutate = args.GetProperty("action").GetString() is "issue" or "update" or "unbind" or "revoke" or "delete" or "set_port" or "set_origin" or "set_concurrency" or "set_prompt_review" or "set_key_queue" or "refresh_ticket" or "multi.activate" or "multi.create" or "multi.claim" or "multi.remove";
+                    mutate = args.GetProperty("action").GetString() is "issue" or "update" or "unbind" or "revoke" or "delete" or "set_port" or "set_origin" or "set_concurrency" or "set_prompt_review" or "set_key_queue" or "refresh_ticket" or "multi.create" or "multi.claim" or "multi.remove";
                     Busy = mutate;
                     result = await manage(args);
                     break;

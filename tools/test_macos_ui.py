@@ -45,7 +45,7 @@ with sync_playwright() as p:
  page.add_init_script(main_fixture)
  page.goto((root/'web'/'index.html').as_uri());page.wait_for_function('window.safeCodeNativeReady===true')
  page.evaluate("showScreen('workspace');switchMode('maintenance')")
- assert page.locator('.window-controls').is_hidden();assert page.locator('#codex-launch').is_disabled();assert page.locator('#claude-desktop-launch').is_disabled();assert '暂不可用' in page.locator('#bridge-state').inner_text()
+ assert page.locator('.window-controls').is_hidden();assert page.locator('#codex-launch').is_disabled();assert page.locator('#claude-desktop-launch').count()==0;assert '暂不可用' in page.locator('#bridge-state').inner_text()
  assert 'macOS' in page.locator('#usage-detail').inner_text();assert '系统设置' in page.locator('.host-risk small').inner_text()
  assert page.locator('#score-source').get_attribute('href') is None
  assert page.locator('#mount-guard-status').evaluate('el=>getComputedStyle(el).backgroundColor')=='rgb(255, 248, 220)'
@@ -86,7 +86,7 @@ with sync_playwright() as p:
  page.locator('#safe-code-api-manage').click()
  page.wait_for_function("calls.some(m=>m.op==='window.gateway.open')")
  expect(page.locator('#claude-desktop-dialog')).to_be_hidden()
- assert page.locator('#claude-desktop-launch').is_disabled()
+ assert page.locator('#claude-desktop-launch').count()==0
  assert not page.evaluate("calls.some(m=>m.op==='host.enable'||m.op.startsWith('claudeDesktop.'))")
  assert not errors,errors
 

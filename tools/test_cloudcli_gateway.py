@@ -90,8 +90,15 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
-        if self.path == f'/api/providers/sessions/{CLOUD_SESSION}':
-            self.send_json({'data':{'sessionId':CLOUD_SESSION}})
+        if self.path.startswith('/api/projects/') and '/sessions?' in self.path:
+            self.send_json({'sessions': self.server.history_index_rows, 'sessionMeta': {'hasMore': False}})
+            return
+        if self.path == '/api/projects?skipSync=1&sessionsLimit=1':
+            self.send_json(self.server.projects)
+            return
+        existing = getattr(self.server, 'existing_session', {'sessionId': CLOUD_SESSION})
+        if self.path == f'/api/providers/sessions/{existing["sessionId"]}':
+            self.send_json({'data': existing})
             return
         if self.path.split('?')[0] == f'/api/providers/sessions/{CLOUD_SESSION}/messages':
             query = parse_qs(urlsplit(self.path).query)
@@ -104,7 +111,7 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
             return
         if self.path == '/api/providers/sessions/running':
             started = self.server.running_since
-            running = [{'sessionId': CLOUD_SESSION, 'provider': 'claude', 'startedAt': started}] if started is not None else []
+            running = [{'sessionId': existing['sessionId'], 'provider': 'claude', 'startedAt': started}] if started is not None else []
             self.send_json({'data': {'sessions': running}})
             return
         if self.path != '/api/providers/claude/models':
@@ -139,11 +146,15 @@ class CloudAgentFixture(BaseHTTPRequestHandler):
             return
         if self.path == '/api/projects/create-project':
             server.registered_projects.append(data['path'])
+            if getattr(server, 'register_projects', False):
+                server.projects.append({'projectId': str(uuid.uuid4()), 'displayName': Path(data['path']).name,
+                                        'fullPath': data['path']})
             self.send_json({'success': True})
             return
         if self.path == '/api/providers/sessions':
             server.created_sessions.append(data)
-            self.send_json({'data': {'sessionId': CLOUD_SESSION}}, 201)
+            identifiers = getattr(server, 'project_session_ids', None)
+            self.send_json({'data': {'sessionId': next(identifiers) if identifiers else CLOUD_SESSION}}, 201)
             return
         if self.path == '/api/auth/login':
             server.logins.append(data)
@@ -316,6 +327,43 @@ class CloudCLIStreamTests(unittest.TestCase):
             with self.assertRaisesRegex(gateway.CloudCliError, 'prompt review timed out'):
                 next(gateway.cloudcli_events(review, gateway.CloudCliProgress(None, None)))
 
+    def test_websocket_keeps_original_stream_open_for_background_completion(self):
+        from websocket import WebSocketTimeoutException
+
+        class Socket(ChatSocketFixture):
+            def recv_data(self, *, control_frame):
+                if self.events is None:
+                    raise WebSocketTimeoutException()
+                opcode, data = super().recv_data(control_frame=control_frame)
+                if not data:
+                    self.events = None
+                    raise WebSocketTimeoutException()
+                return opcode, data
+
+        scope = CLOUD_SESSION
+        events = [
+            {'sessionId':scope,'kind':'text','role':'assistant','content':'I will report back.'},
+            {'sessionId':scope,'kind':'complete','exitCode':0},
+            {'sessionId':scope,'kind':'task_status','taskId':'a','event':'notification','status':'completed'},
+            {'sessionId':scope,'kind':'text','role':'assistant','content':'The background work finished.'},
+        ]
+        states = iter([True, False, False])
+        progress = gateway.CloudCliProgress(None, None, model=MODEL)
+        socket = gateway.CloudCliSocketEvents(Socket(None,events), scope,
+                                               background_state=lambda:next(states),progress=progress)
+        socket.background_history = lambda _: [
+            {'text':'The background work finished.'},{'text':'Recovered after the web socket changed.'}]
+        with patch.object(socket,'BACKGROUND_QUIET_SECONDS',0), self.assertRaises(StopIteration) as result:
+            next(gateway.cloudcli_events(socket,progress))
+        self.assertEqual(result.exception.value[0], scope)
+        text = ''.join(part.get('text','') for part in result.exception.value[1])
+        self.assertLess(text.index('I will report back.'),text.index('后台任务仍在运行'))
+        self.assertLess(text.index('The background work finished.'),text.index('后台任务已结束'))
+        self.assertEqual(text.count('The background work finished.'),1)
+        self.assertLess(text.index('Recovered after the web socket changed.'),text.index('后台任务已结束'))
+        self.assertEqual(progress.tasks,{'a':'completed'})
+        self.assertIsNone(progress.followup_cutoff)
+
     def test_paused_question_is_only_cleaned_up_after_native_close(self):
         from unittest.mock import Mock
         backend = Mock()
@@ -398,6 +446,38 @@ class CloudCLIGatewayTests(unittest.TestCase):
     def use_patch(self, patcher):
         self.addCleanup(patcher.stop)
         return patcher.start()
+
+    def test_followup_backfill_belongs_to_saved_scope_and_recovers_the_previous_prefix(self):
+        backend = self.manager.cloudcli
+        scope = str(uuid.uuid4())
+        namespace = backend.identity+':'+scope
+        existing = [{'role':'user','content':'First'},{'role':'assistant','content':'Acknowledged.'}]
+        with closing(sqlite3.connect(backend.path)) as db, db:
+            db.execute('INSERT INTO sessions VALUES (?,?,?,1)',
+                       (namespace,gateway.history_signature(existing,'cloudcli'),CLOUD_SESSION))
+            db.execute('INSERT INTO session_state VALUES (?,?,?,?,?)',(namespace,CLOUD_SESSION,MODEL,'anchor',100))
+        rows = [{'sessionId':CLOUD_SESSION,'kind':'text','role':role,'content':text,'id':str(index),
+                 'timestamp':f'1970-01-01T00:01:{seconds}Z'}
+                for index,(role,text,seconds) in enumerate((
+                    ('assistant','Acknowledged.','39'),
+                    ('assistant','First background progress.','41'),
+                    ('assistant','Second background progress.','42'),
+                    ('user','New independent web message.','43'),
+                    ('assistant','Answer to that message.','44')))]
+        with patch.object(backend,'history_pages',return_value=[(rows,False)]):
+            result = backend.desktop_followup_export(scope,False)
+            self.assertEqual([row['text'] for row in result['messages']],
+                             ['First background progress.','Second background progress.'])
+            self.assertEqual(backend.desktop_followup_export(str(uuid.uuid4()),False),{'messages':[]})
+        with closing(sqlite3.connect(backend.path)) as db, db:
+            merged = [{'role':'user','content':'First'},
+                      {'role':'assistant','content':'Acknowledged.\n\nFirst background progress.\n\nSecond background progress.'}]
+            prefixes = backend.desktop_followup_prefixes(db,namespace,merged)
+            self.assertIn(gateway.history_signature(existing,'cloudcli'),prefixes)
+            self.assertEqual(backend.desktop_followup_prefixes(db,namespace,[*existing,{'role':'assistant','content':'Different'}]),())
+            db.execute('INSERT INTO imported_session_receipts VALUES (?,?)',(namespace,CLOUD_SESSION))
+        self.assertEqual(backend.desktop_followup_scopes(False),[])
+        self.assertEqual(backend.desktop_followup_export(scope,False),{'messages':[]})
 
     def save_config(self):
         self.config_path.write_text(json.dumps(self.config))
@@ -549,7 +629,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 self.assertNotIn('message_stop', [event['type'] for event in decoded])
                 prefix = ''.join(event['delta'].get('text', '') for event in decoded if event['type'] == 'content_block_delta')
                 self.assertIn('正在执行工具操作', prefix)
-                self.assertNotIn('fixture command', prefix)
+                self.assertIn('正在运行 `Bash`', prefix)
+                self.assertLess(prefix.index('命令: fixture command'), prefix.index('`Bash` 已返回'))
+                self.assertLess(prefix.index('fixture command output'), prefix.index('Fixture '))
                 self.assertNotIn('Reasoning excerpt from the fixture', prefix)
                 self.assertEqual([(event['index'], event['content_block']['type']) for event in decoded
                                   if event['type'] == 'content_block_start'], [(0, 'text'), (1, 'thinking'), (2, 'text')])
@@ -740,6 +822,240 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNoNativeFallback()
 
+    def test_bound_project_creates_separate_sessions_in_the_original_project(self):
+        self.enable_cloudcli_web_fixture()
+        backend = self.manager.cloudcli
+        backend.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
+                          'alias': 'desk-mac', 'command': 'ssh desk-mac'}
+        directory = '/Users/example/Work'
+        project_id = str(uuid.uuid4())
+        self.cloud.projects = [{'projectId': project_id, 'displayName': 'Original', 'fullPath': str(self.project)}]
+        bindings = [{'project_id': project_id, 'directory': directory, 'path': str(self.project)}]
+        backend.project_bindings = lambda: bindings
+        identifiers = [str(uuid.uuid4()), str(uuid.uuid4())]
+        self.cloud.project_session_ids = iter(identifiers)
+        commands = []
+
+        def open_socket(*args, **kwargs):
+            def send(command):
+                commands.append(command)
+                session = command['sessionId']
+                sock.events = iter([
+                    {'kind': 'text', 'role': 'assistant', 'content': 'Bound.', 'sessionId': session},
+                    {'kind': 'complete', 'exitCode': 0, 'sessionId': session},
+                ])
+            sock = ChatSocketFixture(send)
+            return sock
+
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(open_socket, OSError)):
+            session = str(uuid.uuid4())
+            payload = conversation('First native chat', system=desktop_environment(directory))
+            status, reply = self.request(payload, session=session)
+            self.assertEqual(status, 200, reply)
+            automatic = {**payload, 'safeguards': [
+                {'type': 'dangerous_tool_use', 'classifier_context': {'v': 1, 'permission_mode': 'auto'}},
+            ]}
+            self.assertEqual(self.request(automatic, session=str(uuid.uuid4()))[0], 200)
+            self.assertEqual([item['projectPath'] for item in self.cloud.created_sessions], [str(self.project)] * 2)
+            self.assertEqual([item['sessionId'] for item in commands], identifiers)
+            self.assertEqual([c['options']['permissionMode'] for c in commands], ['default', 'auto'])
+            self.assertNotIn('ssh desk-mac', commands[0]['content'])
+            self.assertEqual(self.cloud.registered_projects, [])
+            self.assertEqual(self.cloud.requests, [])
+            follow_up = conversation('unused', messages=[
+                *payload['messages'], {'role': 'assistant', 'content': reply['content']},
+                {'role': 'user', 'content': 'Follow up in the first native chat.'},
+            ])
+            status, continued = self.request(follow_up, session=session)
+            self.assertEqual(status, 200, continued)
+            self.assertEqual(commands[-1]['sessionId'], identifiers[0])
+            bindings.clear()
+            denied = conversation('unused', messages=[
+                *follow_up['messages'], {'role': 'assistant', 'content': continued['content']},
+                {'role': 'user', 'content': 'Attempt to use the removed binding.'},
+            ])
+            self.assertEqual(self.request(denied, session=session)[0], 403)
+            self.assertEqual(len(commands), 3)
+
+    def test_desktop_project_is_reused_after_pairing_and_isolated_by_key_and_full_path(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.projects = []
+        self.cloud.register_projects = True
+        backend = self.manager.cloudcli
+        backend.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
+                          'alias': 'desk-mac', 'command': 'ssh desk-mac', 'workspace_machine': 'a' * 64}
+        backend.desktop_key = 'b' * 64
+        backend.desktop_key_note = lambda: '214/Test'
+        identifiers = [str(uuid.uuid4()) for _ in range(4)]
+        self.cloud.project_session_ids = iter(identifiers)
+        commands = []
+
+        def open_socket(*args, **kwargs):
+            def send(command):
+                commands.append(command)
+                session = command['sessionId']
+                socket.events = iter([
+                    {'kind': 'text', 'role': 'assistant', 'content': 'Reply.', 'sessionId': session},
+                    {'kind': 'complete', 'exitCode': 0, 'sessionId': session},
+                ])
+            socket = ChatSocketFixture(send)
+            return socket
+
+        directory = '/Users/example/Desktop'
+        payload = conversation('First chat', system=desktop_environment(directory))
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(open_socket, OSError)):
+            scope = str(uuid.uuid4())
+            status, reply = self.request(payload, session=scope)
+            self.assertEqual(status, 200, reply)
+            backend.device.update(id='new-pairing', alias='desk-mac-new', command='ssh desk-mac-new')
+            backend.desktop_key_note = lambda: 'Renamed Key'
+            self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 200)
+            backend.desktop_key = 'c' * 64
+            self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 200)
+            backend.desktop_key = 'b' * 64
+            follow_up = conversation('unused', messages=[
+                *payload['messages'], {'role': 'assistant', 'content': reply['content']},
+                {'role': 'user', 'content': 'Continue the first chat.'},
+            ], system=desktop_environment(directory))
+            self.assertEqual(self.request(follow_up, session=scope)[0], 200)
+            second_directory = conversation('Different directory', system=desktop_environment('/Users/example/Work/Desktop'))
+            self.assertEqual(self.request(second_directory, session=str(uuid.uuid4()))[0], 200)
+
+        primary_path, other_key_path, other_directory_path = self.cloud.registered_projects
+        self.assertEqual(Path(primary_path).name, 'Example Mac · 214_Test · Desktop')
+        self.assertEqual(len({primary_path, other_key_path, other_directory_path}), 3)
+        self.assertEqual([row['projectPath'] for row in self.cloud.created_sessions],
+                         [primary_path, primary_path, other_key_path, other_directory_path])
+        self.assertEqual([command['sessionId'] for command in commands],
+                         [*identifiers[:3], identifiers[0], identifiers[3]])
+        self.assertIn('ssh desk-mac-new', commands[3]['content'])
+
+    def test_developer_raw_send_preserves_whitespace_and_omits_gateway_text(self):
+        self.enable_cloudcli_web_fixture()
+        backend = self.manager.cloudcli
+        backend.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
+                          'alias': 'desk-mac', 'command': 'ssh desk-mac'}
+        backend.desktop_policy = lambda: (True, True)
+        self.manager.review_prompt = lambda text: 'review'+text
+        text = '  原文一行\n\n第二行  '
+        request = conversation(text, system=desktop_environment('/Users/example/Desktop'))
+        status, reply = self.request(request)
+        self.assertEqual(status, 200, reply)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], text)
+        envelope = ('<system-reminder>Attribution for git commits and pull requests you create:\n'
+                    'Desktop metadata.</system-reminder>\n\n')
+        sent = conversation(envelope + text, system=desktop_environment('/Users/example/Desktop'))
+        status, reply = self.request(sent, session=str(uuid.uuid4()))
+        self.assertEqual(status, 200, reply)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], text)
+        backend.desktop_policy = lambda: (True, False)
+        status, reply = self.request(request, session=str(uuid.uuid4()))
+        self.assertEqual(status, 200, reply)
+        self.assertIn('ssh desk-mac', self.cloud.requests[-1][2]['message'])
+        self.assertTrue(self.cloud.requests[-1][2]['message'].startswith('review原文'))
+
+    def test_web_history_index_contains_only_cloud_history_and_export_registers_original(self):
+        self.enable_cloudcli_web_fixture()
+        backend = self.manager.cloudcli
+        backend.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Mac',
+                          'alias': 'desk-mac', 'command': 'ssh desk-mac'}
+        backend.desktop_policy = lambda: (True, False)
+        project, session, own = (str(uuid.uuid4()) for _ in range(3))
+        self.cloud.projects = [{'projectId': project, 'displayName': 'Original', 'fullPath': str(self.project)}]
+        self.cloud.history_index_rows = [{'id': item, 'provider': 'claude', 'summary': 'Fixture',
+                                           'messageCount': 2, 'lastActivity': 1} for item in (session, own)]
+        self.cloud.existing_session = {'sessionId': session, 'provider': 'claude', 'isArchived': False,
+                                       'project': {'projectId': project, 'fullPath': str(self.project), 'isArchived': False}}
+        with closing(sqlite3.connect(backend.path)) as db, db:
+            db.execute('INSERT INTO session_projects VALUES (?,?,?,?)', (own,str(self.project),'/Users/example',0))
+        index = backend.desktop_history_index()
+        self.assertEqual([row['id'] for row in index[0]['sessions']], [session])
+        self.cloud.history_index_rows[0]['messageCount'] = 0
+        mirror = backend.desktop_history_index(mirror=True)
+        self.assertEqual([row['id'] for row in mirror['projects'][0]['sessions']], [session, own])
+        self.assertEqual(mirror['projects'][0]['sessions'][0]['count'], 0)
+        scope = index[0]['sessions'][0]['scope']
+        messages = [{'role': 'user', 'content': 'previous user'}, {'role': 'assistant', 'content': 'previous answer'}]
+        with patch.object(backend, 'history_pages', return_value=[([messages[1]], True), ([messages[0]], False)]):
+            self.assertEqual(backend.desktop_history_export(project,session), {'scope':scope,'messages':messages})
+        with closing(sqlite3.connect(backend.path)) as db:
+            self.assertEqual(backend.imported_session(db, 'namespace', scope, True), (project,session,str(self.project)))
+            with self.assertRaisesRegex(gateway.CloudCliError, '开发者模式已关闭'):
+                backend.imported_session(db, 'namespace', scope, False)
+
+        self.cloud.history_index_rows = []
+        mirror = backend.desktop_history_index(mirror=True)
+        self.assertIn(scope, mirror['removedScopes'])
+        self.assertEqual(mirror['projects'][0]['sessions'], [])
+        self.cloud.projects.append({'displayName': 'Incomplete'})
+        with self.assertRaises(gateway.CloudCliError):
+            backend.desktop_history_index(mirror=True)
+
+    def test_imported_web_session_appends_to_original_and_never_falls_back(self):
+        self.enable_cloudcli_web_fixture()
+        self.manager.restore_desktop_history = True
+        backend = self.manager.cloudcli
+        backend.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Mac',
+                          'alias': 'desk-mac', 'command': 'ssh desk-mac'}
+        project_id = str(uuid.uuid4())
+        cloud_session = str(uuid.uuid4())
+        scope = str(uuid.uuid5(gateway.IMPORTED_SESSION_NAMESPACE, f'{project_id}/{cloud_session}'))
+        self.cloud.projects = [{'projectId': project_id, 'displayName': 'Original', 'fullPath': str(self.project)}]
+        self.cloud.existing_session = {
+            'sessionId': cloud_session, 'provider': 'claude', 'isArchived': False,
+            'project': {'projectId': project_id, 'fullPath': str(self.project), 'isArchived': False},
+        }
+        backend.project_bindings = lambda: [
+            {'project_id': project_id, 'directory': '/Users/example/Work', 'path': str(self.project)},
+        ]
+        links = backend.path.parent / gateway.IMPORTED_SESSIONS_FILE
+        links.write_text(json.dumps({scope: {'project': project_id, 'session': cloud_session}}))
+        payload = conversation('unused', messages=[
+            {'role': 'user', 'content': 'This was sent on the web.'},
+            {'role': 'assistant', 'content': 'An older reply.'},
+            {'role': 'user', 'content': 'This was sent from Desktop.'},
+        ])
+        commands = []
+
+        def open_socket(*_args, **_kwargs):
+            def send(command):
+                commands.append(command)
+                sock.events = iter([
+                    {'kind': 'text', 'role': 'assistant', 'content': 'Same conversation.', 'sessionId': cloud_session},
+                    {'kind': 'complete', 'exitCode': 0, 'sessionId': cloud_session},
+                ])
+            sock = ChatSocketFixture(send)
+            return sock
+
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(open_socket, OSError)):
+            self.cloud.running_since = 123
+            self.assertEqual(self.request(payload, session=scope)[0], 409)
+            self.cloud.running_since = None
+            self.cloud.existing_session['project']['isArchived'] = True
+            self.assertEqual(self.request(payload, session=scope)[0], 409)
+            self.cloud.existing_session['project']['isArchived'] = False
+            status, reply = self.request(payload, session=scope)
+            self.assertEqual(status, 200, reply)
+            self.assertIn('Same conversation.', json.dumps(reply))
+            self.assertEqual(self.request(payload, session=scope), (status, reply))
+            follow_up = conversation('unused', messages=[
+                *payload['messages'], {'role': 'assistant', 'content': reply['content']},
+                {'role': 'user', 'content': 'Another Desktop message.'},
+            ])
+            self.assertEqual(self.request(follow_up, session=scope)[0], 200)
+            links.unlink()
+            removed = conversation('unused', messages=[
+                *payload['messages'][:-1], {'role': 'user', 'content': 'Try after removing the mapping.'},
+            ])
+            self.assertEqual(self.request(removed, session=scope)[0], 409)
+        self.assertEqual([(entry['type'], entry['sessionId'], entry['content']) for entry in commands], [
+            ('chat.send', cloud_session, 'This was sent from Desktop.'),
+            ('chat.send', cloud_session, 'Another Desktop message.'),
+        ])
+        self.assertEqual(self.cloud.created_sessions, [])
+        self.assertEqual(self.cloud.registered_projects, [])
+        self.assertEqual(self.cloud.requests, [])
+
     def test_grouped_chat_keeps_its_project_when_resumed_after_gateway_restart(self):
         first = conversation('First task', system=desktop_environment('/Users/example/First'))
         status, response = self.request(first)
@@ -803,15 +1119,18 @@ class CloudCLIGatewayTests(unittest.TestCase):
             {'value': MODEL, 'label': 'Fixture Haiku', 'effort': {'values': [
                 {'value': 'medium'}, {'value': 'low'}, {'value': 'ultracode'}, {'value': 'medium'},
             ]}},
-            {'value': 'claude-fable-5-1', 'label': 'Outside the gateway allowlist'},
+            {'value': 'claude-fable-5-1', 'label': 'Additional provider model'},
         ]
         self.save_config()
         self.start_gateway()
         status, models = self.request(path='/v1/models')
         self.assertEqual(status, 200)
-        self.assertEqual(len(models['data']), 1)
-        self.assertEqual(models['data'][0]['display_name'], 'Fixture Haiku')
-        self.assertEqual(models['data'][0]['supported_effort_levels'], ['low', 'medium', 'ultracode'])
+        options = {row['id']: row for row in models['data']}
+        self.assertEqual(set(options), {'haiku', MODEL, 'claude-fable-5-1'})
+        self.assertEqual(options[MODEL]['display_name'], 'Fixture Haiku')
+        self.assertEqual(options[MODEL]['supported_effort_levels'], ['low', 'medium', 'ultracode'])
+        restricted = self.manager.cloudcli.catalog(allowed_models=[MODEL])
+        self.assertEqual([row['id'] for row in restricted['data']], [MODEL])
         self.assertEqual(self.request(path='/v1/models'), (200, models))
         self.assertFalse(self.cloud.requests)
         self.assertEqual(self.cloud.model_requests, ['Bearer fixture.web.token'])
@@ -1576,7 +1895,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                                                            context=ssl._create_unverified_context())
                         try:
                             conn.request(method, path, b'{}' if method == 'POST' else None,
-                                         {'Authorization': 'Bearer '+key})
+                                         {'Authorization': 'Bearer '+key, 'X-SafeCode-Client':'safecode-desktop'})
                             response = conn.getresponse()
                             self.assertEqual(response.status, 503)
                             response.read()
@@ -1589,6 +1908,18 @@ class CloudCLIGatewayTests(unittest.TestCase):
                     worker.join()
         self.assertFalse(self.cloud.requests)
         self.assertNoNativeFallback()
+
+    def paired_public_headers(self, public, token):
+        owner = hashlib.sha256(token.encode()).hexdigest()
+        client = 'a'*20
+        public.owner_hosts.home = self.home
+        tunnel = self.home/'.ssh/safe-code-host'/client
+        tunnel.mkdir(parents=True, exist_ok=True)
+        (tunnel/'config').write_text(f'# Safe Code host bridge {client}\nHost fixture\n  HostName 127.0.0.1\n  Port 45300\n')
+        (tunnel/'identity.pub').write_text('ssh-ed25519 fixture')
+        binding = public.owner_hosts.bind(owner, client, 'Fixture device')
+        return {'Authorization':'Bearer '+token, 'X-SafeCode-Client':'safecode-desktop',
+                'X-SafeCode-Device':binding['deviceId'], 'X-SafeCode-Device-Proof':binding['deviceProof']}
 
     def test_public_key_model_permissions_expiry_and_renewal(self):
         self.use_automatic_models(web_catalog=True)
@@ -1603,7 +1934,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         key, legacy = 'a'*43, 'b'*43
         digest, legacy_digest = (hashlib.sha256(value.encode()).hexdigest() for value in (key, legacy))
         (state/'keys'/legacy_digest).touch()
-        public = public_gateway.PublicServer(state, {'bind': '127.0.0.1', 'port': 0, 'publicOrigin': 'https://fixture.test'})
+        public = public_gateway.PublicServer(state, {'bind': '127.0.0.1', 'port': 0, 'deviceFrpPort':45300,'publicOrigin': 'https://fixture.test'})
         self.start(public)
         public.manage({'action': 'enable_public', 'accepted': True})
 
@@ -1611,7 +1942,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
             return public.manage({'action': action, **args})
 
         with patch.object(public_gateway, 'make_key', return_value=('sc2.fixture', digest)), \
-                patch.object(public_gateway, 'valid_activation_code', return_value=True):
+                patch.object(public_gateway, 'valid_activation_code', return_value=True), \
+                patch.object(public_gateway, 'device_service_problem', return_value=None):
             with self.assertRaisesRegex(ValueError, '至少选择'):
                 manage('issue', allowed_models=[])
             with self.assertRaisesRegex(ValueError, '失效时间'):
@@ -1619,11 +1951,13 @@ class CloudCLIGatewayTests(unittest.TestCase):
             expiry = int(time.time())+3600
             manage('issue', note='policy', expires_at=expiry, allowed_models=['fable', 'fable'])
 
+        paired = self.paired_public_headers(public, key)
+
         def request(path, model=None, token=key, beta=None):
             connection = http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=4,
                                                      context=ssl._create_unverified_context())
             with closing(connection):
-                headers = {'Authorization': 'Bearer '+token}
+                headers = paired.copy() if token == key else {'Authorization':'Bearer '+token, 'X-SafeCode-Client':'safecode-desktop'}
                 if beta:
                     headers['anthropic-beta'] = beta
                 connection.request('GET' if model is None else 'POST', path,
@@ -1689,14 +2023,14 @@ class CloudCLIGatewayTests(unittest.TestCase):
                        check=True, capture_output=True, timeout=5)
         public = public_gateway.PublicServer(state, {'bind': '127.0.0.1', 'port': 0, 'deviceFrpPort': 45300})
         public.devices = public_gateway.Devices(state, home=state)
-        public.devices.set_access(key, True)
         self.start(public)
 
         def request(path, data, platform='windows'):
             with closing(http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=4,
                                                       context=ssl._create_unverified_context())) as connection:
                 connection.request('POST', path, json.dumps(data), {'Authorization':'Bearer '+token,
-                                                                   'X-SafeCode-Platform':platform})
+                                                                   'X-SafeCode-Platform':platform,
+                                                                   'X-SafeCode-Client':'safecode-desktop'})
                 reply = connection.getresponse()
                 return reply.status, json.loads(reply.read())
 
@@ -1734,11 +2068,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.start(public)
         public.manage({'action':'set_key_queue','enabled':True})
         public.queue.key_idle_seconds = .08
+        paired = self.paired_public_headers(public, tokens[1])
         with closing(http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=9,
                                                   context=ssl._create_unverified_context())) as connection:
             with public.queue.slot(keys[0]):
                 connection.request('POST', '/v1/messages', json.dumps(conversation('Wait politely.',stream=True)),
-                                   {'Authorization':'Bearer '+tokens[1]})
+                                   paired)
                 reply = connection.getresponse()
                 self.assertEqual(reply.status,200)
                 self.assertEqual(reply.readline(),b'event: ping\n')
@@ -1764,10 +2099,12 @@ class CloudCLIGatewayTests(unittest.TestCase):
         public = public_gateway.PublicServer(state, {'bind': '127.0.0.1', 'port': 0})
         self.start(public)
 
+        paired = self.paired_public_headers(public, key)
+
         def request(payload, path='/v1/messages'):
             with closing(http.client.HTTPSConnection('127.0.0.1', public.server_port, timeout=4,
                                                       context=ssl._create_unverified_context())) as connection:
-                connection.request('POST', path, json.dumps(payload), {'Authorization': 'Bearer '+key})
+                connection.request('POST', path, json.dumps(payload), paired)
                 reply = connection.getresponse()
                 return reply.status, json.loads(reply.read())
 
@@ -1781,7 +2118,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             public.manage(settings)
         secret = 'separate-review-fixture-key'
         updated = public.manage({**settings, 'deepseek_key': secret})
-        self.assertEqual(updated, {'enabled': True, 'provider': 'deepseek', 'model': 'sonnet',
+        self.assertEqual(updated, {'enabled': True, 'provider': 'deepseek', 'model': 'deepseek-v4-flash',
                                    'has_deepseek_key': True, 'builtin_available': False, 'language_replacement': False})
         self.assertNotIn(secret, json.dumps(public.manage({'action': 'list'})))
         config_path = state/'prompt-review.json'
@@ -1853,44 +2190,18 @@ class CloudCLIGatewayTests(unittest.TestCase):
             connect.assert_not_called()
         self.assertNoNativeFallback()
 
-    def test_builtin_prompt_review_uses_tool_denied_cloudcli_chat_and_cleans_up(self):
-        self.enable_cloudcli_web_fixture()
-        backend = self.manager.cloudcli
-        reviewer = public_gateway.PromptReviewer(self.working_state, backend.config)
-        actions = []
-
-        def run(model, frames, translate=False):
-            reviewer.update({'enabled': True, 'provider': 'builtin', 'model': model,
-                             'language_replacement': translate}, public_gateway.atomic_write)
-            events = ({**event, 'sessionId': CLOUD_SESSION} for event in frames)
-            with patch.object(gateway, 'cloudcli_websocket', return_value=(
-                    lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
-                return reviewer('在当前项目运行测试。')
-
-        run('sonnet', [{'kind': 'text', 'role': 'assistant', 'content': '{"verdict":"allow"}'},
-                       {'kind': 'complete', 'exitCode': 0}])
-        message, = actions
-        self.assertEqual(message['options']['model'], 'sonnet')
-        self.assertEqual(message['options']['permissionMode'], 'dontAsk')
-        self.assertEqual(message['options']['toolsSettings'], {'allowedTools': [], 'disallowedTools': ['*'], 'skipPermissions': False})
-        self.assertEqual(message['options']['attachments'], [])
-        project = Path(self.cloud.created_sessions[0]['projectPath'])
-        self.assertEqual(json.loads((project/'.claude/settings.json').read_text())['permissions'], {'deny': ['*']})
-
-        english = 'Run tests in the current project.'
-        self.assertEqual(run('opus', [
-            {'kind': 'text', 'role': 'assistant', 'content': json.dumps({'verdict': 'allow', 'english': english})},
-            {'kind': 'complete', 'exitCode': 0},
-        ], translate=True), english)
-        self.assertEqual(actions[-1]['options']['model'], 'opus')
-        self.assertIn('faithful English translation', actions[-1]['content'])
-        with self.assertRaisesRegex(gateway.CloudCliError, '前置审查暂时不可用'):
-            run('opus', [{'kind': 'tool_use', 'toolName': 'FixtureTool'}])
-        self.assertEqual(actions[-2]['options']['model'], 'opus')
-        self.assertEqual(actions[-1], {'type': 'chat.abort', 'sessionId': CLOUD_SESSION})
-        self.assertEqual(self.cloud.deleted_sessions, [f'/api/providers/sessions/{CLOUD_SESSION}?force=true&deletedFromDisk=true'] * 3)
-        self.assertFalse(self.cloud.requests)
-        self.assertNoNativeFallback()
+    def test_legacy_builtin_review_requires_explicit_deepseek_setup(self):
+        saved = {'enabled': True, 'provider': 'builtin', 'model': 'sonnet', 'deepseek_key': 'old-unused-secret'}
+        public_gateway.atomic_write(self.working_state/'prompt-review.json', json.dumps(saved))
+        reviewer = public_gateway.PromptReviewer(self.working_state, None)
+        with patch('prompt_review.HTTPSConnection') as network:
+            with self.assertRaises(gateway.CloudCliError):
+                reviewer('private prompt')
+            network.assert_not_called()
+        self.assertTrue(reviewer.status()['enabled'])
+        self.assertFalse(reviewer.status()['has_deepseek_key'])
+        with self.assertRaises(ValueError):
+            reviewer.update(saved, public_gateway.atomic_write)
 
     def test_desktop_title_request_does_not_start_cloud_agent(self):
         title = ('You are coming up with a succinct title and git branch name for a coding session '
@@ -2258,6 +2569,21 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertIn('Windows 的后续命令已返回结果', visible)
         self.assertIn('2 项操作未成功', visible)
 
+    def test_remote_outputs_render_only_text_once_and_stay_bounded(self):
+        progress = gateway.CloudCliProgress(None, None)
+        progress.feed({'kind': 'tool_use', 'toolName': 'Bash', 'toolId': 'remote'})
+        result = {'kind': 'tool_result', 'toolId': 'remote', 'isError': True, 'content': json.dumps([
+            {'type': 'image', 'source': {'data': 'opaque-image-data'}},
+            {'type': 'text', 'text': 'first line\n' + 'x'*3000 + 'hidden tail'}
+        ])}
+        progress.feed(result)
+        progress.feed(result)
+        visible = progress.finish()[0]['text']
+        self.assertEqual(visible.count('`Bash` 失败'), 1)
+        self.assertEqual(visible.count('first line'), 1)
+        self.assertNotIn('opaque-image-data', visible)
+        self.assertNotIn('hidden tail', visible)
+
     def test_status_and_compact_activity_without_streaming(self):
         first = 'Inspect sample data.'
         self.cloud.reply = (200, [
@@ -2294,11 +2620,11 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(visible.count('Fixture reply'), 1)
         self.assertEqual(visible.count('正在执行工具操作'), 1)
         for expected in ('Earlier context was trimmed.', 'Provider setup complete', '/compact', 'Compaction started',
-                         'Command output', '工具调用 2 次', '后台任务 1 项', '其中 1 项操作未成功', '125 / 1,000',
+                         'Command output', 'Sample workflow finished', '工具调用 2 次', '后台任务 1 项', '其中 1 项操作未成功', '125 / 1,000',
                          'different_new_event'):
             self.assertIn(expected, visible)
         for detail in ('Sample subagent thought', 'sample.txt', 'Sample file output', 'Sample agent answer',
-                       'Another partial child reply', 'fixture agent', 'Sample workflow finished',
+                       'Another partial child reply', 'fixture agent',
                        'Fixture opaque payload', 'opaque-fixture-image'):
             self.assertNotIn(detail, visible)
         self.cloud.reply = (200, cloud_turn('Follow-up reply'))

@@ -27,15 +27,6 @@
       </div>
       <footer class="dialog-footer"><button type="button" data-mg-close>关闭</button></footer>
     </section>
-    <form data-step="activate" hidden>
-      <div class="dialog-content">
-        <label>登记激活码<input name="code" type="password" maxlength="64" required autocomplete="off" spellcheck="false"></label>
-        <label>网关备注<input name="name" maxlength="60" required></label>
-        <label>服务器 IP<input name="address" required></label>
-        <p data-notice class="notice" role="status" hidden></p>
-      </div>
-      <footer class="dialog-footer"><button type="button" data-mg-close>取消</button><button type="submit" class="primary">联网登记</button></footer>
-    </form>
     <form data-step="create" hidden>
       <div class="dialog-content">
         <label>激活码<input name="code" type="password" maxlength="64" required autocomplete="off" spellcheck="false" placeholder="粘贴激活码"></label>
@@ -74,11 +65,9 @@
   const find = (query) => dialog.querySelector(query);
   let directory;
   let reviewToken = '';
-  let needsEnrollment = false;
-  let afterEnrollment = 'home';
   let busy = false;
   const steps = [...dialog.querySelectorAll('[data-step]')];
-  const titles = {loading: '多网关管理', home: '多网关管理', activate: '登记网关', create: '生成绑定码',
+  const titles = {loading: '多网关管理', home: '多网关管理', create: '生成绑定码',
     review: '确认使用激活码', issued: '绑定码已生成', pair: '绑定设备'};
   const remoteMatch = /^#gateway=([a-f0-9]{32})$/.exec(location.hash);
   const pageGateway = remoteMatch?.[1] || (location.hash === '#gateways' ? 'all' : 'local');
@@ -182,9 +171,9 @@
   async function load() {
     directory = await call('multi.list');
     select.replaceChildren(
-      new Option('本机网关 · ' + directory.self.address, 'local'),
+      new Option('本机网关 · ' + (directory.self.address || directory.self.name), 'local'),
       ...(directory.children.length ? [new Option('全部网关', 'all')] : []),
-      ...directory.children.map((entry) => new Option(entry.name + ' · ' + entry.address, entry.id)),
+      ...directory.children.map((entry) => new Option([entry.name, entry.address].filter(Boolean).join(' · '), entry.id)),
     );
     if ([...select.options].some(option => option.value === pageGateway)) {
       select.value = pageGateway;
@@ -218,8 +207,6 @@
   }
   select.addEventListener('change', () => openGateway(select.value));
   gear.addEventListener('click', async () => {
-    afterEnrollment = 'home';
-    needsEnrollment = false;
     show('loading');
     dialog.showModal();
     note('正在读取授权状态…');
@@ -227,13 +214,14 @@
       await load();
       if (!dialog.open) return;
       const context = find('.mg-context');
-      context.textContent = '操作网关 · 本机 ' + directory.self.address;
+      context.textContent = '操作网关 · 本机 ' + (directory.self.address || directory.self.name);
       context.hidden = false;
       show('home');
     } catch (error) {
       if (error.status === 401) {
-        needsEnrollment = true;
-        show('home');
+        if (Number.isInteger(snapshot?.gatewayRevision) && snapshot.gatewayRevision < 34) {
+          note('请先在网关设置中更新网关，再使用多网关绑定。', true);
+        } else show('home');
       } else {
         const older = Number.isInteger(snapshot?.gatewayRevision) && snapshot.gatewayRevision < 29;
         note(older ? '请先回到网关设置，点击「更新网关」，再打开多网关管理。' : error.message, true);
@@ -245,11 +233,7 @@
     button.addEventListener('click', () => {
       if (!busy) {
         reviewToken = '';
-        if (needsEnrollment && ['create', 'pair'].includes(button.dataset.next)) {
-          afterEnrollment = button.dataset.next;
-          show('activate');
-          note('首次使用前，请先用登记激活码登记本机网关。');
-        } else show(button.dataset.next);
+        show(button.dataset.next);
       }
     });
   }
@@ -258,16 +242,6 @@
   }
   dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
 
-  submit('activate', async form => {
-    await call('multi.activate', Object.fromEntries(new FormData(form)));
-    form.reset();
-    await load();
-    const context = find('.mg-context');
-    context.textContent = '操作网关 · 本机 ' + directory.self.address;
-    context.hidden = false;
-    needsEnrollment = false;
-    show(afterEnrollment);
-  });
   submit('create', async form => {
     const result = await call('multi.inspect', {code: form.elements.code.value.trim()});
     reviewToken = result.review;

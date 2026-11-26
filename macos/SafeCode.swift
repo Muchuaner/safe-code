@@ -4,7 +4,7 @@ import Security
 import UserNotifications
 
 private let bundleID = "org.safecode.desktop"
-private let safeCodeVersion = "0.4.17"
+private let safeCodeVersion = "0.4.21"
 private enum AppError: LocalizedError {
     case message(String)
     case keychainCancelled
@@ -421,7 +421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case "pickFolder":let picker=NSOpenPanel();picker.title="选择要挂载到 VPS 的本机目录";picker.canChooseFiles=false;picker.canChooseDirectories=true;picker.allowsMultipleSelection=false;picker.beginSheetModal(for:dialogHost){[weak self] result in self?.answer(id,result == .OK ? picker.url?.path ?? "":NSNull())}
         case "services.open":openServices();answer(id,true)
         case "window.gateway.open":openGateway(id)
-        case "connect","preview.begin":
+        case "connect","preview.begin","connection.disconnect":
             guard !gatewayMutationPending && !gatewayOpening else{answer(id,error:"请等待当前网关操作完成。");return}
             gatewayWindow?.close()
             send(body)
@@ -515,7 +515,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
 
         func launch() {
-            request("claudeDesktop.prepare",deadline:(30,"检查本机网关超时，请确认 SafeCode 接入状态。")){result in
+            let freshLaunch = NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).allSatisfy { $0.isTerminated }
+            request("claudeDesktop.prepare",["syncHistory":freshLaunch],
+                    deadline:(freshLaunch ? 660 : 30,"桌面启动检查或历史同步超时，请确认 SafeCode 接入状态。")){result in
                 guard case .success(let value)=result,let since=value as? NSNumber else {
                     if case .failure(let error)=result {self.answer(id,error:error.localizedDescription)}
                     else {self.answer(id,error:"未能确认 SafeCode 网关状态。")}
@@ -704,7 +706,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
         guard let context=gatewayContext else{reply(.failure(AppError.message("SSH 会话已变更，请重新打开网关管理。")));return}
         guard !gatewayMutationPending else{reply(.failure(AppError.message("请等待当前网关操作完成。")));return}
-        let modifies=["issue","update","unbind","revoke","delete","set_port","set_origin","set_concurrency","set_prompt_review","set_key_queue","refresh_ticket","multi.activate","multi.create","multi.claim","multi.remove"].contains(action)
+        let modifies=["issue","update","unbind","revoke","delete","set_port","set_origin","set_concurrency","set_prompt_review","set_key_queue","refresh_ticket","multi.create","multi.claim","multi.remove"].contains(action)
         if modifies {gatewayMutationPending=true}
         var options=args
         options["action"]=action
@@ -1006,15 +1008,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           showScreen('workspace');switchMode('maintenance');
           document.querySelector('#server-ingress').textContent='192.0.2.42';
           document.querySelector('#server-address').textContent='198.51.100.27';
-          const username=document.querySelector('#server-user');
-          username.textContent='demo';
-          document.querySelector('.server-metadata').replaceChildren(username,document.createTextNode(' / Ubuntu 24.04 / SSH'));
           document.querySelector('#resource-cpu').textContent='2.6 %';
           document.querySelector('#resource-memory').textContent='1.2 / 1.9 G';
           document.querySelector('#resource-disk').textContent='18.3 / 29.4 G';
           document.querySelector('#update-login-password').hidden=false;
+          document.querySelector('#disconnect-server').hidden=false;
           document.querySelector('#host-state').textContent='已连接';
-          document.querySelector('#claude-desktop-state').textContent='已接入';
           document.querySelector('#claude-gateway-status').textContent='Claude 已接入';
           document.querySelector('#claude-gateway-status').classList.remove('inactive');
           await waitFor(()=>innerWidth===740,'home window width');

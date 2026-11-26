@@ -307,7 +307,7 @@ internal sealed class MacBackend : IDisposable
                 request.Remove("context"); // The verified window token is local to the Mac backend.
                 return await gatewaySession.ManagePublicGatewayAsync(request,ct);
             case "codex.open":return await MacClients.OpenLocalClientAsync("Codex",ct);
-            case "claudeDesktop.prepare":return await KeyAccess().PrepareLaunchAsync(ct);
+            case "claudeDesktop.prepare":return await KeyAccess().PrepareLaunchAsync(ct,syncHistory:Flag("syncHistory"));
             case "host.status":return keyDeviceTunnel?.Status(hostControl?.Enabled==true)??hostControl?.Status??new(false,"disabled","","","未启用；需先开启 macOS 系统远程登录");
             case "host.enable":
                 if(!Flag("riskAccepted"))throw new InvalidOperationException("请先阅读并确认本机远程控制权限说明。");
@@ -374,6 +374,19 @@ internal sealed class MacBackend : IDisposable
             case "notice.state":return new{accepted=File.Exists(Path.Combine(directory,"notice-accepted-v2"))||services.NoticeWasConfirmed};
             case "notice.accept":File.WriteAllText(Path.Combine(directory,"notice-accepted-v2"),DateTimeOffset.UtcNow.ToString("O"));return true;
             case "connection.cancel":connecting?.Cancel();challenge=null;return true;
+            case "connection.disconnect":
+                if(activeMutations>0||Interlocked.CompareExchange(ref connectionPending,1,0)!=0)
+                    throw new InvalidOperationException("请等待当前操作完成后再退出登录。");
+                try
+                {
+                    if(session is {HasMounts:true} mounted)await mounted.UnmountAsync(ct);
+                    if(keyAccess?.ReusesHostControl==true)await keyAccess.StopAsync();
+                    if(hostControl?.Enabled==true)await hostControl.DisableAsync(ct);
+                    session?.Dispose();
+                    session=null;challenge=null;gatewayContext=null;gatewayObservation=null;keyStartedHost=null;
+                    return true;
+                }
+                finally{Interlocked.Exchange(ref connectionPending,0);}
             case "host.trust":
                 if(challenge is not {} current||current.Token!=Read("token"))throw new InvalidOperationException("服务器身份确认已失效。");
                 new HostTrustStore(directory).Accept(current.Key);challenge=null;return true;

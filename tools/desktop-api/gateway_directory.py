@@ -7,16 +7,17 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from urllib.parse import urlsplit
 
 AUTHORITY = 'safecode.tommukan.dpdns.org'
 DIRECTORY = {
     'multi.list': ('/v1/list', ()),
-    'multi.activate': ('/v1/activate', ('code', 'name', 'address')),
     'multi.inspect': ('/v1/pair/inspect', ('code',)),
     'multi.create': ('/v1/pair/create', ('review',)),
     'multi.claim': ('/v1/pair/claim', ('code',)),
@@ -157,13 +158,19 @@ class GatewayDirectory:
         if set(request) != set(fields) | {'action'}:
             raise DirectoryError(400, '绑定参数不正确。')
         if action == 'multi.list' and not (self.folder / 'identity.json').exists():
-            raise DirectoryError(401, '请先登记本机网关。')
+            raise DirectoryError(401, '本机网关尚未绑定。')
         data = {field: request[field] for field in fields}
-        if action == 'multi.activate':
-            data['public_key'] = base64.b64encode(public_bytes(self.keys()[1], der=True)).decode()
+        marker = self.folder / 'registered'
+        first_use = action in ('multi.inspect', 'multi.claim') and not marker.exists()
+        if first_use:
+            settings = self.manage({'action': 'settings'})
+            data.update(public_key=base64.b64encode(public_bytes(self.keys()[1], der=True)).decode(),
+                        name=socket.gethostname()[:60],
+                        address=settings.get('publicIp') or urlsplit(settings.get('origin') or '').hostname or '')
+            path = path.replace('/pair/', '/pair/first-')
         value = self.post(path, data)
-        if action in ('multi.activate', 'multi.list'):
-            (self.folder / 'registered').touch(mode=0o600, exist_ok=True)
+        if first_use or action == 'multi.list':
+            marker.touch(mode=0o600, exist_ok=True)
             self.start()
         return {'value': value}
 

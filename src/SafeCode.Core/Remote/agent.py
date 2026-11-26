@@ -1125,10 +1125,10 @@ API_STATE='.local/state/safe-code-desktop-api'
 
 def safe_code_api(options):
     action=options.get('action')
-    multi = action in ('multi.activate', 'multi.list', 'multi.inspect', 'multi.create', 'multi.claim', 'multi.remove')
+    multi = action in ('multi.list', 'multi.inspect', 'multi.create', 'multi.claim', 'multi.remove')
     remote = 'gateway_target' in options
     if action not in ('list','usage','issue','update','unbind','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
-                      'ticket_endpoint','key_host_reuse','bind_ssh_device','model_catalog','set_prompt_review','set_key_queue','repair') and not multi:
+                      'ticket_endpoint','key_host_reuse','bind_ssh_device','model_catalog','project_catalog','set_prompt_review','set_key_queue','repair','repair_cloudcli_login') and not multi:
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
@@ -1148,6 +1148,8 @@ def safe_code_api(options):
         return install_safe_code_api(entry, command, options, work_python)
     if action=='repair':
         return repair_safe_code_api(entry, command, options, work_python)
+    if action=='repair_cloudcli_login':
+        return repaired_cloudcli_login(work_python, options.get('port'))
     if not script.is_file():
         if action=='public_status':
             return {'installed':False,'enabled':False,
@@ -1156,7 +1158,7 @@ def safe_code_api(options):
     if action == 'public_status':
         status = safe_code_api_admin(command, options)
         return {**status, 'cloudcliConfigured':(Path(entry.pw_dir)/'.config/safe-code/cloudcli-gateway.json').is_file()}
-    if action == 'model_catalog':
+    if action in ('model_catalog', 'project_catalog'):
         return safe_code_api_admin(command, options, timeout=27)
     if action in ('enable_public', 'issue', 'key_host_reuse', 'bind_ssh_device'):
         status = safe_code_api_admin(command, {'action':'public_status'})
@@ -1332,6 +1334,48 @@ def repair_safe_code_api(entry, command, options, work_python):
             return replace_gateway_programs(entry,command,source,state,work_python,revision,
                                             (cloud,cloud_unit,cloud_script) if with_cloud else None)
 
+# Use the installed Safe Code module under the work account so the same private-file and
+# credential checks apply. Print only the outcome and the verified web login over SSH.
+REPAIRED_CLOUDCLI_LOGIN = r"""
+import json
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from desktop_gateway import GatewayError, cloudcli_web_login, load_cloudcli_config
+
+
+def read_login(port):
+    config = load_cloudcli_config()
+    login = config['desktopQuestions'] if config and config['port'] == port else None
+    if not login or 'password' not in login:
+        return {'state': 'unavailable'}
+    try:
+        cloudcli_web_login(port, login)
+    except GatewayError:
+        return {'state': 'unverified'}
+    return {'state': 'verified', **login}
+
+
+try:
+    print(json.dumps(read_login(int(sys.argv[2]))))
+except GatewayError:
+    print(json.dumps({'state': 'unavailable'}))
+"""
+
+
+def repaired_cloudcli_login(work_python, port):
+    # Never write a credential response into a repair job's result or log files.
+    if JOB_DIR is not None or type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('CloudCLI 登录信息只能在重装完成后读取。')
+    try:
+        checked = run([*work_python, '-IB', '-c', REPAIRED_CLOUDCLI_LOGIN, str(API_DIRECTORY), str(port)],
+                      check=False, timeout=12)
+        if checked.returncode == 0:
+            return json.loads(checked.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return {'state': 'unavailable'}
+
 def provision_gateway_devices(entry, state):
     run(['/usr/bin/python3','-B',str(API_DIRECTORY/'device_service.py'),
          entry.pw_name,str(API_DIRECTORY),str(state)],timeout=250)
@@ -1395,12 +1439,14 @@ def replace_gateway_programs(entry, command, source, state, work_python, revisio
         deadline=time.monotonic()+20
         while time.monotonic()<deadline:
             try:
+                cloud_check = {}
                 if cloud_install:
-                    run([*work_python,'-B',str(API_DIRECTORY/'configure_cloudcli.py'),'--check-cloudcli',port],timeout=5)
+                    probe = run([*work_python,'-B',str(API_DIRECTORY/'configure_cloudcli.py'),'--check-cloudcli',port],timeout=5)
+                    cloud_check = {'cloudcliPort': int(port), 'cloudcliNeedsSetup': json.loads(probe.stdout)['needsSetup']}
                 status=safe_code_api_admin(command,{'action':'public_status'},timeout=3)
                 if status.get('backend')=='cloudcli' and status.get('gatewayRevision')==revision:
                     log('网关重装完成，服务检查通过。')
-                    return {**status,'cloudcliReinstalled':bool(cloud_install)}
+                    return {**status, 'cloudcliReinstalled': bool(cloud_install), **cloud_check}
             except (RuntimeError,subprocess.TimeoutExpired):
                 pass
             time.sleep(.5)
@@ -1557,7 +1603,7 @@ def upgrade_safe_code_api(command, source, rollback_config, entry):
         try:
             provision_gateway_devices(entry,Path(entry.pw_dir)/API_STATE)
         except (OSError,RuntimeError,subprocess.TimeoutExpired):
-            log('私有设备服务尚未就绪，普通 API 可继续使用。请在网关设置中运行故障修复。')
+            log('设备服务尚未就绪。请在网关设置中运行故障修复后配对设备。')
         run(['systemctl','restart',API_UNIT.name],timeout=30)
         deadline = time.monotonic()+8
         while time.monotonic()<deadline:

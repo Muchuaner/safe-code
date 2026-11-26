@@ -491,7 +491,10 @@ async function loadSnapshot(showProgress) {
   try {
     const fetchAnalytics = showProgress || loadedAnalyticsPeriod !== analyticsPeriod || Date.now() - analyticsRefreshedAt >= 10000;
     const period = activeView === 'analytics' && fetchAnalytics ? analyticsPeriod : undefined;
-    snapshot = await manage('list', {details: true, background: !showProgress, ...(period && {analytics: period})});
+    snapshot = await manage('list', {
+      details: true, background: !showProgress, ...(period && {analytics: period}),
+      ...(!gatewayTarget && {include_project_bindings: true}),
+    });
     if (period) {
       loadedAnalyticsPeriod = period;
       analyticsData = snapshot.analytics;
@@ -595,16 +598,99 @@ function renderPolicyFields() {
 modelPolicy.onchange = expiryPolicy.onchange = renderPolicyFields;
 byId('reload-models').onclick = loadModelOptions;
 
+const projectSettings = byId('project-settings');
+const projectBindings = byId('project-bindings');
+const desktopPolicy = byId('desktop-policy');
+const developerMode = byId('developer-mode');
+const rawMessages = byId('raw-messages');
+developerMode.onchange = () => {
+  byId('raw-messages-field').hidden = !developerMode.checked;
+  if (!developerMode.checked) rawMessages.checked = false;
+};
+let projectCatalog = null;
+let projectCatalogPending = false;
+
+function bindingValues() {
+  return [...projectBindings.children].map(row => ({
+    project_id: row.querySelector('select').value,
+    directory: row.querySelector('input').value.trim(),
+  }));
+}
+
+function addProjectBinding(binding = {project_id: '', directory: ''}) {
+  const row = element('div', null, 'project-binding');
+  const choiceLabel = element('label', 'CloudCLI 项目');
+  const choice = element('select');
+  const options = new Map(projectCatalog?.map(project => [project.project_id, project.name + ' · ' + project.path]));
+  if (binding.project_id && !options.has(binding.project_id)) {
+    options.set(binding.project_id, binding.name || binding.project_id);
+  }
+  choice.add(new Option('选择已有项目', ''));
+  for (const [id, label] of options) choice.add(new Option(label, id));
+  choice.value = binding.project_id;
+  choiceLabel.append(choice);
+  const pathLabel = element('label', 'Mac 上的 Code 工作目录');
+  const path = element('input');
+  path.placeholder = '/Users/用户名/项目目录';
+  path.spellcheck = false;
+  path.value = binding.directory;
+  pathLabel.append(path);
+  const remove = element('button', '移除绑定');
+  remove.type = 'button';
+  remove.onclick = () => { row.remove(); };
+  row.append(choiceLabel, pathLabel, remove);
+  projectBindings.append(row);
+}
+
+async function loadProjectCatalog() {
+  if (projectCatalogPending) return;
+  const epoch = editorEpoch;
+  projectCatalogPending = true;
+  byId('reload-projects').hidden = true;
+  notice('project-status', '正在读取 CloudCLI 项目…');
+  try {
+    const {projects} = await manage('project_catalog');
+    if (!editor.open || epoch !== editorEpoch) return;
+    const current = bindingValues();
+    projectCatalog = projects;
+    projectBindings.replaceChildren();
+    for (const binding of current) {
+      addProjectBinding({...editingKey?.project_bindings?.find(item => item.project_id === binding.project_id), ...binding});
+    }
+    byId('add-project').hidden = !projects.length;
+    notice('project-status', projects.length ? '' : 'CloudCLI 当前没有可绑定的项目。');
+  } catch (error) {
+    if (!editor.open || epoch !== editorEpoch) return;
+    notice('project-status', '无法读取项目。' + error.message, true);
+    byId('reload-projects').hidden = false;
+  } finally {
+    if (epoch === editorEpoch) projectCatalogPending = false;
+  }
+}
+
+projectSettings.ontoggle = () => {
+  if (projectSettings.open && editor.open && projectCatalog === null) void loadProjectCatalog();
+};
+byId('reload-projects').onclick = loadProjectCatalog;
+byId('add-project').onclick = () => {
+  if (projectBindings.children.length < 16) addProjectBinding();
+};
+
 function showEditor(key) {
   editingKey = key;
-  const devicePolicy = byId('device-policy');
-  devicePolicy.disabled = snapshot.device_policy_supported !== true;
-  byId('device-policy-field').hidden = devicePolicy.disabled;
-  devicePolicy.value = !key || key.device_access === true ? 'desktop' : 'api';
-  byId('device-policy-help').textContent = snapshot.device_service_problem
-    ? '设备服务尚未就绪。请在网关设置中运行故障修复，或先选择普通 API。'
-    : '桌面接入允许设备配对，使用者仍须在本机确认授权。';
   editorEpoch++;
+  projectCatalog = null;
+  projectCatalogPending = false;
+  projectSettings.open = false;
+  projectSettings.hidden = Boolean(gatewayTarget) || snapshot.project_bindings_supported !== true;
+  desktopPolicy.hidden = Boolean(gatewayTarget) || snapshot.desktop_policy_supported !== true;
+  developerMode.checked = key?.developer_mode === true;
+  rawMessages.checked = developerMode.checked && key?.raw_messages === true;
+  developerMode.onchange();
+  projectBindings.replaceChildren();
+  byId('reload-projects').hidden = byId('add-project').hidden = true;
+  notice('project-status', '');
+  for (const binding of key?.project_bindings ?? []) addProjectBinding(binding);
   catalogLoaded = catalogPending = false;
   const policySupported = snapshot.key_policy_supported === true;
   modelPolicy.disabled = expiryPolicy.disabled = !policySupported;
@@ -725,19 +811,13 @@ for (const dialog of document.querySelectorAll('dialog')) {
 byId('refresh').onclick = () => refresh();
 
 const reviewDialog = byId('prompt-review-dialog');
-const reviewProvider = byId('prompt-review-provider');
-const reviewModel = byId('prompt-review-model');
 const reviewKey = byId('prompt-review-key');
 const reviewEnabled = byId('prompt-review-enabled');
 const reviewLanguage = byId('prompt-review-language');
 function renderReviewFields() {
-  const deepseek = reviewProvider.value === 'deepseek';
   const savedKey = snapshot.prompt_review.has_deepseek_key;
-  byId('prompt-review-model-field').hidden = deepseek;
-  byId('prompt-review-builtin-note').hidden = deepseek || snapshot.prompt_review.builtin_available;
-  byId('prompt-review-key-field').hidden = !deepseek;
-  reviewKey.disabled = !deepseek;
-  reviewKey.required = deepseek && reviewEnabled.checked && !savedKey;
+  reviewKey.disabled = operationPending;
+  reviewKey.required = reviewEnabled.checked && !savedKey;
   reviewKey.placeholder = savedKey ? '已保存 · 粘贴可替换' : '粘贴 DeepSeek API Key';
   const languageSupported = typeof snapshot.prompt_review.language_replacement === 'boolean';
   reviewLanguage.disabled = !languageSupported || !reviewEnabled.checked;
@@ -747,8 +827,6 @@ function renderReviewFields() {
 }
 byId('gateway-prompt-review').onclick = () => {
   const settings = snapshot.prompt_review;
-  reviewProvider.value = settings.provider;
-  reviewModel.value = settings.model;
   reviewKey.value = '';
   reviewEnabled.checked = settings.enabled;
   reviewLanguage.checked = settings.language_replacement === true;
@@ -756,17 +834,17 @@ byId('gateway-prompt-review').onclick = () => {
   renderReviewFields();
   reviewDialog.showModal();
 };
-reviewProvider.onchange = reviewEnabled.onchange = renderReviewFields;
+reviewEnabled.onchange = renderReviewFields;
 reviewDialog.addEventListener('close', () => { reviewKey.value = ''; });
 byId('prompt-review-form').onsubmit = async event => {
   event.preventDefault();
   if (operationPending) return;
   const button = byId('save-prompt-review');
-  const options = {enabled: reviewEnabled.checked, provider: reviewProvider.value, model: reviewModel.value};
+  const options = {enabled: reviewEnabled.checked, provider: 'deepseek', model: snapshot.prompt_review.model};
   if (typeof snapshot.prompt_review.language_replacement === 'boolean') options.language_replacement = reviewLanguage.checked;
   if (options.provider === 'deepseek' && reviewKey.value.trim()) options.deepseek_key = reviewKey.value.trim();
   operationPending = true;
-  button.disabled = reviewProvider.disabled = reviewModel.disabled = reviewKey.disabled = reviewEnabled.disabled = reviewLanguage.disabled = true;
+  button.disabled = reviewKey.disabled = reviewEnabled.disabled = reviewLanguage.disabled = true;
   notice('prompt-review-status', '正在保存…');
   try {
     await refreshTask;
@@ -777,7 +855,7 @@ byId('prompt-review-form').onsubmit = async event => {
     notice('prompt-review-status', error.message, true);
   } finally {
     operationPending = false;
-    button.disabled = reviewProvider.disabled = reviewModel.disabled = reviewEnabled.disabled = false;
+    button.disabled = reviewEnabled.disabled = false;
     renderReviewFields();
   }
 };
@@ -883,6 +961,21 @@ byId('create-key').onclick = () => showEditor();
 byId('key-form').onsubmit = event => {
   event.preventDefault();
   const options = {note: byId('note').value, rpm: byId('rpm').valueAsNumber};
+  if (!desktopPolicy.hidden) {
+    options.developer_mode = developerMode.checked;
+    options.raw_messages = developerMode.checked && rawMessages.checked;
+  }
+  if (!projectSettings.hidden) {
+    const bindings = bindingValues();
+    const previous = (editingKey?.project_bindings ?? []).map(({project_id, directory}) => ({project_id, directory}));
+    if (JSON.stringify(bindings) !== JSON.stringify(previous)) {
+      if (bindings.some(binding => !binding.project_id || !binding.directory.startsWith('/'))) {
+        notice('editor-status', '请选择 CloudCLI 项目并填写 Mac 上 Code 环境的绝对路径。', true);
+        return;
+      }
+      options.project_bindings = bindings;
+    }
+  }
   if (!modelPolicy.disabled) {
     options.allowed_models = modelPolicy.value === 'selected' ? selectedModels() : null;
     if (options.allowed_models?.length === 0) {
@@ -902,10 +995,6 @@ byId('key-form').onsubmit = event => {
     options.expires_at = expiry;
   }
   void changeKey(async () => {
-    const devicePolicy = byId('device-policy');
-    const allowDevice = devicePolicy.value === 'desktop';
-    if (!devicePolicy.disabled && (!editingKey || allowDevice !== (editingKey.device_access === true)))
-      options.device_access = allowDevice;
     const budget = byId('budget');
     if (!budget.disabled) options.budget_cents = budget.value === '' ? null : Math.round(budget.valueAsNumber * 100);
     if (editingKey) {

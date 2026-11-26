@@ -308,7 +308,7 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         guard !fetching, !busy, !checkingQuota || snapshot.isEmpty else { return }
         fetching = true
         if !background && snapshot.isEmpty { showNotice("正在读取网关…") }
-        var args: [String: Any] = ["details": true, "background": background]
+        var args: [String: Any] = ["details": true, "background": background, "include_project_bindings": true]
         if selectedTab == 1 { args["analytics"] = analysis.period }
         manage("list", args) { [weak self] result in
             guard let self else { return }
@@ -725,6 +725,9 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         let modelPicker = GatewayKeyModelPicker(selected: key?["allowed_models"] as? [String]) { [weak self] reply in
             self?.manage("model_catalog", [:], reply)
         }
+        let projectPicker = GatewayKeyProjectPicker(saved: key?["project_bindings"] as? [[String: String]] ?? []) { [weak self] reply in
+            self?.manage("project_catalog", [:], reply)
+        }
         let expiry = NSDatePicker()
         expiry.datePickerStyle = .textFieldAndStepper
         expiry.datePickerElements = [.yearMonthDay, .hourMinute]
@@ -736,19 +739,19 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         let expiryControls = row([never, expiry], spacing: 6)
         expiry.isHidden = never.state == .on
         let expiryToggle = GatewayKeyExpiryToggle(button: never, datePicker: expiry)
+        let syncOptions = GatewayKeyDesktopPolicy(developer: key?["developer_mode"] as? Bool == true,
+                                                  raw: key?["raw_messages"] as? Bool == true)
         modelPicker.button.isEnabled = policySupported
         never.isEnabled = policySupported
         var fields: [(String, NSView)] = [("备注",note),("限频（次 / 分）",rpm),("累计额度（美元）",budget),
                                           ("模型管理", modelPicker.button), ("失效时间", expiryControls)]
-        let devicePolicy = NSPopUpButton()
-        devicePolicy.addItems(withTitles:["Safe Code 桌面接入","普通 API"])
-        devicePolicy.selectItem(at:key == nil || key?["device_access"] as? Bool == true ? 0 : 1)
-        let devicePolicySupported = snapshot["device_policy_supported"] as? Bool == true
-        if devicePolicySupported { fields.append(("接入用途", devicePolicy)) }
+        let desktopPolicySupported = snapshot["desktop_policy_supported"] as? Bool == true
+        if desktopPolicySupported { fields.append(("桌面同步", syncOptions.controls)) }
+        if snapshot["project_bindings_supported"] as? Bool == true { fields.append(("CloudCLI 项目", projectPicker.button)) }
         if needsActivation { fields.append(("激活码", activation)) }
         let message = !policySupported ? "请先在「网关设置」升级 VPS 网关，以设置模型权限和失效时间。" :
             snapshot["device_service_problem"] as? String != nil ?
-                "设备服务尚未就绪。请在网关设置中运行故障修复，或先选择普通 API。" : ""
+                "设备服务尚未就绪。请在网关设置中运行故障修复。" : ""
         form(key == nil ? "创建密钥":"编辑密钥", fields,message:message) { [expiryToggle] in
             let maxRate = Int(rpm.stringValue.trimmingCharacters(in: .whitespaces))
             let rawBudget = budget.stringValue.trimmingCharacters(in: .whitespaces)
@@ -761,6 +764,10 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
             var args: [String: Any] = ["note":note.stringValue.trimmingCharacters(in:.whitespacesAndNewlines),
                                        "rpm":maxRate]
             args["budget_cents"] = cents.map { NSDecimalNumber(decimal:$0).intValue as Any } ?? NSNull()
+            if desktopPolicySupported {
+                args["developer_mode"] = syncOptions.developer.state == .on
+                args["raw_messages"] = syncOptions.developer.state == .on && syncOptions.raw.state == .on
+            }
             if policySupported {
                 let models = modelPicker.allowedModels
                 guard models?.isEmpty != true else { self.showNotice("请至少选择一个允许使用的模型。"); return }
@@ -772,9 +779,12 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
                 }
                 args["expires_at"] = seconds as Any? ?? NSNull()
             }
-            let allowDevice = devicePolicy.indexOfSelectedItem == 0
-            if devicePolicySupported && (key == nil || allowDevice != (key?["device_access"] as? Bool == true)) {
-                args["device_access"] = allowDevice
+            if let bindings = projectPicker.modifiedBindings {
+                guard bindings.allSatisfy({ !$0["project_id", default: ""].isEmpty && $0["directory", default: ""].hasPrefix("/") }) else {
+                    self.showNotice("请选择 CloudCLI 项目并填写 Mac 上 Code 环境的绝对路径。")
+                    return
+                }
+                args["project_bindings"] = bindings
             }
             if needsActivation { args["activation_code"] = activation.stringValue }
             if let id = key?["id"] as? String { args["id"] = id }
@@ -784,13 +794,10 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
 
     @objc private func editPromptReview() {
         guard let settings = snapshot["prompt_review"] as? [String: Any] else { return }
-        let selection = NSPopUpButton()
-        selection.addItems(withTitles: ["内置模型 · Sonnet", "内置模型 · Opus", "DeepSeek Flash"])
-        let model = settings["model"] as? String ?? "sonnet"
-        selection.selectItem(at: settings["provider"] as? String == "deepseek" ? 2 : model == "opus" ? 1 : 0)
+        let model = NSTextField(labelWithString: "DeepSeek Flash")
         let key = NSSecureTextField()
         let hasKey = settings["has_deepseek_key"] as? Bool == true
-        key.placeholderString = hasKey ? "已保存，粘贴可替换" : "选择 DeepSeek 时填写"
+        key.placeholderString = hasKey ? "已保存，粘贴可替换" : "粘贴 DeepSeek API Key"
         let enabled = NSSwitch()
         enabled.state = settings["enabled"] as? Bool == true ? .on : .off
         let language = NSSwitch()
@@ -800,20 +807,19 @@ final class GatewayPanel: NSViewController, NSTableViewDataSource, NSTableViewDe
         enabled.action = #selector(updateReviewLanguage(_:))
         updateReviewLanguage(enabled)
         let languageSupported = settings["language_replacement"] is Bool
-        var fields: [(String, NSView)] = [("审查模型", selection), ("DeepSeek API Key", key), ("安全审查", enabled)]
+        var fields: [(String, NSView)] = [("审查模型", model), ("DeepSeek API Key", key), ("安全审查", enabled)]
         if languageSupported { fields.append(("语言替换", language)) }
-        let info = "开启语言替换后，上方模型会将通过安全审查的提示词翻译成英文。选择 DeepSeek 时，本轮文字会发送给 DeepSeek。"
+        let info = "开启审查后，本轮用户文字会发送给 DeepSeek Flash。开启语言替换后，通过审查的提示词会翻译成英文。"
         form("前置审查", fields, message: info) {
-            let deepseek = selection.indexOfSelectedItem == 2
             let secret = key.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if enabled.state == .on && deepseek && secret.isEmpty && !hasKey {
+            if enabled.state == .on && secret.isEmpty && !hasKey {
                 self.showNotice("请先填写 DeepSeek API Key，再开始审查。")
                 return
             }
-            var args: [String: Any] = ["enabled": enabled.state == .on, "provider": deepseek ? "deepseek" : "builtin",
-                                       "model": deepseek ? model : selection.indexOfSelectedItem == 1 ? "opus" : "sonnet"]
+            var args: [String: Any] = ["enabled": enabled.state == .on, "provider": "deepseek",
+                                       "model": (settings["model"] as? String ?? "sonnet")]
             if languageSupported { args["language_replacement"] = language.state == .on }
-            if deepseek && !secret.isEmpty { args["deepseek_key"] = secret }
+            if !secret.isEmpty { args["deepseek_key"] = secret }
             self.mutate("set_prompt_review", args)
         }
     }
@@ -941,6 +947,34 @@ private final class GatewayKeyExpiryToggle: NSObject {
 }
 
 @MainActor
+private final class GatewayKeyDesktopPolicy: NSObject {
+    let developer = NSButton(checkboxWithTitle: "开发者模式（自用建议打开）", target: nil, action: nil)
+    let raw = NSButton(checkboxWithTitle: "跳过网关附加提示词（不建议打开）", target: nil, action: nil)
+    let controls = NSStackView()
+
+    init(developer enabled: Bool, raw passthrough: Bool) {
+        super.init()
+        controls.orientation = .vertical
+        controls.alignment = .leading
+        controls.spacing = 5
+        controls.detachesHiddenViews = false
+        controls.addArrangedSubview(developer)
+        controls.addArrangedSubview(raw)
+        developer.state = enabled ? .on : .off
+        raw.state = passthrough ? .on : .off
+        developer.toolTip = "经 SafeCode 打开桌面 Code 时，从 CloudCLI 同步网页历史。"
+        developer.target = self
+        developer.action = #selector(update)
+        update()
+    }
+
+    @objc private func update() {
+        raw.isHidden = developer.state != .on
+        if raw.isHidden { raw.state = .off }
+    }
+}
+
+@MainActor
 private final class GatewayKeyModelPicker: NSObject {
     let button = NSButton(title: "全部模型", target: nil, action: nil)
     private let mode = NSPopUpButton()
@@ -1018,7 +1052,8 @@ private final class GatewayKeyModelPicker: NSObject {
     @objc private func changeMode() {
         let limited = allowedModels != nil
         scroll.isHidden = !limited
-        help.isHidden = !limited
+        help.isHidden = false
+        help.stringValue = limited ? "自动模型选项由 CloudCLI 解析为实际模型。" : "允许使用当前网关提供的所有模型。"
         if !limited {
             status.isHidden = true
             retry.isHidden = true
@@ -1027,7 +1062,7 @@ private final class GatewayKeyModelPicker: NSObject {
         } else {
             renderChoices()
         }
-        popover.contentSize = NSSize(width: 350, height: limited ? 300 : 58)
+        popover.contentSize = NSSize(width: 350, height: limited ? 300 : 83)
         updateSummary()
     }
 
@@ -1088,6 +1123,203 @@ private final class GatewayKeyModelPicker: NSObject {
 
     private func updateSummary() {
         button.title = allowedModels.map { $0.isEmpty ? "选择模型…" : "仅允许 \($0.count) 个模型" } ?? "全部模型"
+    }
+}
+
+@MainActor
+private final class GatewayKeyProjectPicker: NSObject {
+    let button = NSButton(title: "绑定 CloudCLI 项目", target: nil, action: nil)
+    private let popover = NSPopover()
+    private let options = NSStackView()
+    private let document = GatewayPageView()
+    private let add = GatewayButton("＋ 添加绑定", kind: .standard, target: nil, action: nil)
+    private let done = GatewayButton("完成", kind: .primary, target: nil, action: nil)
+    private let count = GatewayStyle.label("", color: GatewayStyle.muted, size: SafeCodeType.small, weight: .medium)
+    private let scroll = NSScrollView()
+    private var listHeight: NSLayoutConstraint!
+    private let status = NSTextField(wrappingLabelWithString: "")
+    private let load: (@escaping GatewayPanel.Reply) -> Void
+    private let saved: [[String: String]]
+    private var catalog: [[String: String]] = []
+    private var rows: [(view: NSView, choice: NSPopUpButton, directory: NSTextField,
+                        location: NSTextField, remove: NSButton, savedPath: String?)] = []
+    private var loading = false
+
+    var modifiedBindings: [[String: String]]? {
+        let current = rows.map { row in
+            ["project_id": row.choice.selectedItem?.representedObject as? String ?? "",
+             "directory": row.directory.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)]
+        }
+        let previous = saved.map { ["project_id": $0["project_id"] ?? "", "directory": $0["directory"] ?? ""] }
+        return current == previous ? nil : current
+    }
+
+    init(saved: [[String: String]], load: @escaping (@escaping GatewayPanel.Reply) -> Void) {
+        self.saved = saved
+        self.load = load
+        super.init()
+        button.target = self
+        button.action = #selector(open)
+        add.target = self
+        add.action = #selector(addBinding)
+        add.isEnabled = false
+        options.orientation = .vertical
+        options.alignment = .leading
+        done.target = self
+        done.action = #selector(close)
+        options.spacing = 8
+        document.addSubview(options)
+        scroll.documentView = document
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        let title = GatewayStyle.label("CloudCLI 项目绑定", size: 18, weight: .semibold)
+        let header = NSStackView(views: [title, NSView(), count])
+        header.alignment = .centerY
+        count.setContentHuggingPriority(.required, for: .horizontal)
+        let help = NSTextField(wrappingLabelWithString: "在 Mac 的 Code 中选择对应目录，新对话会进入绑定的网页项目。")
+        for label in [status, help] {
+            label.font = .systemFont(ofSize: SafeCodeType.small)
+            label.textColor = GatewayStyle.muted
+        }
+        let footer = NSStackView(views: [add, NSView(), done])
+        footer.alignment = .centerY
+        done.widthAnchor.constraint(greaterThanOrEqualToConstant: 64).isActive = true
+        let controller = NSViewController()
+        controller.view = NSView(frame: NSRect(x: 0,y: 0,width: 550,height: 334))
+        controller.view.wantsLayer = true
+        controller.view.layer?.backgroundColor = GatewayStyle.paper.cgColor
+        let content = NSStackView(views: [header, help, status, scroll, GatewayStyle.rule(), footer])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 10
+        content.translatesAutoresizingMaskIntoConstraints = false
+        controller.view.addSubview(content)
+        listHeight = scroll.heightAnchor.constraint(equalToConstant: 80)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor, constant: 16),
+            content.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor, constant: -16),
+            content.topAnchor.constraint(equalTo: controller.view.topAnchor, constant: 14),
+            content.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor, constant: -14),
+            listHeight,
+        ] + content.arrangedSubviews.map { $0.widthAnchor.constraint(equalTo: content.widthAnchor) })
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        for binding in saved { append(binding) }
+        updateLayout()
+    }
+
+    @objc private func open() {
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+        guard catalog.isEmpty, !loading else { return }
+        loading = true
+        status.stringValue = "正在读取 CloudCLI 项目…"
+        updateLayout()
+        load { [weak self] result in
+            guard let self else { return }
+            self.loading = false
+            switch result {
+            case .success(let value):
+                self.catalog = (value as? [String: [[String: String]]])?["projects"] ?? []
+                self.status.stringValue = self.catalog.isEmpty ? "CloudCLI 当前没有可绑定的项目。" : ""
+                for row in self.rows {
+                    let id = row.choice.selectedItem?.representedObject as? String ?? ""
+                    self.populate(row.choice, id: id, name: row.choice.titleOfSelectedItem)
+                    self.updateLocation(row.choice)
+                }
+            case .failure(let error):
+                self.status.stringValue = "无法读取项目。重新打开可重试。" + error.localizedDescription
+            }
+            self.updateLayout()
+        }
+    }
+
+    @objc private func addBinding() { append([:]) }
+    @objc private func close() { popover.performClose(nil) }
+
+    @objc private func updateLocation(_ sender: NSPopUpButton) {
+        guard let row = rows.first(where: { $0.choice === sender }) else { return }
+        let id = sender.selectedItem?.representedObject as? String
+        let path = id == nil ? nil : catalog.first(where: { $0["project_id"] == id })?["path"] ?? row.savedPath
+        row.location.stringValue = path ?? "选择网页项目"
+        row.location.toolTip = path
+    }
+
+    private func append(_ binding: [String: String]) {
+        let choice = NSPopUpButton()
+        choice.cell?.lineBreakMode = .byTruncatingTail
+        choice.setAccessibilityLabel("CloudCLI 项目")
+        choice.target = self
+        choice.action = #selector(updateLocation(_:))
+        populate(choice, id: binding["project_id"] ?? "", name: binding["name"])
+        let location = GatewayStyle.label("", color: GatewayStyle.muted, size: SafeCodeType.small)
+        let directory = NSTextField(string: binding["directory"] ?? "")
+        directory.placeholderString = "/Users/用户名/项目目录"
+        directory.setAccessibilityLabel("Mac 上的 Code 工作目录")
+        directory.toolTip = binding["directory"]
+        let remove = GatewayButton("移除", kind: .dangerLink, target: self, action: #selector(removeBinding(_:)))
+        let remoteColumn = NSStackView(views: [choice, location])
+        remoteColumn.orientation = .vertical
+        remoteColumn.alignment = .leading
+        remoteColumn.spacing = 2
+        remoteColumn.widthAnchor.constraint(equalToConstant: 164).isActive = true
+        for view in [choice, location] { view.widthAnchor.constraint(equalTo: remoteColumn.widthAnchor).isActive = true }
+        let localLabel = GatewayStyle.label("Mac 工作目录", color: GatewayStyle.muted, size: SafeCodeType.small)
+        let localColumn = NSStackView(views: [localLabel, directory])
+        localColumn.orientation = .vertical
+        localColumn.alignment = .leading
+        localColumn.spacing = 4
+        directory.widthAnchor.constraint(equalTo: localColumn.widthAnchor).isActive = true
+        directory.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
+        remove.setContentHuggingPriority(.required, for: .horizontal)
+        let row = NSStackView(views: [remoteColumn, localColumn, remove])
+        row.alignment = .centerY
+        row.spacing = 10
+        let card = GatewayStyle.surface(row, inset: NSEdgeInsets(top: 6,left: 10,bottom: 6,right: 10),radius: 7)
+        rows.append((card, choice, directory, location, remove, binding["path"]))
+        options.addArrangedSubview(card)
+        card.widthAnchor.constraint(equalToConstant: 502).isActive = true
+        updateLocation(choice)
+        updateLayout()
+    }
+
+    private func populate(_ choice: NSPopUpButton, id: String, name: String?) {
+        choice.removeAllItems()
+        choice.addItem(withTitle: "选择已有项目")
+        for entry in catalog {
+            guard let project = entry["project_id"], let name = entry["name"], let path = entry["path"] else { continue }
+            let duplicated = catalog.contains { $0["name"] == name && $0["project_id"] != project }
+            let option = NSMenuItem(title: duplicated ? "\(name) · \(path)" : name, action: nil, keyEquivalent: "")
+            option.toolTip = path
+            option.representedObject = project
+            choice.menu?.addItem(option)
+        }
+        if !id.isEmpty && !choice.itemArray.contains(where: { $0.representedObject as? String == id }) {
+            let option = NSMenuItem(title: name ?? id, action: nil, keyEquivalent: "")
+            option.representedObject = id
+            choice.menu?.addItem(option)
+        }
+        choice.select(choice.itemArray.first(where: { $0.representedObject as? String == id }) ?? choice.item(at: 0))
+    }
+
+    @objc private func removeBinding(_ sender: NSButton) {
+        guard let index = rows.firstIndex(where: { $0.remove === sender }) else { return }
+        rows.remove(at: index).view.removeFromSuperview()
+        updateLayout()
+    }
+
+    private func updateLayout() {
+        let size = options.fittingSize
+        options.frame = NSRect(origin: .zero, size: size)
+        document.frame.size = NSSize(width: 502, height: max(1, size.height))
+        let hasStatus = !status.stringValue.isEmpty
+        status.isHidden = !hasStatus
+        let height = min(212,max(12,size.height))
+        listHeight.constant = height
+        popover.contentSize = NSSize(width: 550, height: height+(hasStatus ? 130 : 112))
+        add.isEnabled = !catalog.isEmpty && rows.count < 16
+        count.stringValue = "已绑定 \(rows.count) 个项目"
+        button.title = rows.isEmpty ? "绑定 CloudCLI 项目" : "已绑定 \(rows.count) 个 CloudCLI 项目"
     }
 }
 

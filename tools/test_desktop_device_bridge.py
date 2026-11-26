@@ -50,13 +50,11 @@ class DevicePairingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             owner, other = 'a'*64, 'b'*64
-            for subdir in ('keys', 'device-access', 'device-required'):
+            for subdir in ('keys', 'device-required'):
                 (root/subdir).mkdir()
                 for key in (owner, other):
                     (root/subdir/key).touch()
             devices = bridge.Devices(root, home=root)
-            self.assertTrue(devices.required(owner))
-            self.assertFalse(devices.required('c'*64))
             first = devices.prepare(owner, 'windows', 'Windows')
             second = devices.prepare(other, 'windows', 'Windows')
             for field in ('deviceId', 'deviceProof', 'alias', 'port', 'publicKey'):
@@ -87,7 +85,7 @@ class DevicePairingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             owner = 'd'*64
-            for subdir in ('keys', 'device-access'):
+            for subdir in ('keys',):
                 (root/subdir).mkdir()
                 (root/subdir/owner).touch()
             devices = bridge.Devices(root, home=root)
@@ -114,7 +112,7 @@ class DevicePairingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             owner = 'b'*64
-            for subdir in ('keys', 'device-access'):
+            for subdir in ('keys',):
                 (root/subdir).mkdir()
                 (root/subdir/owner).touch()
             devices = bridge.Devices(root, home=root)
@@ -132,7 +130,7 @@ class DevicePairingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             owner, ssh_id = 'a'*64, 'b'*20
-            for name in ('keys', 'device-access'):
+            for name in ('keys',):
                 (root/name).mkdir()
                 (root/name/owner).touch()
             tunnel = root/'.ssh/safe-code-host'/ssh_id

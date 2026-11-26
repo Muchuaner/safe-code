@@ -210,7 +210,27 @@ public sealed partial class SshSession
         var result = await RequestAsync<JsonElement>("safe_code_api_repair",
             new { action = "repair", accepted = true, files, reinstallCloudCLI }, ct);
         RememberPublicGateway(result);
-        return result;
+        if (!reinstallCloudCLI || !result.TryGetProperty("cloudcliPort", out var port) || !port.TryGetInt32(out int localPort))
+            return result;
+
+        var response = JsonObject.Create(result)!;
+        response.Remove("cloudcliPort");
+        if (!result.TryGetProperty("cloudcliNeedsSetup", out var needsSetup) || needsSetup.ValueKind != JsonValueKind.True)
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(25));
+            try
+            {
+                var login = await RequestAsync<JsonElement>("safe_code_api",
+                    new { action = "repair_cloudcli_login", port = localPort }, timeout.Token);
+                response["cloudcliLogin"] = JsonObject.Create(login);
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                // A credential check can fail even after the programs have been reinstalled successfully.
+            }
+        }
+        return JsonSerializer.SerializeToElement(response);
     }
 
     private static async Task<Dictionary<string, string>> LoadGatewayPackageAsync(CancellationToken ct)

@@ -107,10 +107,20 @@ function resetLogin(){
   $('#connect').textContent='连接服务器';
   $('#connection-message').className='connection-message';$('#connection-message').textContent='';
 }
+function returnToServerLogin(){
+  stopWork();
+  serverConnection={ingressIp:'',egressIp:''};
+  $('#server-ingress').textContent='';$('#server-address').textContent='';
+  $('#update-login-password').hidden=true;$('#disconnect-server').hidden=true;
+  $('#login-form').reset();
+  $('#username').required=true;$('#password').required=true;
+  resetLogin();showScreen('login');$('#ip').focus();
+}
+$('#disconnect-server').onclick=returnToServerLogin;
 function isDeveloperHost(host){return ['127.0.0.1','localhost','::1','[::1]'].includes(host.toLowerCase());}
 function enterDeveloperPreview(){
   stopWork();serverConnection={ingressIp:'127.0.0.1',egressIp:'127.0.0.1'};
-  $('#password').value='';$('#server-ingress').textContent='127.0.0.1';$('#server-address').textContent='127.0.0.1';$('#server-user').textContent='developer';
+  $('#password').value='';$('#server-ingress').textContent='127.0.0.1';$('#server-address').textContent='127.0.0.1';$('#update-login-password').hidden=true;$('#disconnect-server').hidden=true;
   states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');resetDeploymentSettings();
   $('#rating-state').textContent='示例数据';$('#ip-location').textContent='开发预览';$('#ip-score').textContent='—';$('#score-unit').textContent='';
   let banner=$('#developer-preview');if(!banner){banner=document.createElement('div');banner.id='developer-preview';banner.className='developer-preview';$('.window>.titlebar').insertBefore(banner,$('.window-controls'));}
@@ -128,7 +138,7 @@ $('#login-form').onsubmit=event=>{
   $('#connect').textContent='正在连接…';$('#connection-message').textContent='正在建立 SSH 连接，请稍候…';$('#connection-message').className='connection-message connecting';
   connectionTimer=setTimeout(()=>{
     serverConnection = { ingressIp: ip, egressIp: ip };
-    $('#password').value='';$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp;$('#server-user').textContent=username;
+    $('#password').value='';$('#server-ingress').textContent=serverConnection.ingressIp;$('#server-address').textContent=serverConnection.egressIp;$('#disconnect-server').hidden=false;
       states=Array(tasks.length).fill('pending');taskLogs=Array(tasks.length).fill('');resetDeploymentSettings();selecting=false;selectedTasks.clear();renderTasks();resetLogin();switchMode('deployment');$('#maintenance-result').close();showScreen('workspace');queryIpInfo(serverConnection.egressIp);
   },1400);
 };
@@ -406,12 +416,14 @@ $('#check-update').onclick=()=>{$('#update-status').textContent='请在 Windows 
 let appDialogQueue=Promise.resolve();
 function appDialog(message,options={}){
   const next=appDialogQueue.then(()=>new Promise(resolve=>{
-    const dialog=$('#app-message-dialog');$('#app-message-title').textContent=options.title||'提示';$('#app-message-body').textContent=message;
+    const dialog=$('#app-message-dialog'),body=$('#app-message-body');
+    $('#app-message-title').textContent=options.title||'提示';body.textContent=message;
+    body.style.whiteSpace=options.preserveWhitespace?'pre-wrap':'';
     $('#app-message-details').hidden=!options.details;$('#app-message-details').open=false;$('#app-message-details').ontoggle=()=>{$('#app-message-details summary').textContent=$('#app-message-details').open?'收起服务器指纹':'查看服务器指纹';};$('#app-message-detail-text').textContent=options.details||'';
     const yes=$('#app-message-confirm'),no=$('#app-message-cancel');yes.textContent=options.confirm||'知道了';no.textContent=options.cancel||'取消';no.hidden=!options.cancel;
     yes.onclick=()=>dialog.close('confirm');no.onclick=()=>dialog.close('cancel');dialog.querySelector('[data-dialog-dismiss]').onclick=()=>dialog.close('cancel');
     dialog.addEventListener('close',()=>{
-      if(options.clearOnClose)$('#app-message-body').textContent='';
+      if(options.clearOnClose)body.textContent='';
       resolve(dialog.returnValue==='confirm');
     },{once:true});dialog.returnValue='';dialog.showModal();(options.cancel?no:yes).focus();
   }));appDialogQueue=next.catch(()=>{});return next;

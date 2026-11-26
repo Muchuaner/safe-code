@@ -644,6 +644,23 @@ public sealed class MainWindow : Window
                 Environment.ExitCode = args.GetProperty("success").GetBoolean() ? 0 : 1;
                 _ = Dispatcher.BeginInvoke(() => Close()); return true;
             case "connection.cancel": connecting?.Cancel();pendingHostTrust=null;return true;
+            case "connection.disconnect":
+                if(connectionPending||deploying||maintenanceOperations>0||gatewayWindow?.Busy==true)
+                    throw new InvalidOperationException("请等待当前操作完成后再退出登录。");
+                exitInProgress=true;
+                try
+                {
+                    if(session is {HasMounts:true} mounted)await mounted.UnmountAsync(lifetime.Token);
+                    if(claudeBridge?.Running==true)await claudeBridge.StopAsync(lifetime.Token,suspend:true);
+                    if(keyAccess?.ReusesHostControl==true)await keyAccess.StopAsync();
+                    if(hostControl?.Enabled==true)await hostControl.DisableAsync(lifetime.Token);
+                    gatewayWindow?.Close();
+                    clients.Dispose();
+                    if(session is {} disconnected)await Task.Run(disconnected.Dispose);
+                    session=null;pendingHostTrust=null;gatewayObservation=null;keyStartedHost=null;
+                    return true;
+                }
+                finally{exitInProgress=false;}
             case "host.trust":
                 if(pendingHostTrust is not {} challenge||challenge.Token!=Read("token"))throw new InvalidOperationException("服务器身份确认已失效，请重新连接。");
                 new HostTrustStore(dataDirectory).Accept(challenge.Key);pendingHostTrust=null;return true;

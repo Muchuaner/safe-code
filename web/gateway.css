@@ -142,6 +142,13 @@ dialog::backdrop { background: #19332b52; }
 .model-options label + label { border-top: 1px solid var(--line); }
 .model-options input { flex: none; accent-color: var(--accent); }
 .model-options small { display: block; }
+#desktop-policy { display: grid; gap: 7px; }
+#desktop-policy input { accent-color: var(--accent); }
+#raw-messages-field { padding-inline-start: 20px; }
+#project-settings > summary { cursor: pointer; }
+.project-binding { display: grid; gap: 8px; padding: 10px; margin: 8px 0; border: 1px solid var(--line); border-radius: 6px; }
+.project-binding select { min-width: 0; width: 100%; }
+.project-binding button { justify-self: start; }
 .model-picker-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
 .model-picker-status:has(p:empty) { display: none; }
 .activation-field { display: grid; gap: 5px; }

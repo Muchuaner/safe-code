@@ -166,7 +166,10 @@ def query_usage(terminal, deadline, workspace):
     if phase == 'usage' and (windows := usage_windows(output.decode('utf-8', errors='replace'))):
         return windows
     if phase == 'startup':
-        raise UsageUnavailable('Claude Code 未进入交互界面。请检查 VPS 上的登录或首次启动提示。')
+        text = terminal_text(output.decode('utf-8', errors='replace'))
+        if re.search(r'\b(?:ENOSPC|no space left on device)\b', text, re.I):
+            raise UsageUnavailable('VPS 磁盘空间不足，Claude Code 无法启动用量查询。')
+        raise UsageUnavailable('订阅已登录，但 Claude Code 未在限时内显示提示符。请在 VPS 终端启动 Claude Code，检查启动提示后运行 /usage。')
     if phase == 'preview':
         raise UsageUnavailable('Claude Code 未显示内置 /usage 命令。请检查 VPS 上的 Claude Code 版本。')
     raise UsageUnavailable('Claude Code /usage 未返回订阅额度，请稍后手动刷新。')
@@ -178,5 +181,8 @@ if __name__ == '__main__':
         print(json.dumps({'state': 'available', 'windows': windows, 'sampled_at': int(time.time())}))
     except UsageUnavailable as error:
         print(json.dumps({'state': 'unavailable', 'windows': {}, 'reason': str(error)}))
-    except (OSError, subprocess.SubprocessError):
-        print(json.dumps({'state': 'unavailable', 'windows': {}, 'reason': 'VPS 上的 Claude Code 用量查询未完成。'}))
+    except (OSError, subprocess.SubprocessError) as error:
+        reason = ('VPS 磁盘空间不足，Claude Code 无法启动用量查询。'
+                  if isinstance(error, OSError) and error.errno == errno.ENOSPC
+                  else 'VPS 上的 Claude Code 用量查询未完成。')
+        print(json.dumps({'state': 'unavailable', 'windows': {}, 'reason': reason}))

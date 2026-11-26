@@ -15,6 +15,7 @@ using Microsoft.Win32;
 using SafeCode.Core;
 using Ticket = SafeCode.Core.PublicGatewayTicket;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -230,7 +231,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                         string? explanation = code.GetString() switch
                         {
                             "device_not_configured" => "此 VPS 尚未安装私有设备服务。请在「网关设置」升级或修复网关。",
-                            "device_not_allowed" => "此 Key 没有设备配对权限。请让签发人在「管理网关」将接入用途改为「Safe Code 桌面接入」。",
+                            "device_not_allowed" => "网关未允许这把 Key 配对。请联系签发人更新网关并检查 Key 状态。",
                             "device_already_bound" => DeviceAlreadyBoundMessage,
                             "device_auth_unavailable" => "VPS 的设备鉴权服务未就绪。请在「网关设置」运行故障修复。",
                             "device_frp_unavailable" => "VPS 的私有 FRP 服务未就绪。请在「网关设置」运行故障修复。",
@@ -503,7 +504,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         finally{CryptographicOperations.ZeroMemory(data);}
     }
 
-    private sealed record KeyEntry(string Id,string Name,Ticket Remote,bool Authorized);
+    private sealed record KeyEntry(string Id,string Name,Ticket Remote,bool Authorized,string? HistoryOrganization=null);
     private string KeyListPath=>Path.Combine(dataDirectory,"desktop-key-list.state");
     private List<KeyEntry> ReadEntries()
     {
@@ -532,6 +533,39 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     }
     private static KeyEntry FindEntry(List<KeyEntry> entries,string id)=>
         entries.FirstOrDefault(entry=>entry.Id==id)??throw new InvalidOperationException("找不到该 Key，请重新打开列表。");
+
+    private string BindHistoryOrganization(Ticket ticket,Saved? active,bool authorized=false)
+    {
+        var entries=ReadEntries();
+        var index=entries.FindIndex(entry=>entry.Remote==ticket);
+        var entry=index<0?NewEntry(ticket,new Uri(ticket.Url).Authority,authorized):entries[index];
+        var organization=entry.HistoryOrganization??entries.FirstOrDefault(other=>
+            other.HistoryOrganization!=null&&other.Remote.Key==ticket.Key&&
+            new Uri(other.Remote.Url)==new Uri(ticket.Url))?.HistoryOrganization;
+        // The Key active when upgrading can keep a namespace based on its owned legacy profile.
+        organization??=active?.Remote==ticket?active.Profile:entry.Id;
+        if(!Guid.TryParse(organization,out var parsed)||parsed==Guid.Empty)
+            throw new IOException("无法读取此 Key 的本机会话标识。");
+        string canonical=parsed.ToString("D");
+        var updated=entry with {HistoryOrganization=canonical,Authorized=entry.Authorized||authorized};
+        if(index<0)entries.Add(updated);
+        else if(updated==entry)return canonical;
+        else entries[index]=updated;
+        WriteEntries(entries);
+        return canonical;
+    }
+
+    internal static bool ApplyHistoryOrganization(JsonObject profile,string organization)
+    {
+        if(ProfileText(profile,"deploymentOrganizationUuid")==organization&&
+            profile["claudeAiImport"] is JsonObject existing&&
+            existing["automatic3pImport"] is JsonValue disabled&&disabled.TryGetValue<bool>(out var automatic)&&!automatic)
+            return false;
+        profile["deploymentOrganizationUuid"]=organization;
+        if(profile["claudeAiImport"] is not JsonObject)profile["claudeAiImport"]=new JsonObject();
+        profile["claudeAiImport"]!.AsObject()["automatic3pImport"]=false;
+        return true;
+    }
 
     internal async Task<object> ListKeysAsync(CancellationToken ct)
     {
@@ -632,6 +666,10 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             ["autoModeEnabled"]=PolicyValue.FromDWord(1),
             ["chatTabEnabled"]=PolicyValue.FromDWord(1)
         };
+        if(ProfileText(profile,"deploymentOrganizationUuid") is {} organization)
+            desired["deploymentOrganizationUuid"]=PolicyValue.FromString(organization);
+        if(profile["claudeAiImport"] is JsonObject historyImport)
+            desired["claudeAiImport"]=PolicyValue.FromString(historyImport.ToJsonString());
         if(profile["claudeCodeSettings"]?["env"]?["CLAUDE_CODE_AUTO_MODE_MODEL"] is JsonValue model&&model.TryGetValue<string>(out var classifier))
             desired["autoModeClassifierModel"]=PolicyValue.FromString(classifier);
         previousPolicy??=saved.WindowsPolicy;
@@ -837,7 +875,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         settings["env"]!.AsObject()["CLAUDE_CODE_AUTO_MODE_MODEL"]=classifier;
     }
 
-    internal async Task<long> PrepareLaunchAsync(CancellationToken ct)
+    internal async Task<long> PrepareLaunchAsync(CancellationToken ct,bool syncHistory=false)
     {
         await gate.WaitAsync(ct);
         try
@@ -848,10 +886,20 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             if(relay.Port!=saved.Port)
                 throw new InvalidOperationException("本机网关连接已中断，请重新启用接入后再打开 Claude Desktop。");
             var library=Library(saved);
-            var profile=PrepareProfile(library,saved.Profile,saved.Port,saved.Local);
+            var organization=OperatingSystem.IsMacOS()?BindHistoryOrganization(saved.Remote,saved):null;
+            var profile=PrepareProfile(library,saved.Profile,saved.Port,saved.Local,organization);
             await relay.Connection.CheckDeviceAsync(true,ct);
             var available=await CheckLaunchRouteAsync(saved.Port,saved.Local,ct);
             ValidateProfileModels(profile,available);
+            if(syncHistory&&organization!=null)
+            {
+                var userData=Path.GetDirectoryName(library)!;
+                var fallback=ProfileText(profile["inferenceModels"]![0]!.AsObject(),"name")!;
+                using var time=CancellationTokenSource.CreateLinkedTokenSource(ct);
+                time.CancelAfter(TimeSpan.FromMinutes(10));
+                await DesktopWebHistory.SyncFollowupsAsync(relay.Client,userData,organization,time.Token);
+                await DesktopWebHistory.SyncAsync(relay.Client,userData,dataDirectory,organization,fallback,time.Token);
+            }
             if(OperatingSystem.IsWindows())
             {
                 if(PlanWindowsPolicy(profile,saved).Changes.Count!=0)
@@ -900,7 +948,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {throw new InvalidOperationException("通过 SafeCode 查询网关模型超时，请检查连接后重试。");}
     }
 
-    internal static JsonObject PrepareProfile(string library,string id,int port,string local)
+    internal static JsonObject PrepareProfile(string library,string id,int port,string local,string? historyOrganization=null)
     {
         if(ProfileText(ReadProfileMeta(library),"appliedId")!=id)
             throw new InvalidOperationException("Claude Desktop 当前选中了其他配置。请重新启用 SafeCode 接入后再打开。");
@@ -913,11 +961,13 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             ProfileText(profile,"inferenceGatewayBaseUrl")!="http://127.0.0.1:"+port||
             (credential!=local && !(credential?.StartsWith("__sealed__:v1:",StringComparison.Ordinal)==true && credential.Length>14)))
             throw new InvalidOperationException("Claude Desktop 接入配置已变更，请重新启用 SafeCode 接入。");
+        bool changed=historyOrganization!=null&&ApplyHistoryOrganization(profile,historyOrganization);
         if(ProfileText(profile,"codeDefaultPermissionMode")!="auto")
         {
             profile["codeDefaultPermissionMode"]="auto";
-            WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
+            changed=true;
         }
+        if(changed)WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
         return profile;
     }
 
@@ -1013,9 +1063,18 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var entries=meta["entries"]!.AsArray();
             string applied=(string?)meta["appliedId"]??"";
             bool wasApplied=previous!=null&&applied==profileId;
-            string local=previous?.Local??Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            string local=previous?.Remote==t?previous.Local:Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             if(hostReady?.Invoke()==false)throw new InvalidOperationException("本机远程控制连接已中断，请重新验证。");
-            var next=await Listen(t,local,0,ct,device,hostReady,devicePath);
+            // An already open Claude Code process retains the original loopback
+            // URL and bearer after SafeCode exits. Reuse these only for the same Key.
+            int resumePort=relay==null&&previous?.Remote==t?previous.Port:0;
+            Relay next;
+            try{next=await Listen(t,local,resumePort,ct,device,hostReady,devicePath);}
+            catch(IOException error)when(resumePort!=0&&error.InnerException is AddressInUseException)
+            {
+                throw new InvalidOperationException("恢复接入所需的本机端口 "+resumePort+
+                    " 已被占用。请先退出占用该端口的程序，再恢复接入。",error);
+            }
             Action? undoPolicy=null,undoLegacyPolicy=null;
             bool profileWritten=false,metaWritten=false;
             try
@@ -1027,6 +1086,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     ["deploymentMode"]="3p",["disableDeploymentModeChooser"]=true,["deploymentDisplayName"]="SafeCode",
                     ["inferenceModels"]=models,["modelDiscoveryEnabled"]=false,["autoModeEnabled"]=true,
                     ["codeDefaultPermissionMode"]="auto",["chatTabEnabled"]=true};
+                ApplyHistoryOrganization(profile,BindHistoryOrganization(t,previous,device!=null));
                 if(classifier!=null)SetClassifier(profile,classifier);
                 if(OperatingSystem.IsWindows())
                 {
@@ -1043,14 +1103,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 WriteProfileFile(metaPath,JsonSerializer.SerializeToUtf8Bytes(meta));
                 metaWritten=true;
                 if(undoLegacyPolicy!=null)RestoreLegacyWindowsPermissions();
-                if(device!=null)
-                {
-                    var storedKeys=ReadEntries();
-                    var index=storedKeys.FindIndex(e=>e.Remote==t);
-                    if(index<0)storedKeys.Add(NewEntry(t,new Uri(t.Url).Authority,true));
-                    else storedKeys[index]=storedKeys[index] with {Authorized=true};
-                    WriteEntries(storedKeys);
-                }
                 Save(s);
             }
             catch
@@ -1210,6 +1262,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             if(Configured)
             {
                 var s=Load();
+                BindHistoryOrganization(s.Remote,s);
                 if(s.Device is {} binding)
                 {
                     if(!s.UnbindPending)

@@ -175,17 +175,8 @@
       <header class="dialog-heading"><h2 id="prompt-review-title">前置审查</h2><button type="button" class="close" data-close aria-label="关闭">×</button></header>
       <div class="dialog-content">
         <p class="muted">开启后，网关在转发前审查本轮用户文字。此设置对所有 API Key 生效。</p>
-        <label>审查方式
-          <select id="prompt-review-provider">
-            <option value="builtin">内置模型 · 通过 CloudCLI</option>
-            <option value="deepseek">DeepSeek Flash · 独立 API</option>
-          </select>
-        </label>
-        <label id="prompt-review-model-field">内置模型
-          <select id="prompt-review-model"><option value="sonnet">Sonnet</option><option value="opus">Opus</option></select>
-        </label>
-        <p id="prompt-review-builtin-note" class="notice" hidden>当前网关需要先完成 CloudCLI 网页授权才能使用内置模型。</p>
-        <label id="prompt-review-key-field" hidden>DeepSeek API Key
+        <p>审查模型 · DeepSeek Flash</p>
+        <label>DeepSeek API Key
           <input id="prompt-review-key" type="password" maxlength="512" autocomplete="new-password" placeholder="粘贴 DeepSeek API Key" spellcheck="false">
           <small id="prompt-review-key-note">开启后，本轮提示词文字会发送给 DeepSeek。</small>
         </label>
@@ -245,11 +236,8 @@
         <label>备注<input type="text" id="note" maxlength="120" placeholder="例如：工作笔记本"></label>
         <label>每分钟请求上限<input type="number" id="rpm" min="0" max="600" step="1" value="0" required><small>设为 0 时不限频。</small></label>
         <label id="budget-field" hidden>累计额度（美元）<input type="number" id="budget" min="0" max="1000000" step="0.01" placeholder="留空不限额" disabled><small id="budget-detail">从额度扣除估算费用。余额用完后暂停新请求。</small></label>
-        <label id="device-policy-field" hidden>接入用途<select id="device-policy" disabled>
-          <option value="desktop">Safe Code 桌面接入</option><option value="api">普通 API</option>
-        </select><small id="device-policy-help">桌面接入允许设备配对，使用者仍须在本机确认授权。</small></label>
         <div class="key-policy-fields">
-          <label><span id="model-policy-label">模型管理</span><select id="model-policy" aria-labelledby="model-policy-label"><option value="all">全部模型</option><option value="selected">仅允许所选模型</option></select></label>
+          <label><span id="model-policy-label">模型管理</span><select id="model-policy" aria-labelledby="model-policy-label"><option value="all">全部模型（网关提供）</option><option value="selected">仅允许所选模型</option></select></label>
           <label><span id="expiry-policy-label">失效时间</span><select id="expiry-policy" aria-labelledby="expiry-policy-label"><option value="never">永不过期</option><option value="scheduled">指定时间</option></select></label>
         </div>
         <div id="model-picker" hidden>
@@ -258,6 +246,18 @@
           <small>「Default」「Best」等自动选项由 CloudCLI 决定实际使用的模型。</small>
         </div>
         <label id="expiry-field" hidden>到期日期与时间<input id="key-expiry" type="datetime-local" max="9999-12-31T23:59" disabled required><small>按本机时区显示，到期后停止接受新请求。</small></label>
+        <div id="desktop-policy" hidden>
+          <label><span><input id="developer-mode" type="checkbox"> 开发者模式（自用建议打开）</span><small>用此 Key 打开桌面 Code 时，同步 CloudCLI 网页历史。</small></label>
+          <label id="raw-messages-field" hidden><span><input id="raw-messages" type="checkbox"> 跳过网关附加提示词（不建议打开）</span><small>按原样将输入文字发送给 CloudCLI。</small></label>
+        </div>
+        <details id="project-settings" hidden>
+          <summary>绑定 CloudCLI 项目</summary>
+          <p><small>在 Mac 的 Code 里选择对应文件夹后，新会话会进入网页上的原项目。此设置需要已配对的桌面设备。</small></p>
+          <p id="project-status" class="muted" role="status" hidden></p>
+          <div id="project-bindings"></div>
+          <button id="add-project" type="button" hidden>添加项目绑定</button>
+          <button id="reload-projects" type="button" hidden>重试</button>
+        </details>
         <p id="key-policy-upgrade" class="muted" hidden>请先在 Safe Code 的「网关设置」升级 VPS 网关，以设置模型权限和失效时间。</p>
         <div id="activation-field" class="activation-field" hidden>
           <div class="activation-heading">
