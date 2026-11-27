@@ -3,9 +3,12 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Security;
+using System.Net.Sockets;
 using System.Security;
 using System.Security.AccessControl;
+using System.Security.Authentication;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
@@ -41,18 +44,29 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         Dictionary<string,PolicyValue>? WindowsPolicy=null,DeviceBinding? Device=null,bool UnbindPending=false);
     private sealed record Relay(WebApplication App,HttpClient Client,int Port,Func<bool>? HostReady,long StartedAt,RelayConnection Connection) : IAsyncDisposable
     {
+        private readonly CancellationTokenSource probeLifetime = new();
+        private Task? probeTask;
+
+        internal void StartProbing(Ticket ticket) => probeTask = MonitorGatewayAsync(ticket, Connection, probeLifetime.Token);
+
         public async ValueTask DisposeAsync()
         {
+            probeLifetime.Cancel();
             try{await App.StopAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);}
             catch(OperationCanceledException){}
             finally
             {
                 try{await App.DisposeAsync().ConfigureAwait(false);}
-                finally{Client.Dispose();}
+                finally
+                {
+                    Client.Dispose();
+                    if (probeTask != null) await probeTask.ConfigureAwait(false);
+                    probeLifetime.Dispose();
+                }
             }
         }
     }
-    internal sealed record DevicePath(Func<string?> Problem,Func<bool,CancellationToken,Task> Check,Func<int> Generation);
+    internal sealed record DevicePath(Func<string?> Problem,Func<bool,CancellationToken,Task> Check);
     private sealed class RelayConnection(DevicePath? device,Func<bool>? hostReady)
     {
         internal string? DeviceProblem=>device?.Problem()??(hostReady?.Invoke()==false?"已授权的本机 SSH 控制通道尚未恢复，请检查 SafeCode 的本机远程控制状态。":null);
@@ -61,32 +75,22 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             if(device!=null)await device.Check(force,ct);
             if(DeviceProblem is {} reason)throw new InvalidOperationException(reason);
         }
-        internal int Generation=>device?.Generation()??0;
+        internal volatile bool GatewayConnected;
         private long lastMessageCheck;
-        private int clientGeneration;
-        private volatile bool clientSeen;
-        internal bool ClientConnected=>clientSeen && Volatile.Read(ref clientGeneration)==Generation;
-        internal void ObserveClient(int generation)
-        {
-            Volatile.Write(ref clientGeneration,generation);
-            clientSeen=true;
-            RequestError=null;
-        }
         internal async Task CheckMessageAsync(CancellationToken ct)
         {
             long now=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),age=now-Interlocked.Read(ref lastMessageCheck);
             await CheckDeviceAsync(age<0 || age>=45000,ct);
             Interlocked.Exchange(ref lastMessageCheck,now);
         }
-        internal volatile string? RequestError;
     }
-    internal sealed record ConnectionState(long? StartedAt,bool ClientConnected,string? DeviceProblem,string? RequestError);
+    internal sealed record ConnectionState(long? StartedAt,bool GatewayConnected);
     internal ConnectionState ConnectionStatus
     {
         get
         {
             var active=Volatile.Read(ref relay);
-            return new(active?.StartedAt,active?.Connection.ClientConnected==true,active?.Connection.DeviceProblem,active?.Connection.RequestError);
+            return new(active?.StartedAt,active?.Connection.GatewayConnected==true);
         }
     }
     private readonly SemaphoreSlim gate=new(1);
@@ -185,6 +189,45 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         return new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false,UseProxy=false,
             ServerCertificateCustomValidationCallback=(_,cert,_,_)=>MatchesPin(pin,cert)};
     }
+    private static async Task MonitorGatewayAsync(Ticket ticket, RelayConnection connection, CancellationToken ct)
+    {
+        var endpoint = new Uri(ticket.Url);
+        var pin = Convert.FromHexString(ticket.Pin);
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            do
+            {
+                connection.GatewayConnected = await CheckGatewayHandshakeAsync(endpoint, pin, ct).ConfigureAwait(false);
+            }
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+    }
+
+    internal static async Task<bool> CheckGatewayHandshakeAsync(Uri endpoint, byte[] pin, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(4));
+        try
+        {
+            using var tcp = new TcpClient();
+            await tcp.ConnectAsync(endpoint.DnsSafeHost, endpoint.Port, deadline.Token).ConfigureAwait(false);
+            using var tls = new SslStream(tcp.GetStream(), false, (_, certificate, _, _) =>
+                MatchesPin(pin, certificate as X509Certificate2));
+            await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+            {
+                TargetHost = endpoint.DnsSafeHost
+            }, deadline.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception error) when (error is SocketException or IOException or AuthenticationException ||
+                                      error is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
     private static HttpClient Remote(Ticket t)
     {
         var handler=RemoteHandler(t);
@@ -261,11 +304,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {ctx.Response.StatusCode=404;return;}
         string auth=ctx.Request.Headers.Authorization.ToString();
         string key=auth.StartsWith("Bearer ",StringComparison.Ordinal)?auth[7..]:ctx.Request.Headers["x-api-key"].ToString();
-        bool launchProbe=path=="/v1/models" && ctx.Request.Headers.ContainsKey("X-SafeCode-Launch-Probe");
         if(!CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(key),Encoding.UTF8.GetBytes(token)))
         {
             const string message="本机接入凭据无效，请在 SafeCode 重新启用接入并重开 Claude。";
-            connection.RequestError=message;
             await RelayError(ctx,401,"authentication_error","local_auth_invalid",message);
             return;
         }
@@ -314,7 +355,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     return;
                 }
             }
-            int epoch=connection.Generation;
             // A non-streaming turn sends headers only after the provider finishes.
             using var headerWait=CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
             if(path!="/v1/messages")headerWait.CancelAfter(TimeSpan.FromMinutes(11));
@@ -326,8 +366,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 if(!res.IsSuccessStatusCode && !await gateway.IsUnsupportedTokenCountAsync(res,ctx.RequestAborted))
                     failure=new HttpRequestException(null,null,res.StatusCode);
             }
-            if(!launchProbe && res.StatusCode==HttpStatusCode.Unauthorized)
-                connection.RequestError="网关未接受当前 Key，请核对 Key 是否过期或已被撤销。";
             ctx.Response.StatusCode=(int)res.StatusCode;
             ctx.Response.ContentType=res.Content.Headers.ContentType?.ToString()??"application/json";
             if(res.Content.Headers.ContentType?.MediaType=="text/event-stream")
@@ -346,7 +384,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 if(streamStatus.SawError)failure=new HttpRequestException(null,null,(HttpStatusCode)(streamStatus.FailureStatus??502));
                 else if(!streamStatus.Ended)
                 {
-                    connection.RequestError="网关连接在这条回复结束前中断，请检查网络后重试。";
                     failure=new HttpRequestException(null,null,HttpStatusCode.BadGateway);
                 }
             }
@@ -355,8 +392,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 bytes=res.Content.Headers.ContentLength??0;
                 await res.Content.CopyToAsync(ctx.Response.Body,ctx.RequestAborted);
             }
-            if(path=="/v1/messages" && res.IsSuccessStatusCode && failure==null)
-                connection.ObserveClient(epoch);
         }
         catch(Exception e) when(e is HttpRequestException or OperationCanceledException or IOException)
         {
@@ -367,7 +402,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 OperationCanceledException=>"等待网关响应超时，请检查网络和网关状态。",
                 _=>"SafeCode 无法连接网关，请检查网络和网关地址。"
             };
-            if(!launchProbe)connection.RequestError=reason;
             if(ctx.Response.HasStarted){ctx.Abort();return;}
             await RelayError(ctx,502,"api_error","gateway_unavailable",reason);
         }
@@ -408,7 +442,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             await app.StartAsync(ct);
             var addresses=app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses;
-            return new(app,client,new Uri(addresses.Single()).Port,hostReady,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),connection);
+            var listening = new Relay(app,client,new Uri(addresses.Single()).Port,hostReady,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),connection);
+            listening.StartProbing(t);
+            return listening;
         }
         catch{client.Dispose();await app.DisposeAsync();throw;}
     }
@@ -862,7 +898,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         var saved=Configured?Load():null;
         bool unbindPending=saved?.UnbindPending==true;
         return new{configured=saved!=null,running=relay!=null&&!unbindPending,
-            deviceAlias=saved?.Device?.Alias,connection.StartedAt,connection.ClientConnected,connection.RequestError,connection.DeviceProblem,unbindPending,
+            deviceAlias=saved?.Device?.Alias,connection.StartedAt,connection.GatewayConnected,unbindPending,
             error=error??(unbindPending?UnbindPendingMessage:null)};
     }
     // The classifier accepts permission checks only. Publishing it as a chat model
@@ -926,7 +962,6 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             {Timeout=TimeSpan.FromSeconds(10),MaxResponseContentBufferSize=1024*1024};
         using var request=new HttpRequestMessage(HttpMethod.Get,$"http://127.0.0.1:{port}/v1/models");
         request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bearer);
-        request.Headers.Add("X-SafeCode-Launch-Probe","1");
         try
         {
             using var response=await client.SendAsync(request,ct);

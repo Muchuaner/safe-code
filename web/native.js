@@ -806,18 +806,14 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     setInterval(()=>{if(!$('#workspace-screen').hidden)pollClaudeBridge();},4000);
 
     function connectionLabel(){
-      if(!keyState.running)return keyState.configured?'待恢复':'未接入';
-      if(keyState.deviceProblem)return '设备回连待确认';
-      if(keyState.requestError)return '接入异常';
-      return keyState.clientConnected?'Claude 已连接':'网关已就绪';
+      return keyState.running&&keyState.gatewayConnected?'连通成功':'连通失败';
     }
     function renderDesktopAccess(){
       const ready=connectionReady&&!!nativeServer?.statuses?.account;
       const checking=publicGatewayLoading&&!publicGatewayReachable&&!publicGatewayStatusError&&!publicGatewayError;
       const unavailable=!ready||busy||!!publicGatewayOperation;
-      $('#claude-gateway-status').textContent=keyState.running?connectionLabel():'Claude 未接入';
-      $('#claude-gateway-status').classList.toggle('inactive',!keyState.running||!!keyState.deviceProblem||!!keyState.requestError);
-      $('#claude-connection-reason').textContent=keyState.deviceProblem||keyState.requestError||'';
+      $('#claude-gateway-status').textContent=connectionLabel();
+      $('#claude-gateway-status').classList.toggle('inactive',!(keyState.running&&keyState.gatewayConnected));
       const updateAvailable=publicGatewayReachable&&publicGatewayUpgrade;
       $('#claude-desktop-manage').textContent=updateAvailable?'网关设置 · 有更新':'网关设置';
       $('#claude-desktop-manage').disabled=!ready;
@@ -1150,8 +1146,8 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
     }
     function renderApi(){
       $('#api-state-label').textContent=connectionLabel();
-      $('#api-state').classList.toggle('connected',!!keyState.running&&!keyState.deviceProblem&&!keyState.requestError);
-      $('#api-device').textContent=[keyState.deviceAlias,keyState.deviceProblem||keyState.requestError].filter(Boolean).join(' · ');
+      $('#api-state').classList.toggle('connected',!!(keyState.running&&keyState.gatewayConnected));
+      $('#api-device').textContent=keyState.deviceAlias||'';
       $('#api-manage-key').textContent=keyState.running?'接入设置':'恢复接入';
       setLaunchAvailability('api-open-claude',!!keyState.running&&!keyBusy);
       $('#api-usage-refresh').disabled=!keyState.running||apiFetching;
@@ -1353,7 +1349,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       const target=keyState.deviceAlias?'\n工具目标：已授权的本机设备 '+keyState.deviceAlias:'';
       if(keyState.unbindPending)return keyState.error;
       if(keyState.error)return (keyState.configured?'已保存 Key，暂未恢复接入。\n':'')+keyState.error;
-      if(keyState.running)return connectionLabel()+'。'+(keyState.deviceProblem||keyState.requestError||'')+target+'\n'+(args?.replace||args?.useSaved?'请完全退出并重新打开 Claude Desktop 以应用更改。':'首次接入请完全退出并重新打开 Claude Desktop。');
+      if(keyState.running)return connectionLabel()+'。'+target+'\n'+(args?.replace||args?.useSaved?'请完全退出并重新打开 Claude Desktop 以应用更改。':'首次接入请完全退出并重新打开 Claude Desktop。');
       if(keyState.configured)return '已保存 Key，当前 Claude 配置未启用此接入。';
       return op==='disable'?'已停用。\n请重新打开 Claude Desktop 以应用更改。':'尚未启用。';
     }

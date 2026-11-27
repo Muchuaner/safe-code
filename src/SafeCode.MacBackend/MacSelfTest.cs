@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Net;
@@ -181,6 +182,7 @@ internal static class MacSelfTest
         await using var gateway=builder.Build();
         gateway.MapGet("/v1/cloudcli/models",()=>new {data=new[]{new {id="claude-fixture"}}});
         gateway.MapGet("/v1/models",()=>new {data=new[]{new {id="claude-fixture"}}});
+        gateway.MapPost("/v1/cloudcli/messages", () => Results.StatusCode(503));
         await gateway.StartAsync();
         string directory=Directory.CreateTempSubdirectory("safecode-key-history-").FullName;
         try
@@ -211,12 +213,32 @@ internal static class MacSelfTest
                 return (string)profile["deploymentOrganizationUuid"]!;
             }
             await access.EnableAsync("",deadline.Token,useSaved:true);
+            async Task WaitForConnectivity(bool expected)
+            {
+                using var wait = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+                wait.CancelAfter(TimeSpan.FromSeconds(7));
+                while (access.ConnectionStatus.GatewayConnected != expected)
+                    await Task.Delay(50, wait.Token);
+            }
+
+            // No call to the Desktop relay is needed for the first green state.
+            await WaitForConnectivity(true);
+            if (await DesktopKeyAccess.CheckGatewayHandshakeAsync(new Uri(first.Url), new byte[32], deadline.Token))
+                throw new Exception("网关证书指纹不匹配时仍报告连通。");
             var firstHistory=CurrentHistory();
             if(firstHistory!=legacyProfile)throw new Exception("已接入 Key 的历史标识没有保留。");
             var savedProfile=Path.Combine(library,legacyProfile+".json");
             var originalProfile=JsonNode.Parse(File.ReadAllText(savedProfile))!;
             var endpoint=new Uri((string)originalProfile["inferenceGatewayBaseUrl"]!);
             var bearer=(string)originalProfile["inferenceGatewayApiKey"]!;
+            using (var client = new HttpClient { BaseAddress = endpoint })
+            {
+                client.DefaultRequestHeaders.Authorization = new("Bearer", bearer);
+                using var failure = await client.PostAsync("/v1/messages", new StringContent("{}"), deadline.Token);
+                if ((int)failure.StatusCode != 503 || !access.ConnectionStatus.GatewayConnected)
+                    throw new Exception("聊天失败影响了网关连通状态。");
+            }
+            Console.WriteLine("MAC_GATEWAY_PINNED_TLS_WITHOUT_CHAT_OK");
             await DesktopKeyAccess.CheckLaunchRouteAsync(endpoint.Port,bearer,deadline.Token);
             await access.StopAsync();
 
@@ -250,6 +272,10 @@ internal static class MacSelfTest
             await access.DisableAsync(deadline.Token);
             await access.EnableAsync(Encode(first),deadline.Token);
             if(CurrentHistory()!=firstHistory)throw new Exception("切回原 Key 没有加载原来的历史标识。");
+            await WaitForConnectivity(true);
+            await gateway.StopAsync();
+            await WaitForConnectivity(false);
+            Console.WriteLine("MAC_GATEWAY_DISCONNECT_DETECTED_OK");
             Console.WriteLine("MAC_DESKTOP_KEY_HISTORY_ISOLATION_AND_RESTORE_OK");
         }
         finally { await gateway.StopAsync(); Directory.Delete(directory,true); }

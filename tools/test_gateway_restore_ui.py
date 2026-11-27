@@ -21,7 +21,7 @@ with sync_playwright() as p:
           if(m.op==='services.preferences')result={enabled:false,diagnosticsEnabled:false,confirmed:true};
           if(m.op==='notice.state')result={accepted:fixture.notice};
           if(m.op==='login.load')result=saved;
-          if(m.op==='desktopKey.status')result={configured:fixture.remembered,running:fixture.remembered,startedAt:123};
+          if(m.op==='desktopKey.status')result={configured:fixture.remembered,running:fixture.remembered,startedAt:123,gatewayConnected:fixture.remembered};
           if(m.op==='desktopKey.connection')result=window.connectionFixture;
           if(m.op==='gateways.resume-settings')result=fixture.remembered?saved:null;
           if(m.op==='connect'){
@@ -42,18 +42,22 @@ with sync_playwright() as p:
                 page.wait_for_function("calls.includes('bridge.status')")
                 if warning:page.wait_for_selector('#app-message-dialog[open]')
             enabled=not failure and not warning
-            assert page.locator('#claude-gateway-status').inner_text()=='网关已就绪'
+            assert page.locator('#claude-gateway-status').inner_text()=='连通成功'
             assert page.locator('#codex-gateway-status').inner_text()=='Codex网关'+('已启用' if enabled else '未启用')
         else:
             page.wait_for_timeout(120)
             assert 'connect' not in page.evaluate('calls')
-            assert page.locator('#claude-gateway-status').inner_text()=='Claude 未接入'
+            assert page.locator('#claude-gateway-status').inner_text()=='连通失败'
         assert not set(page.evaluate('calls')) & {'claudeDesktop.start','claudeDesktop.status','bridge.start'},'frontend must never forge fresh consent for restore'
         if remembered and notice and not failure and not warning:
-            for label,reason,connected in [('设备回连待确认','SSH 验证失败',False),('网关已就绪',None,False),('Claude 已连接',None,True)]:
-                page.evaluate('(state)=>{window.connectionFixture=state;document.dispatchEvent(new Event("visibilitychange"))}',dict(startedAt=123,deviceProblem=reason,clientConnected=connected))
+            for connected in (False, True):
+                label = '连通成功' if connected else '连通失败'
+                page.evaluate('(state)=>{window.connectionFixture=state;document.dispatchEvent(new Event("visibilitychange"))}',
+                              dict(startedAt=123,gatewayConnected=connected,
+                                   requestError='旧聊天请求失败',deviceProblem='旧设备回连失败'))
                 page.wait_for_function("label=>document.querySelector('#claude-gateway-status').textContent===label",arg=label)
-                assert page.locator('#claude-connection-reason').text_content()==(reason or '')
+                assert page.locator('#api-state-label').text_content()==label
+                assert ('inactive' not in page.locator('#claude-gateway-status').get_attribute('class')) == connected
         assert not errors,errors
         context.close()
     browser.close()

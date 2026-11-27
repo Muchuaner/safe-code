@@ -58,7 +58,7 @@ with sync_playwright() as p:
           }
           if(m.op==='desktopKey.cancelDevice')window.keyCanceled++;
           if(m.op==='desktopKey.disable'){window.keyDisableCalls++;window.keyConfigured=false;window.keyRunning=false;}
-          queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{configured:!!window.keyConfigured,running:!!window.keyRunning,deviceAlias:window.keyRunning?'mac-fixture':undefined}}));return;
+          queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:{configured:!!window.keyConfigured,running:!!window.keyRunning,gatewayConnected:!!window.keyRunning,deviceAlias:window.keyRunning?'mac-fixture':undefined}}));return;
         }
         if(m.op==='claudeDesktop.open'||m.op==='codex.open'){window.clientOpenCalls.push(m.op);queueMicrotask(()=>window.safeCodeNativeResponse({id:m.id,result:window.clientOpenResult||'已请求打开客户端。',error:window.clientOpenError}));return;}
         const result=m.op==='services.preferences'?{enabled:false,serviceAvailable:false}:m.op==='notice.state'?{accepted:false}:null;
@@ -85,7 +85,7 @@ with sync_playwright() as p:
     expect(page.locator('#desktop-key-open')).to_be_visible()
     assert page.locator('#desktop-key-input').input_value()==''
     assert page.locator('#desktop-key-form .config-description br').count()==1
-    assert page.locator('#desktop-key-progress').inner_text().startswith('网关已就绪。\n工具目标：已授权的本机设备 mac-fixture\n首次接入')
+    assert page.locator('#desktop-key-progress').inner_text().startswith('连通成功。\n工具目标：已授权的本机设备 mac-fixture\n首次接入')
     assert page.locator('#desktop-key-open').inner_text()=='打开 Claude Desktop'
     page.locator('#desktop-key-refresh').click()
     expect(page.locator('#desktop-key-progress')).to_contain_text('模型列表已更新')
@@ -187,7 +187,7 @@ with sync_playwright() as p:
     page.locator('#desktop-key-enable').click()
     expect(page.locator('#api-open-claude')).to_be_visible()
     page.evaluate("showScreen('workspace');switchMode('maintenance')")
-    expect(page.locator('#claude-gateway-status')).to_have_text('网关已就绪')
+    expect(page.locator('#claude-gateway-status')).to_have_text('连通成功')
     page.evaluate("window.safeCodeClaudeBridgeStatus({running:true,connected:true,configuration:'fixture'})")
     page.locator('#desktop-key-settings').click()
     page.locator('#api-open-claude').click()

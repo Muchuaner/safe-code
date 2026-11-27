@@ -349,7 +349,7 @@ public sealed class MainWindow : Window
             await tunnel.VerifyAsync(ssh,ct);
             var activeTunnel=tunnel;
             var path=new DesktopKeyAccess.DevicePath(()=>activeTunnel.ConnectionProblem(control.Enabled),
-                (force,token)=>activeTunnel.CheckReturnAsync(force,control.Enabled,token),()=>activeTunnel.Generation);
+                (force,token)=>activeTunnel.CheckReturnAsync(force,control.Enabled,token));
             var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device,devicePath:path);
             keyDeviceTunnel=tunnel;
             tunnel=null;
@@ -400,7 +400,7 @@ public sealed class MainWindow : Window
                 binding.GetProperty("deviceProof").GetString()!,binding.GetProperty("alias").GetString()!,0,"");
             var result=await KeyAccess.EnableAsync("",ct,setup.Replace,setup.UseSaved,setup,device,hostReady:HostReady,
                 devicePath:new(()=>HostReady()?null:target.HostControlStatus.State=="connected"?"本次授权的 SSH 会话已断开，请重新启用接入。":target.HostControlStatus.Message,
-                    (force,token)=>target.MaintainHostControlForChatAsync(token,force),()=>target.HostNetworkGeneration));
+                    (force,token)=>target.MaintainHostControlForChatAsync(token,force)));
             if(startedHere)keyStartedHost=target;
             pendingKeyDevice=null;
             return result;
