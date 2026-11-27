@@ -228,8 +228,9 @@ class PublicHandler(Handler):
         try:
             allowed = self.server.registry.model_policy(self.digest)
             manager = self.manager
-            web_desktop = self.path.partition('?')[2] == 'catalog=web'
-            return self.reply(200, manager.cloudcli.catalog(allowed, web_desktop=web_desktop))
+            if self.path.partition('?')[2] == 'catalog=web':
+                return self.reply(200, manager.cloudcli.catalog(allowed, web_desktop=True))
+            return self.reply(200, manager.catalog() if allowed is None else manager.cloudcli.catalog(allowed))
         except GatewayError as error:
             return self.device_error(error.status, str(error))
         except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):
