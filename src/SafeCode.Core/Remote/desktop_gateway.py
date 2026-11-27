@@ -2128,7 +2128,20 @@ class CloudCliSocketEvents:
     def read_followup(self, limit):
         _, websocket_error = cloudcli_websocket()
         while True:
-            if self.progress.client_detached.is_set() or self.progress.stop_requested.is_set():
+            if self.progress.stop_requested.is_set():
+                # CloudCLI's foreground run has already ended. Its native
+                # task controls can still stop work launched on this stream.
+                for task, status in tuple(self.progress.tasks.items()):
+                    if status == 'running':
+                        with suppress(OSError, websocket_error):
+                            self.connection.settimeout(self.BACKGROUND_POLL_SECONDS)
+                            self.connection.send(json.dumps({'type': 'chat.stop-task', 'sessionId': self.session,
+                                                             'taskId': task}))
+                return self.close_followup(False)
+            if self.progress.client_detached.is_set():
+                if (getattr(self.progress.stream, 'desktop_turn_id', None)
+                        and self.progress.stop_requested.wait(1.5)):
+                    continue
                 return self.close_followup(False)
             try:
                 frame = self.read_event(limit, time.monotonic()+self.BACKGROUND_POLL_SECONDS)
@@ -5303,7 +5316,7 @@ class CloudCliMessagesStream:
         self.wire_lock = threading.Lock()
         self.last_output = time.monotonic()
         turn_id = getattr(handler, 'headers', {}).get(DESKTOP_TURN_HEADER, '')
-        self.desktop_turn_id = turn_id if re.fullmatch(r'[0-9a-f]{32}', turn_id) else None
+        self.desktop_turn_id = turn_id if isinstance(turn_id, str) and re.fullmatch(r'[0-9a-f]{32}', turn_id) else None
 
     def ping_if_idle(self, finished):
         with self.wire_lock:
