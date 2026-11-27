@@ -1632,6 +1632,8 @@ class CloudCliProgress:
         event_type = event.get('event')
         if not status and (event_type == 'started' or event_type == 'progress' and previous is None):
             status = 'running'
+        if status == 'running' and event_type == 'progress' and previous in ('completed', 'failed', 'stopped'):
+            return
         labels = {'running': '运行中', 'completed': '已完成', 'failed': '失败', 'stopped': '已停止'}
         if not isinstance(status, str) or status not in labels or status == previous:
             return
@@ -4326,8 +4328,7 @@ class CloudCliBackend:
             return None
         if authorize is not None:
             authorize(progress.model)
-        message_id = str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE,
-                                    desktop_retry_fingerprint(data, context_1m)))
+        message_id = str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, scope+':'+history_signature(visible, 'cloudcli')))
         with turn.steer_lock:
             if message_id in turn.steers:
                 if turn.steers[message_id] is None:

@@ -475,7 +475,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private static async Task StopInterruptedDesktopTurnAsync(HttpClient client, Guid session, string turn,
                                                                DateTimeOffset requestStarted)
     {
-        var projects = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrEmpty(home)) return;
+        var projects = Path.Combine(home, ".claude", "projects");
         // The SDK writes its explicit interruption marker just after closing
         // the Messages stream. A transport disconnect alone must keep the run recoverable.
         try
@@ -521,6 +523,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 if (value.ValueKind != JsonValueKind.Object ||
                     !value.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String ||
                     type.GetString() != "user" ||
+                    value.TryGetProperty("isSidechain", out var sidechain) && sidechain.ValueKind == JsonValueKind.True ||
                     !value.TryGetProperty("sessionId", out var scope) || scope.ValueKind != JsonValueKind.String ||
                     !scope.TryGetGuid(out var recorded) ||
                     recorded != session ||
