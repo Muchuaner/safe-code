@@ -99,7 +99,6 @@
 .unified-maintenance-cards .advanced-actions{grid-template-columns:minmax(0,1fr);margin-top:12px}
 .unified-maintenance-cards .advanced-actions .deploy-button{width:100%;min-height:28px}
 .unified-maintenance-cards .advanced-actions:has(#install-cloud){grid-template-columns:repeat(2,minmax(0,1fr))}
-#install-cloud{grid-column:1/-1}
 /* 弹窗固定标题，内容在可用高度内滚动，说明合并为一段。 */
 #services-dialog{width:400px;overflow:hidden;max-height:calc(100svh - 24px)}
 #services-dialog[open]{display:flex;flex-direction:column}

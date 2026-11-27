@@ -480,6 +480,8 @@ internal sealed class MacBackend : IDisposable
                 return true;
             case "terminal":step="ssh";await clients.OpenTerminalAsync(RequireSession(),ct);return RequireSession().Server;
             case "cloud.install":step="cloud";return await RequireSession().RequestAsync<ServerInfo>("cloud",null,ct);
+            case "cloud.login":
+                return await RequireSession().ReadCloudCliLoginAsync(ct);
             case "cloud.open":
                 if(RequireSession().Server?.CloudReady!=true)throw new InvalidOperationException("请先安装 CloudCLI。");
                 if(activeMutations>0)throw new InvalidOperationException("请等待当前部署完成。");

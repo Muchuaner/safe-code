@@ -19,6 +19,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       error?item.reject(new Error(error)):item.resolve(result);
     };
     let developerPreview=false;
+    let cloudLoginAttempt=null;
     const consentIds=['usage-consent','settings-usage-consent','diagnostics-consent','settings-diagnostics-consent'];
     let servicePreferences=null, update=null;
     function showPreferences(p){
@@ -521,6 +522,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       renderDesktopAccess();
       for(const [key,ready] of [['mount',nativeServer?.mountReady],['cloud',nativeServer?.cloudReady]]){const button=$('#install-'+key);button.disabled=!!ready||busy;button.title=busy?'有任务正在执行，请查看进度。':'';button.textContent=advancedOperation&&!advancedOperation.done&&advancedOperation.key===(key==='cloud'?'cloud':'mount_install')?'安装中…':ready?'已安装':'安装';}
       if($('#open-cloud-remote'))$('#open-cloud-remote').disabled=!nativeServer?.cloudReady||busy;
+      const checkingCloudLogin=cloudLoginAttempt===connectionAttempt;
+      $('#cloud-login').disabled=!connectionReady||!nativeServer?.cloudReady||busy||checkingCloudLogin;
+      $('#cloud-login').textContent=checkingCloudLogin?'查询中…':'查询密码';
     }
     for(const key of ['mount','cloud']){const log=document.createElement('p');log.id=key+'-live-log';log.className='advanced-live-log';log.hidden=true;$('#'+key+'-summary')?.after(log);if(!log.isConnected)$('#install-'+key).closest('.advanced-card').querySelector('.advanced-copy>div').append(log);log.title='点击查看安装日志';log.onclick=()=>{const op=operationHistory.get(key==='cloud'?'cloud':'mount_install');if(op){displayedOperation=op;$('#operation-log-title').textContent=op.label;$('#operation-log-status').textContent=op.status;$('#operation-log-output').textContent=op.lines.join('\n');$('#operation-log-dialog').showModal();}};}
     setInterval(()=>{if(advancedOperation&&!advancedOperation.done)$('#operation-log-status').textContent='正在安装，已用时 '+Math.floor((Date.now()-advancedOperation.started)/1000)+' 秒。'},1000);
@@ -532,6 +536,21 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       finally{advancedOperation.done=true;busy=false;renderTasks();syncAdvancedButtons();}
     }
     $('#install-cloud').onclick=()=>installAdvanced('cloud');$('#install-mount').onclick=()=>installAdvanced('mount');
+    $('#cloud-login').onclick=async()=>{
+      if($('#cloud-login').disabled)return;
+      const attempt=connectionAttempt;
+      const showIf=()=>attempt===connectionAttempt&&connectionReady&&!busy;
+      cloudLoginAttempt=attempt;
+      syncAdvancedButtons();
+      try{
+        const login=await native('cloud.login');
+        if(showIf())await showCloudCliLogin(login,{showIf});
+      }catch{
+        if(showIf())await showAppMessage('暂时无法查询 CloudCLI 登录信息，请确认服务器连接后重试。',{showIf});
+      }finally{
+        if(cloudLoginAttempt===attempt){cloudLoginAttempt=null;syncAdvancedButtons();}
+      }
+    };
     $('#open-cloud').onclick=()=>native('cloud.open').catch(e=>showAppMessage(e.message));
     let cloudRemoteUrl=null;
     let cloudRemoteRunning=false;
@@ -979,17 +998,17 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       button.onclick=()=>{if(!repairing)repairDialog.close();};
     }
     repairDialog.addEventListener('cancel',event=>{if(repairing)event.preventDefault();});
-    function showRepairedCloudCliLogin(status){
-      const login=status.cloudcliLogin;
-      let message='请使用原有 CloudCLI 网页账号登录。Safe Code 未能确认可显示的登录密码。';
-      if(status.cloudcliNeedsSetup){
+    function showCloudCliLogin(login,{repaired=false,needsSetup=false,showIf}={}){
+      let message='这台服务器没有可查询的 CloudCLI 登录信息。若账号是在网页上手动注册的，请使用当时设置的账号和密码。';
+      if(needsSetup){
         message='CloudCLI 尚未创建网页账号。请打开 CloudCLI，按网页提示完成首次注册。';
       }else if(login?.state==='unverified'){
-        message='Safe Code 保存的密码未通过 CloudCLI 验证。请使用该账号的当前密码登录。';
+        message='保存的登录信息暂未通过 CloudCLI 验证。请检查网页服务。如果改过密码，请使用当前密码登录。';
       }else if(login?.state==='verified'&&login.username&&login.password){
-        message='CloudCLI 已重装，以下登录信息已通过验证。\n\n用户名 '+login.username+'\n密码 '+login.password;
+        const intro=repaired?'CloudCLI 已重装，以下登录信息已通过验证。':'以下登录信息已通过 CloudCLI 验证。';
+        message=intro+'\n\n用户名 '+login.username+'\n密码 '+login.password;
       }
-      void showAppMessage(message,{title:'CloudCLI 登录信息',confirm:'完成',clearOnClose:true,preserveWhitespace:true});
+      return showAppMessage(message,{title:'CloudCLI 登录信息',confirm:'完成',clearOnClose:true,preserveWhitespace:true,showIf});
     }
     $('#gateway-repair-form').onsubmit=async event=>{
       event.preventDefault();
@@ -1008,7 +1027,9 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
         repairStatus.textContent=status.cloudcliReinstalled?'网关和 CloudCLI 已重装，服务检查通过。':'网关已重装，服务检查通过。';
         repairStart.hidden=true;
         repairBack.textContent='完成';
-        if(reinstallCloudCLI&&status.cloudcliReinstalled&&repairDialog.open)showRepairedCloudCliLogin(status);
+        if(reinstallCloudCLI&&status.cloudcliReinstalled&&repairDialog.open)
+          void showCloudCliLogin(status.cloudcliLogin,{repaired:true,needsSetup:status.cloudcliNeedsSetup,
+            showIf:()=>attempt===connectionAttempt&&connectionReady});
       }catch(error){
         if(attempt===connectionAttempt)repairStatus.textContent=error.message;
       }finally{

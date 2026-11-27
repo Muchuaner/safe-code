@@ -677,6 +677,7 @@ if sys.stdin.buffer.read(1) == b'\r':
               patch.object(agent, 'account', return_value={'username': entry.pw_name}),
               patch.object(agent.pwd, 'getpwnam', return_value=entry),
               patch.object(agent, 'repair_safe_code_api', return_value={'enabled': True}) as repair,
+              patch.object(agent, 'read_cloudcli_login', return_value={'state': 'unavailable'}) as login,
               patch.object(agent, 'safe_code_api_admin') as admin):
             options = {'action': 'repair', 'accepted': True, 'files': files, 'reinstallCloudCLI': True}
             self.assertEqual(agent.safe_code_api(options), {'enabled': True})
@@ -687,9 +688,15 @@ if sys.stdin.buffer.read(1) == b'\r':
             options = {**options, 'reinstallCloudCLI': False}
             self.assertEqual(agent.safe_code_api(options), {'enabled': True})
             repair.assert_called_once_with(entry, command, options, work_python)
+            lookup = {'action': 'cloudcli_login'}
+            self.assertEqual(agent.safe_code_api(lookup), {'state': 'unavailable'})
+            login.assert_called_once_with(work_python)
+            with self.assertRaisesRegex(RuntimeError, '不支持此远程网关操作'):
+                agent.safe_code_api({**lookup, 'gateway_target': 'fixture'})
+            login.assert_called_once_with(work_python)
             admin.assert_not_called()
 
-    def test_repair_only_returns_a_verified_web_login_through_the_foreground_agent(self):
+    def test_cloudcli_login_only_returns_verified_credentials_through_the_foreground_agent(self):
         account = {'username': 'fixture-web', 'password': 'fixture password'}
         requests = []
 
@@ -722,22 +729,23 @@ if sys.stdin.buffer.read(1) == b'\r':
                 with (patch.dict(os.environ, {'HOME': str(self.root)}),
                       patch.object(agent, 'API_DIRECTORY', ROOT/'src/SafeCode.Core/Remote')):
                     save_config(account)
-                    self.assertEqual(agent.repaired_cloudcli_login([sys.executable], port),
+                    self.assertEqual(agent.read_cloudcli_login([sys.executable], port),
                                      {'state': 'verified', **account})
-                    self.assertEqual(requests, [('/api/auth/login', account)])
+                    self.assertEqual(agent.read_cloudcli_login([sys.executable]), {'state': 'verified', **account})
+                    self.assertEqual(requests, [('/api/auth/login', account)] * 2)
                     save_config({**account, 'password': 'old fixture password'})
-                    self.assertEqual(agent.repaired_cloudcli_login([sys.executable], port), {'state': 'unverified'})
+                    self.assertEqual(agent.read_cloudcli_login([sys.executable], port), {'state': 'unverified'})
                     save_config({'tokenFile': '/run/cloudcli/fixture-token'})
-                    self.assertEqual(agent.repaired_cloudcli_login([sys.executable], port), {'state': 'unavailable'})
+                    self.assertEqual(agent.read_cloudcli_login([sys.executable], port), {'state': 'unavailable'})
                     save_config(account, mode=0o644)
-                    self.assertEqual(agent.repaired_cloudcli_login([sys.executable], port), {'state': 'unavailable'})
+                    self.assertEqual(agent.read_cloudcli_login([sys.executable], port), {'state': 'unavailable'})
                     save_config(account)
-                    self.assertEqual(agent.repaired_cloudcli_login([sys.executable], (port % 65535) + 1),
+                    self.assertEqual(agent.read_cloudcli_login([sys.executable], (port % 65535) + 1),
                                      {'state': 'unavailable'})
                     with patch.object(agent, 'JOB_DIR', self.root):
                         with self.assertRaises(ValueError):
-                            agent.repaired_cloudcli_login([sys.executable], port)
-                    self.assertEqual(len(requests), 2)
+                            agent.read_cloudcli_login([sys.executable], port)
+                    self.assertEqual(len(requests), 3)
             finally:
                 cloudcli.shutdown()
                 thread.join()

@@ -1128,7 +1128,7 @@ def safe_code_api(options):
     multi = action in ('multi.list', 'multi.inspect', 'multi.create', 'multi.claim', 'multi.remove')
     remote = 'gateway_target' in options
     if action not in ('list','usage','issue','update','unbind','revoke','delete','settings','set_port','set_origin','set_concurrency','public_status','enable_public','refresh_subscription','install',
-                      'ticket_endpoint','key_host_reuse','bind_ssh_device','model_catalog','project_catalog','set_prompt_review','set_key_queue','repair','repair_cloudcli_login') and not multi:
+                      'ticket_endpoint','key_host_reuse','bind_ssh_device','model_catalog','project_catalog','set_prompt_review','set_key_queue','repair','repair_cloudcli_login','cloudcli_login') and not multi:
         raise RuntimeError('未知 Safe Code API 管理操作。')
     entry=pwd.getpwnam(account()['username'])
     if entry.pw_uid==0:raise RuntimeError('工作账户不能是 root。')
@@ -1149,7 +1149,9 @@ def safe_code_api(options):
     if action=='repair':
         return repair_safe_code_api(entry, command, options, work_python)
     if action=='repair_cloudcli_login':
-        return repaired_cloudcli_login(work_python, options.get('port'))
+        return read_cloudcli_login(work_python, options.get('port') or 0)
+    if action=='cloudcli_login':
+        return read_cloudcli_login(work_python)
     if not script.is_file():
         if action=='public_status':
             return {'installed':False,'enabled':False,
@@ -1336,7 +1338,7 @@ def repair_safe_code_api(entry, command, options, work_python):
 
 # Use the installed Safe Code module under the work account so the same private-file and
 # credential checks apply. Print only the outcome and the verified web login over SSH.
-REPAIRED_CLOUDCLI_LOGIN = r"""
+CLOUDCLI_LOGIN_QUERY = r"""
 import json
 import sys
 
@@ -1344,32 +1346,38 @@ sys.path.insert(0, sys.argv[1])
 from desktop_gateway import GatewayError, cloudcli_web_login, load_cloudcli_config
 
 
-def read_login(port):
+def read_login(expected_port):
     config = load_cloudcli_config()
-    login = config['desktopQuestions'] if config and config['port'] == port else None
+    if not config or expected_port is not None and config['port'] != expected_port:
+        return {'state': 'unavailable'}
+    login = config['desktopQuestions']
     if not login or 'password' not in login:
         return {'state': 'unavailable'}
     try:
-        cloudcli_web_login(port, login)
+        cloudcli_web_login(config['port'], login)
     except GatewayError:
         return {'state': 'unverified'}
     return {'state': 'verified', **login}
 
 
 try:
-    print(json.dumps(read_login(int(sys.argv[2]))))
+    print(json.dumps(read_login(int(sys.argv[2]) if len(sys.argv) > 2 else None)))
 except GatewayError:
     print(json.dumps({'state': 'unavailable'}))
 """
 
 
-def repaired_cloudcli_login(work_python, port):
-    # Never write a credential response into a repair job's result or log files.
-    if JOB_DIR is not None or type(port) is not int or not 1 <= port <= 65535:
-        raise ValueError('CloudCLI 登录信息只能在重装完成后读取。')
+def read_cloudcli_login(work_python, expected_port=None):
+    # Credential responses must only travel through the foreground SSH channel.
+    if JOB_DIR is not None:
+        raise ValueError('CloudCLI 登录信息只能通过当前服务器连接查询。')
+    if expected_port is not None and (type(expected_port) is not int or not 1 <= expected_port <= 65535):
+        raise ValueError('CloudCLI 本机端口无效。')
+    command = [*work_python, '-IB', '-c', CLOUDCLI_LOGIN_QUERY, str(API_DIRECTORY)]
+    if expected_port is not None:
+        command.append(str(expected_port))
     try:
-        checked = run([*work_python, '-IB', '-c', REPAIRED_CLOUDCLI_LOGIN, str(API_DIRECTORY), str(port)],
-                      check=False, timeout=12)
+        checked = run(command, check=False, timeout=12)
         if checked.returncode == 0:
             return json.loads(checked.stdout)
     except (OSError, subprocess.TimeoutExpired, ValueError):

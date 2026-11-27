@@ -416,6 +416,7 @@ $('#check-update').onclick=()=>{$('#update-status').textContent='请在 Windows 
 let appDialogQueue=Promise.resolve();
 function appDialog(message,options={}){
   const next=appDialogQueue.then(()=>new Promise(resolve=>{
+    if(options.showIf&&!options.showIf()){resolve(false);return;}
     const dialog=$('#app-message-dialog'),body=$('#app-message-body');
     $('#app-message-title').textContent=options.title||'提示';body.textContent=message;
     body.style.whiteSpace=options.preserveWhitespace?'pre-wrap':'';

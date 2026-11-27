@@ -204,6 +204,15 @@ public sealed partial class SshSession
         return result;
     }
 
+    public async Task<JsonElement> ReadCloudCliLoginAsync(CancellationToken ct, int? expectedPort = null)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(25));
+        return await RequestAsync<JsonElement>("safe_code_api",
+            expectedPort is int port ? new { action = "repair_cloudcli_login", port } : new { action = "cloudcli_login" },
+            timeout.Token);
+    }
+
     public async Task<JsonElement> RepairPublicGatewayAsync(bool reinstallCloudCLI, CancellationToken ct)
     {
         var files = await LoadGatewayPackageAsync(ct);
@@ -217,12 +226,9 @@ public sealed partial class SshSession
         response.Remove("cloudcliPort");
         if (!result.TryGetProperty("cloudcliNeedsSetup", out var needsSetup) || needsSetup.ValueKind != JsonValueKind.True)
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(25));
             try
             {
-                var login = await RequestAsync<JsonElement>("safe_code_api",
-                    new { action = "repair_cloudcli_login", port = localPort }, timeout.Token);
+                var login = await ReadCloudCliLoginAsync(ct, localPort);
                 response["cloudcliLogin"] = JsonObject.Create(login);
             }
             catch (Exception) when (!ct.IsCancellationRequested)

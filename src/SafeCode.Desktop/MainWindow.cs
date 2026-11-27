@@ -749,6 +749,8 @@ public sealed class MainWindow : Window
             case "cloud.install":
                 if(deploying)throw new InvalidOperationException("已有任务正在执行，请等待完成。");deploying=true;activeStep="cloud";
                 try{return await Task.Run(()=>RequireSession().RequestAsync<ServerInfo>("cloud",null,lifetime.Token));}finally{deploying=false;activeStep="";}
+            case "cloud.login":
+                return await RequireSession().ReadCloudCliLoginAsync(lifetime.Token);
             case "cloud.open":
                 if (RequireSession().Server?.CloudReady != true) throw new InvalidOperationException("请先安装 CloudCLI。");
                 if(deploying)throw new InvalidOperationException("请等待当前部署完成后打开 CloudCLI。");
