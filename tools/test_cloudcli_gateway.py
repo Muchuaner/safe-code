@@ -681,7 +681,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertTrue(all(len(raw)<=20002 for _,_,raw in attachments))
         self.assertEqual(text,gateway.recovery_transcript(history))
         self.assertNotIn('never copy me',text)
-        self.assertIn('完整文字记录',note)
+        self.assertIn('full transcript',note)
         self.assertLess(len(inline),len(text))
         self.assertEqual(gateway.recovery_context(history,None,False),(text,''))
 
@@ -864,6 +864,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertEqual([item['projectPath'] for item in self.cloud.created_sessions], [str(self.project)] * 2)
             self.assertEqual([item['sessionId'] for item in commands], identifiers)
             self.assertEqual([c['options']['permissionMode'] for c in commands], ['default', 'auto'])
+            self.assertIn(f'The CloudCLI working directory for this project is `{self.project}` on the VPS.',
+                          commands[0]['content'])
             self.assertNotIn('ssh desk-fixture', commands[0]['content'])
             self.assertEqual(self.cloud.registered_projects, [])
             self.assertEqual(self.cloud.requests, [])
@@ -1677,9 +1679,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
             task = self.cloud.requests[-1][2]
             self.assertNotIn(test_folder, task['message'])
             if expected:
-                self.assertIn(f'当前工作目录为 `{expected}`', task['message'])
+                self.assertIn(f'The working directory is `{expected}`', task['message'])
             else:
-                self.assertNotIn('当前工作目录为', task['message'])
+                self.assertNotIn('The working directory is', task['message'])
                 self.assertNotEqual(task['projectPath'], str(self.project))
                 self.assertFalse((Path(task['projectPath'])/'.mcp.json').exists())
             if cwd == desktop:
@@ -1688,6 +1690,18 @@ class CloudCLIGatewayTests(unittest.TestCase):
                             {'role': 'user', 'content': 'Follow up'}]
                 self.assertEqual(self.request(conversation('unused', messages=messages))[0], 200)
                 self.assertEqual(self.cloud.requests[-1][2]['message'], 'Follow up')
+
+    def test_ssh_workspace_guidance_preserves_device_paths_in_english_instructions(self):
+        for system, path in [('Windows', r'E:\开发项目\Example'), ('macOS', '/Users/example/开发项目')]:
+            for workspace in (path, None):
+                with self.subTest(system=system, workspace=workspace):
+                    command = 'ssh -F /example/config test-device'
+                    text = gateway.CloudCliBackend.ssh_workspace_instruction('测试机', system, workspace, command)
+                    self.assertIn(f"测试机 (`{system}`)", text)
+                    self.assertIn(f'`{command}`', text)
+                    if workspace:
+                        self.assertIn(f'`{workspace}`', text)
+                    self.assertTrue(text.replace('测试机', '').replace(path, '').isascii())
 
     def test_ssh_prompt_uses_the_private_bridge_alias_for_an_authorized_project(self):
         workspace = '/Users/example/Desktop'
@@ -1708,10 +1722,10 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         prompt = self.cloud.requests[-1][2]['message']
         self.assertIn(f'`ssh -F {ssh_config} desk-mac`', prompt)
-        self.assertIn(f'本机是 Example Mac（`macOS`），当前工作目录为 `{workspace}`。', prompt)
-        self.assertIn('每条命令从项目根目录开始', prompt)
-        self.assertNotIn('本机文件工具', prompt)
-        self.assertTrue(prompt.startswith('Identify this machine.\n\n本机是'))
+        self.assertIn(f'The user\'s computer is Example Mac (`macOS`). The working directory is `{workspace}`.', prompt)
+        self.assertIn('Start each command in the project root', prompt)
+        self.assertNotIn('local file tools', prompt)
+        self.assertTrue(prompt.startswith('Identify this machine.\n\nThe user\'s computer is'))
         self.assertNotIn('SafeCode workspace context:', prompt)
         self.assertNotIn('VPS', prompt)
         self.start_gateway()
@@ -2171,7 +2185,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
             original = '在当前项目里测试 Linux 兼容性，请用中文回复。'
             verdict('allow', english=english)
             self.assertEqual(request(conversation(original))[0], 200)
-            self.assertTrue(self.cloud.requests[-1][2]['message'].startswith(english))
+            forwarded = self.cloud.requests[-1][2]['message']
+            self.assertTrue(forwarded.startswith(english))
+            self.assertNotRegex(forwarded, r'[\u3400-\u9fff]')
             sent = json.loads(review.call_args.args[2])
             self.assertEqual(sent['messages'][1:], [{'role': 'user', 'content': original}])
             self.assertIn('faithful English translation', sent['messages'][0]['content'])
@@ -2675,7 +2691,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertEqual(len(actions), 1)
             command = actions[0]
             self.assertEqual((command['type'], command['sessionId']), ('chat.send', CLOUD_SESSION))
-            self.assertTrue(command['content'].startswith('Inspect these fixtures.\n\n本机是'))
+            self.assertTrue(command['content'].startswith('Inspect these fixtures.\n\nThe user\'s computer is'))
             self.assertIn('/Users/example/Work', command['content'])
             self.assertEqual([a['path'] for a in command['options']['attachments']],
                              ['/example/assets/0-attachment-1.png', '/example/assets/1-Report.pdf'])
@@ -2703,7 +2719,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
             self.assertEqual(self.request(payload)[0], 200)
         command, = actions
-        self.assertTrue(command['content'].startswith('请查看本轮附加的文件。'))
+        self.assertTrue(command['content'].startswith('Please review the attached files.'))
         self.assertEqual([len(data) for _, _, data in self.cloud.uploads], [len(inline['source']['data']), len(raw)])
         source['data'] = base64.b64encode(raw + b'a').decode()
         self.assertEqual(self.request(payload, session=str(uuid.uuid4()))[0], 413)
@@ -2793,7 +2809,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         session = str(uuid.uuid4())
         with patch('host_control_mcp.exchange_ssh', return_value={'workspace': '/Users/example/Desktop'}) as resolve:
             self.assertEqual(self.request(conversation('Check the selected folder.'), session=session)[0], 200)
-        self.assertIn('当前工作目录为 `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
+        self.assertIn('The working directory is `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
         argv, data = resolve.call_args.args
         self.assertEqual(json.loads(data), {'name': 'desktop_workspace', 'session': session})
         self.assertIn('desk-mac', argv)
@@ -2808,7 +2824,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         with patch('host_control_mcp.exchange_ssh') as lookup:
             self.assertEqual(self.request(request)[0], 200)
         lookup.assert_not_called()
-        self.assertIn('当前工作目录为 `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
+        self.assertIn('The working directory is `/Users/example/Desktop`', self.cloud.requests[-1][2]['message'])
 
     def test_plan_confirmation_displays_full_plan_and_requires_explicit_approval(self):
         self.enable_cloudcli_web_fixture()
@@ -3363,7 +3379,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 lambda *a, **kw: ChatSocketFixture(replace_first, events), OSError)):
             self.assertEqual(self.request(conversation('Replace the first question'))[0], 200)
         self.assertEqual(actions[-1]['anchorId'], first_anchor)
-        self.assertTrue(actions[-1]['content'].startswith('Replace the first question\n\n本机是'))
+        self.assertTrue(actions[-1]['content'].startswith('Replace the first question\n\nThe user\'s computer is'))
         self.assertIn('/Users/example/Work', actions[-1]['content'])
 
     def test_public_gateway_dispatch_is_unrestricted_and_preserves_plan(self):

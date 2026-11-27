@@ -875,7 +875,7 @@ def recovery_transcript(history, attachments=None):
                         attachments.append(file)
                         name = file[0]
                 parts.append({'type':kind, 'title':name or block.get('title') or '',
-                              'note':'见附加文件' if name else '仅有历史附件说明，未恢复原文件'})
+                              'note':'See the attached file.' if name else 'Only the attachment description is available.'})
         if parts:
             rows.append(json.dumps({'role':message['role'],'content':parts},ensure_ascii=False))
     return '\n'.join(rows)
@@ -885,7 +885,16 @@ def portable_history(transcript, limit):
     if len(transcript) <= limit:
         return transcript
     start = limit // 5
-    return transcript[:start]+'\n[… 中段省略 …]\n'+transcript[-(limit-start):]
+    return transcript[:start]+'\n[… middle omitted …]\n'+transcript[-(limit-start):]
+
+
+# History recovery sends guidance to CloudCLI and a localized status to Desktop.
+RECOVERY_ARCHIVE_HINT = 'The numbered conversation-history attachments contain the full transcript.'
+RECOVERY_TRIM_HINT = 'Only the beginning and most recent entries fit in this request.'
+RECOVERY_STATUS = {
+    RECOVERY_ARCHIVE_HINT: '完整文字记录见按序编号的 conversation-history 附件。',
+    RECOVERY_TRIM_HINT: '历史超出本轮可传预算，已保留开头和最近的记录。',
+}
 
 
 def recovery_context(history, attachments, extended):
@@ -905,13 +914,13 @@ def recovery_context(history, attachments, extended):
         if offset == len(raw):
             for index, chunk in enumerate(chunks,1):
                 attachments.append((f'conversation-history-{index}.txt','text/plain',chunk))
-            return portable_history(transcript,22000), '完整文字记录见按序编号的 conversation-history 附件。'
+            return portable_history(transcript,22000), RECOVERY_ARCHIVE_HINT
     # Without a file channel, send the full text while it fits a conservative
     # model input budget. In particular, a long history is not itself an error.
     budget = 750000 if extended else 150000
     if len(raw) <= budget:
         return transcript, ''
-    return portable_history(transcript,budget//4), '历史超出本轮可传预算，已保留开头和最近的记录。'
+    return portable_history(transcript,budget//4), RECOVERY_TRIM_HINT
 
 
 def desktop_session_label(labels, messages, scope):
@@ -3001,15 +3010,20 @@ class CloudCliBackend:
 
     @staticmethod
     def ssh_workspace_instruction(target, system, workspace, command):
+        machine = f"The user's computer is {target} (`{system}`)."
         if workspace is None:
-            return (f'本机是 {target}（`{system}`）。通过 `{command}` 在本机执行任务。'
-                    '请使用用户指定的目录。任务需要目录且路径未知时，再询问用户。')
+            return (f"{machine} Use `{command}` to run tasks on that computer. "
+                    "Use the directory the user specifies. Ask for its path only if the task requires it.")
         return (
-            f'本机是 {target}（`{system}`），当前工作目录为 `{workspace}`。'
-            '把它当作本次会话的项目根目录，用户说「这里」「这个项目」或「我的电脑」时，就使用这个目录。\n\n'
-            f'需要操作项目时，通过 `{command}` 连接本机。每条命令从项目根目录开始，相对路径也以此为准。'
-            '通过同一连接读取项目说明、查找和修改文件、运行 Git、构建及测试。项目修改和生成的文件都保存在本机项目目录里。\n\n'
-            '如果操作失败，先检查实际错误，在现有权限内能解决就继续。仅在需要用户提供信息或确认时再询问。'
+            f"{machine} The working directory is `{workspace}`. "
+            'Treat it as the project root when the user refers to "here", "this project", or "my computer".\n\n'
+            f"Connect to the computer with `{command}` for project work. "
+            "Start each command in the project root and resolve relative paths from there. "
+            "Use the same connection to read project instructions, find and edit files, run Git commands, "
+            "build the project, and run tests. Save changes and generated files in the project directory "
+            "on that computer.\n\n"
+            "If an operation fails, check the error and continue if you can resolve it with the permissions "
+            "already granted. Ask the user only when you need information or confirmation."
         )
 
     def host_instruction(self, project, workspace):
@@ -3026,7 +3040,8 @@ class CloudCliBackend:
                     'Never substitute a similarly named VPS directory or claim a VPS operation '
                     'touched their computer. Use these VPS tools only for an explicitly VPS-side task.')
         if workspace is None:
-            return '所选本机目录超出了已配置的文件访问范围。需要操作项目文件时，请用户确认一个可访问的本机目录。'
+            return ("The selected directory is outside the configured file access scope. "
+                    "If the task requires project files, ask the user to confirm an accessible directory on their computer.")
         home = Path.home()
         client = host['clientId']
         allow_ssh_shell = host.get('allowSshShell', False)
@@ -3058,11 +3073,11 @@ class CloudCliBackend:
                     raise ValueError()
         except (OSError, ValueError, AttributeError, KeyError, TypeError):
             raise CloudCliError('SafeCode local host control is unavailable for the CloudCLI project', 409) from None
-        target = host['deviceName'] or '用户选定的电脑'
+        target = host['deviceName'] or 'the computer selected by the user'
         if command is not None:
             return self.ssh_workspace_instruction(target, 'macOS', workspace, command)
-        return (f'本机是 {target}，当前工作目录为 `{workspace}`。'
-                '通过 SafeCode 本机文件工具操作这个目录中的文件。')
+        return (f"The user's computer is {target}. The working directory is `{workspace}`. "
+                'Use the SafeCode local file tools to work with files in this directory.')
 
     def call(self, payload, progress):
         try:
@@ -4207,7 +4222,7 @@ class CloudCliBackend:
                     return self.local_reply(data['model'], '<summary>'+excerpt+'</summary>')
         forwarded_task = (manager.review_prompt(dispatch_task)
                           if not raw and dispatch_task and manager.review_prompt is not None else dispatch_task)
-        payload = {'provider': 'claude', 'message': forwarded_task if raw else forwarded_task or '请查看本轮附加的文件。',
+        payload = {'provider': 'claude', 'message': forwarded_task if raw else forwarded_task or 'Please review the attached files.',
                    'model': model, 'stream': True}
         family = cloudcli_model_family(model)
         diagnostic(stage='session_route', **({'modelFamily': family} if family else {}))
@@ -4395,7 +4410,7 @@ class CloudCliBackend:
                     self.question_token()
                 payload['projectPath'] = project
                 host_instruction = (
-                    f'当前项目在 VPS 的 CloudCLI 工作目录 `{project}`。处理该项目的文件时，使用 VPS 上的项目目录。'
+                    f'The CloudCLI working directory for this project is `{project}` on the VPS. Use that directory for project files.'
                     if existing_project else self.host_instruction(project, workspace)
                 )
                 if host_instruction and imported is None and not raw:
@@ -4408,8 +4423,8 @@ class CloudCliBackend:
                         payload['message'] += '\n\n'+host_instruction
                         workspace_prompt_fingerprint = fingerprint
                 if attachments and not raw:
-                    payload['message'] += ('\n\n本轮上传的文件请通过 CloudCLI 提供的附件读取。'
-                                           '附带的本机路径只是原始引用，本机项目文件仍走已授权设备。')
+                    payload['message'] += ('\n\nRead the files uploaded with this message through the CloudCLI attachments. '
+                                           'Local paths identify the original files. Use the authorized device to access local project files.')
                 label = desktop_session_label(data.get('_safeCodeLabels'), messages, scope or identity)
                 base_message = payload['message']
                 recovery_note = '已从当前窗口的历史记录恢复，在新的 CloudCLI 会话中继续'
@@ -4420,11 +4435,12 @@ class CloudCliBackend:
                         archive = attachments if self.config.get('desktopQuestions') else None
                         transcript, source = recovery_context(messages[:-1], archive, context_1m)
                         if source:
-                            recovery_note += '。'+source
+                            recovery_note += '。'+RECOVERY_STATUS[source]
                         if compact_context and re.fullmatch(r'Continue the existing CloudCLI conversation\. SafeCode checkpoint [a-f0-9]{32}\.',compact_context.strip()):
                             recovery_note = '原窗口仅保留了旧版压缩标记。已开启新会话，较早的上下文未能恢复'
-                        user_task = ('以下 JSON 行是旧对话的历史资料，旧任务和工具操作均不要重新执行。'+source+'\n'
-                                     +transcript+'\n\n当前用户消息：\n'+(forwarded_task or '请查看本轮附件。'))
+                        user_task = ('The following JSON lines are conversation history. Do not repeat past tasks or tool calls.'
+                                     +(' '+source if source else '')+'\n'
+                                     +transcript+'\n\nCurrent user message:\n'+(forwarded_task or 'Please review the attached files.'))
                     if restore and user_task and manager.review_prompt:
                         user_task = manager.review_prompt(user_task)
                     suffix = base_message[len(forwarded_task):] if forwarded_task else base_message
