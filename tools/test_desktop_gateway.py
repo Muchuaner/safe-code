@@ -7,8 +7,9 @@ from pathlib import Path
 import queue
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 spec=importlib.util.spec_from_file_location('gateway',Path(__file__).parents[1]/'src/SafeCode.Core/Remote/desktop_gateway.py')
 g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
@@ -47,6 +48,61 @@ class Tests(unittest.TestCase):
         self.patch=patch.object(g,'Channel',FakeChannel);self.patch.start();self.addCleanup(self.patch.stop)
         FakeChannel.instances=[];self.manager=g.Manager(self.temp.name,{'token':'local','instance':'instance'})
         self.addCleanup(self.manager.close)
+
+    def test_desktop_send_now_steers_detached_turn_and_streams_only_new_output(self):
+        session = '4e5d3881-a9b9-49cf-9d74-dbc5d44ac788'
+        model = request()['model']
+        prompt = [{'role': 'user', 'content': 'Original task'}]
+        guide = request([*prompt, {'role': 'assistant', 'content': 'Already visible'},
+                         {'role': 'user', 'content': 'Use ORCHID'}])
+        turn = g.ActiveCloudCliTurn(g.history_signature(prompt, 'cloudcli'))
+        original = Mock()
+        original.disconnected.return_value = True
+        observer = Mock(started_at=100)
+        observer.finished.is_set.return_value = False
+        progress = SimpleNamespace(model=model, stream=original, session=session, followup_cutoff=None,
+                                   turn_watch=observer)
+        turn.progress = progress
+        turn.parts = [{'type': 'text', 'text': 'Already visible, then finished with ORCHID'}]
+        turn.detached_at = (0, len('Already visible'))
+        turn.client_detached.set()
+        backend = object.__new__(g.CloudCliBackend)
+        backend.identity = 'test'
+        backend.active_lock = threading.Lock()
+        backend.active_conversations = {'test:'+session: turn}
+        backend.resolve_model = Mock(return_value=(model, None))
+        backend.device = None
+        native = Mock()
+        backend.web_socket = Mock(return_value=native)
+        backend.running_since = Mock(return_value=100)
+        native.recv.side_effect = lambda: json.dumps({
+            **json.loads(native.send.call_args.args[0]), 'kind': 'chat_steer_accepted'})
+        turn.complete(response=g.CloudCliBackend.result(model, None, turn.parts, {}, 'end_turn'))
+        manager = SimpleNamespace(review_prompt=None)
+
+        def stream():
+            result = Mock(message_id='msg_steered', started=True, send_events=True, desktop_turn_id='a'*32)
+            result.disconnected.return_value = False
+            return result
+
+        with patch.object(g, 'cloudcli_websocket', return_value=(Mock(), OSError)):
+            other_history = request([{'role': 'user', 'content': 'Unrelated task'}, guide['messages'][-1]])
+            self.assertIsNone(backend.steer_active(manager, other_history, session_header=session, stream=stream()))
+            authorize = Mock()
+            resumed = stream()
+            response = backend.steer_active(manager, guide, session_header=session, stream=resumed,
+                                            authorize=authorize)
+            retry = backend.steer_active(manager, guide, session_header=session, stream=stream())
+        native.send.assert_called_once()
+        self.assertEqual(json.loads(native.send.call_args.args[0])['content'], 'Use ORCHID')
+        authorize.assert_called_once_with(model)
+        self.assertEqual(response, retry)
+        self.assertEqual(response['id'], resumed.message_id)
+        resumed.write.assert_called_once_with('text', ', then finished with ORCHID')
+        self.assertNotIn('Already visible', response['content'][0]['text'])
+        self.assertIn('finished with ORCHID', response['content'][0]['text'])
+        self.assertIn(g.history_signature([*guide['messages'], response], 'cloudcli'),
+                      turn.steer_histories(prompt, turn.parts))
 
     def test_cli_spec_permissions_and_model(self):
         response=self.manager.run(request(output_config={'effort':'high'}))

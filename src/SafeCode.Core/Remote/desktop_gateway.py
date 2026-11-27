@@ -1495,6 +1495,9 @@ class CloudCliProgress:
         self.reported_model = None
         self.other_models = set()
 
+    def has_reader(self):
+        return self.resume_turn is not None and self.resume_turn.reader is not None
+
     def write(self, text, kind='text'):
         if not text or self.output_closed:
             return
@@ -2140,11 +2143,12 @@ class CloudCliSocketEvents:
                             self.connection.send(json.dumps({'type': 'chat.stop-task', 'sessionId': self.session,
                                                              'taskId': task}))
                 return self.close_followup(False)
-            if self.progress.client_detached.is_set():
+            if self.progress.client_detached.is_set() and not self.progress.has_reader():
                 if (getattr(self.progress.stream, 'desktop_turn_id', None)
                         and self.progress.stop_requested.wait(1.5)):
                     continue
-                return self.close_followup(False)
+                if not self.progress.has_reader():
+                    return self.close_followup(False)
             try:
                 frame = self.read_event(limit, time.monotonic()+self.BACKGROUND_POLL_SECONDS)
             except TimeoutError:
@@ -2273,7 +2277,14 @@ class CloudCliStopWatch:
 
     def detach(self, stream):
         if not self.inactive(stream):
-            self.progress.client_detached.set()
+            turn = self.progress.resume_turn
+            if turn is None:
+                self.progress.client_detached.set()
+            else:
+                with turn.changed:
+                    if not turn.client_detached.is_set():
+                        turn.detached_at = turn.cursor()
+                        turn.client_detached.set()
 
     def stop(self, stream):
         with self.lock:
@@ -2333,6 +2344,29 @@ def native_cloudcli_options():
         return _native_catalog_options
 
 
+@dataclass
+class DesktopSteerReceipt:
+    history: list
+    reply: dict
+    cursor: Optional[tuple] = None
+
+    def after(self, response):
+        if self.cursor is None:
+            return self.reply
+        index, offset = self.cursor
+        content = response['content'][index:]
+        prefix = self.reply['content'][0]
+        if content and offset:
+            block = content[0]
+            kind = block['type']
+            content[0] = {**block, kind: block[kind][offset:]}
+            if not content[0][kind]:
+                content.pop(0)
+        if content and content[0]['type'] == 'text':
+            prefix = {**prefix, 'text': prefix['text'] + content.pop(0)['text']}
+        return {**response, 'content': [prefix, *content]}
+
+
 class ActiveCloudCliTurn:
     def __init__(self, history):
         self.history = history
@@ -2345,7 +2379,9 @@ class ActiveCloudCliTurn:
         self.parts = ()
         self.response = None
         self.error = None
-        self.reader = False
+        self.reader = None
+        self.reader_cursor = None
+        self.detached_at = None
         self.desktop_turn_id = None
         self.steer_lock = threading.Lock()
         self.steers = {}
@@ -2356,6 +2392,21 @@ class ActiveCloudCliTurn:
             self.error = error
             self.changed.notify_all()
 
+    def cursor(self):
+        if not self.parts:
+            return (0, 0)
+        last = self.parts[-1]
+        return len(self.parts)-1, len(last[last['type']])
+
+    def steer_cursor(self, observer):
+        with self.changed:
+            if self.reader is not None and not self.reader.disconnected():
+                return None
+            original = self.progress.stream
+            if not self.client_detached.is_set() and original is not None and original.disconnected():
+                observer.detach(original)
+            return self.reader_cursor or self.detached_at
+
     def steer_histories(self, messages, content):
         assistant = {'role': 'assistant', 'content': content}
         histories = []
@@ -2364,22 +2415,28 @@ class ActiveCloudCliTurn:
             for receipt in self.steers.values():
                 if receipt is None:
                     continue
-                history, reply = receipt
+                history = receipt.history
+                reply = receipt.after({'role': 'assistant', 'content': content})
+                if receipt.cursor is not None:
+                    histories.append(history_signature(history, 'cloudcli'))
                 histories.append(history_signature([*history, reply], 'cloudcli'))
-                if content:
+                if content and receipt.cursor is None:
                     histories.append(history_signature([*history, reply, assistant], 'cloudcli'))
                 ordered.extend((history[-1], reply))
                 histories.append(history_signature(ordered, 'cloudcli'))
         return histories
 
-    def resume(self, stream):
+    def resume(self, stream, receipt=None):
+        index, offset = receipt.cursor if receipt is not None else (0, 0)
         with self.changed:
-            if self.reader:
+            if self.reader is not None and not self.reader.disconnected():
                 raise CloudCliError('此会话已有桌面连接正在恢复。', 409)
-            self.reader = True
+            self.reader = stream
+            self.reader_cursor = (index, offset)
             self.desktop_turn_id = getattr(stream, 'desktop_turn_id', None)
         try:
-            index = offset = 0
+            if receipt is not None:
+                stream.text(receipt.reply['content'][0]['text'])
             while not stream.disconnected():
                 with self.changed:
                     if self.error is not None:
@@ -2400,13 +2457,19 @@ class ActiveCloudCliTurn:
                         self.changed.wait(1)
                 for kind, text in chunks:
                     stream.write(kind, text)
+                with self.changed:
+                    if self.reader is stream:
+                        self.reader_cursor = (index, offset)
                 if response is not None:
+                    if receipt is not None:
+                        response = receipt.after(response)
                     return {**response, 'id': stream.message_id} if stream.started else response
                 stream.queue_ping()
             raise ConnectionAbortedError('Desktop disconnected while restoring a CloudCLI turn')
         finally:
             with self.changed:
-                self.reader = False
+                if self.reader is stream:
+                    self.reader = None
 
 
 class CloudCliBackend:
@@ -4307,7 +4370,7 @@ class CloudCliBackend:
             prefix = prefix[:-1]
         with self.active_lock:
             turn = self.active_conversations.get(self.identity+':'+scope)
-        if (turn is None or not prefix or turn.stop_requested.is_set() or turn.client_detached.is_set()):
+        if turn is None or not prefix or turn.stop_requested.is_set():
             return None
         progress = turn.progress
         if progress is None or not progress.session or progress.followup_cutoff is not None:
@@ -4330,47 +4393,56 @@ class CloudCliBackend:
             authorize(progress.model)
         message_id = str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, scope+':'+history_signature(visible, 'cloudcli')))
         with turn.steer_lock:
-            if message_id in turn.steers:
-                if turn.steers[message_id] is None:
-                    raise CloudCliError('CloudCLI 未确认是否收到这条引导消息。', 503)
-                return turn.steers[message_id][1]
-            candidate = history_signature(visible[:-1], 'cloudcli')
-            verified = turn.history == history_signature(prefix, 'cloudcli') or any(
-                candidate == history_signature([*receipt[0], receipt[1]], 'cloudcli')
-                for receipt in turn.steers.values() if receipt is not None)
-            if not verified:
-                return None
-            started = observer.started_at or observer.find_run()
-            if started is None or observer.finished.is_set() or turn.stop_requested.is_set():
-                return None
-            _, raw = self.desktop_policy() if self.device and self.desktop_policy is not None else (False, False)
-            if not raw and manager.review_prompt is not None:
-                text = manager.review_prompt(text)
-            connect, websocket_error = cloudcli_websocket()
-            try:
-                with closing(self.web_socket(connect, timeout=4)) as ws:
-                    if (observer.finished.is_set() or turn.stop_requested.is_set()
-                            or self.running_since(progress.session) != started):
-                        return None
-                    turn.steers[message_id] = None
-                    ws.send(json.dumps({'type': 'chat.steer', 'sessionId': progress.session,
-                                        'messageId': message_id, 'content': text}, ensure_ascii=False))
-                    deadline = time.monotonic()+4
-                    while time.monotonic() < deadline:
-                        ws.settimeout(max(.01, deadline-time.monotonic()))
-                        event = json.loads(ws.recv())
-                        if event.get('sessionId') != progress.session or event.get('messageId') != message_id:
-                            continue
-                        if event.get('kind') == 'chat_steer_accepted':
-                            reply = self.local_reply(model, '> **SafeCode** · 引导消息已交给当前任务。')
-                            turn.steers[message_id] = (visible, reply)
-                            return reply
-                        if event.get('kind') == 'protocol_error':
-                            del turn.steers[message_id]
-                            return None
-            except (OSError, ValueError, AttributeError, websocket_error):
-                pass
-            raise CloudCliError('CloudCLI 未确认是否收到这条引导消息。', 503)
+            if message_id not in turn.steers:
+                candidate = history_signature(visible[:-1], 'cloudcli')
+                start = history_signature(prefix, 'cloudcli')
+                verified = turn.history == start or any(
+                    candidate == history_signature([*receipt.history, receipt.reply], 'cloudcli')
+                    or (receipt.cursor is not None and start == history_signature(receipt.history, 'cloudcli'))
+                    for receipt in turn.steers.values() if receipt is not None)
+                if not verified:
+                    return None
+                _, raw = self.desktop_policy() if self.device and self.desktop_policy is not None else (False, False)
+                if not raw and manager.review_prompt is not None:
+                    text = manager.review_prompt(text)
+                reply = self.local_reply(model, '> **SafeCode** · 引导消息已交给当前任务。\n\n')
+                receipt = DesktopSteerReceipt(visible, reply, turn.steer_cursor(observer))
+                if not self.send_steer(turn, observer, message_id, text):
+                    return None
+                turn.steers[message_id] = receipt
+            receipt = turn.steers[message_id]
+            if receipt is None:
+                raise CloudCliError('CloudCLI 未确认是否收到这条引导消息。', 503)
+        return turn.resume(stream, receipt) if receipt.cursor is not None else receipt.reply
+
+    def send_steer(self, turn, observer, message_id, text):
+        started = observer.started_at or observer.find_run()
+        if started is None or observer.finished.is_set() or turn.stop_requested.is_set():
+            return False
+        session = turn.progress.session
+        connect, websocket_error = cloudcli_websocket()
+        try:
+            with closing(self.web_socket(connect, timeout=4)) as ws:
+                if (observer.finished.is_set() or turn.stop_requested.is_set()
+                        or self.running_since(session) != started):
+                    return False
+                turn.steers[message_id] = None
+                ws.send(json.dumps({'type': 'chat.steer', 'sessionId': session, 'messageId': message_id,
+                                    'content': text}, ensure_ascii=False))
+                deadline = time.monotonic()+4
+                while time.monotonic() < deadline:
+                    ws.settimeout(max(.01, deadline-time.monotonic()))
+                    event = json.loads(ws.recv())
+                    if event.get('sessionId') != session or event.get('messageId') != message_id:
+                        continue
+                    if event.get('kind') == 'chat_steer_accepted':
+                        return True
+                    if event.get('kind') == 'protocol_error':
+                        del turn.steers[message_id]
+                        return False
+        except (OSError, ValueError, AttributeError, websocket_error):
+            pass
+        raise CloudCliError('CloudCLI 未确认是否收到这条引导消息。', 503)
 
     @contextmanager
     def configuration_lock(self):
