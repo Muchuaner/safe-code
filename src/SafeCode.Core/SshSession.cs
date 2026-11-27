@@ -25,6 +25,7 @@ public sealed partial class SshSession : IDisposable
     private byte[]? trustedKey;
     private string hostKeyName = "";
     private ConnectionSettings? connection;
+    private SshRoute sshRoute = SshRoute.Direct;
     public ServerInfo? Server { get; private set; }
     public string Fingerprint { get; private set; } = "";
     public string Host => connection?.Host ?? "";
@@ -47,25 +48,48 @@ public sealed partial class SshSession : IDisposable
             throw new ArgumentException("服务器地址或端口无效。");
         if (!Regex.IsMatch(settings.Username, @"^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}$")) throw new ArgumentException("用户名格式无效。");
         connection = settings;
-        var info = new PasswordConnectionInfo(settings.Host, settings.Port, settings.Username, settings.Password) { Timeout = SshConnectTimeout, RetryAttempts = 2 };
-        client = new MountSshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(20) };
-        HostTrustRequiredException? trustRequired=null;
-        client.HostKeyReceived += (_, e) =>
-        {
-            var fingerprint = "SHA256:" + Convert.ToBase64String(SHA256.HashData(e.HostKey)).TrimEnd('=');
-            try{e.CanTrust=VerifyOrConfirm(settings,fingerprint,confirmHost);}
-            catch(HostTrustRequiredException error){trustRequired=error;e.CanTrust=false;}
-            if (e.CanTrust)
-            {
-                trustedKey = e.HostKey.ToArray(); Fingerprint = fingerprint;
-                using var bytes = new MemoryStream(e.HostKey); using var reader = new BinaryReader(bytes);
-                int length = System.Net.IPAddress.NetworkToHostOrder(reader.ReadInt32());
-                hostKeyName = Encoding.ASCII.GetString(reader.ReadBytes(length));
-            }
-        };
+        HostTrustRequiredException? trustRequired = null;
         try
         {
-            await client.ConnectAsync(cancellationToken);
+            var routes = await SshRoute.RankAsync(settings, cancellationToken);
+            foreach (var route in routes)
+            {
+                var info = route.Password(settings);
+                info.Timeout = SshConnectTimeout;
+                info.RetryAttempts = 2;
+                var candidate = new MountSshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(20) };
+                client = candidate;
+                var hostKeyReceived = false;
+                candidate.HostKeyReceived += (_, e) =>
+                {
+                    hostKeyReceived = true;
+                    var fingerprint = "SHA256:" + Convert.ToBase64String(SHA256.HashData(e.HostKey)).TrimEnd('=');
+                    try { e.CanTrust = VerifyOrConfirm(settings, fingerprint, confirmHost); }
+                    catch (HostTrustRequiredException error) { trustRequired = error; e.CanTrust = false; }
+                    if (e.CanTrust)
+                    {
+                        trustedKey = e.HostKey.ToArray();
+                        Fingerprint = fingerprint;
+                        using var bytes = new MemoryStream(e.HostKey);
+                        using var reader = new BinaryReader(bytes);
+                        int length = System.Net.IPAddress.NetworkToHostOrder(reader.ReadInt32());
+                        hostKeyName = Encoding.ASCII.GetString(reader.ReadBytes(length));
+                    }
+                };
+                Log?.Invoke($"正在尝试 SSH {route.Label}…");
+                try
+                {
+                    await candidate.ConnectAsync(cancellationToken);
+                    sshRoute = route;
+                    break;
+                }
+                catch (Exception error) when (routes.Length > 1 && route == routes[0] &&
+                    !hostKeyReceived && SshRoute.IsNetworkFailure(error) && !cancellationToken.IsCancellationRequested)
+                {
+                    DisposeMountResource(candidate);
+                    client = null;
+                }
+            }
             Log?.Invoke("SSH 认证成功，检查操作系统…");
             string osRelease;
             try{osRelease=await ExecuteTextAsync("cat /etc/os-release", cancellationToken);}
@@ -147,11 +171,20 @@ public sealed partial class SshSession : IDisposable
     private SftpClient MakeSftp(ConnectionSettings? settings = null)
     {
         settings ??= connection ?? throw new InvalidOperationException("尚未连接服务器。");
-        var sftp = new SftpClient(settings.Host, settings.Port, settings.Username, settings.Password);
+        var sftp = new SessionSftpClient(sshRoute.Password(settings));
         PinHostKeyAlgorithms(sftp.ConnectionInfo);
         sftp.HostKeyReceived += (_, e) => e.CanTrust = trustedKey != null && CryptographicOperations.FixedTimeEquals(trustedKey, e.HostKey);
         return sftp;
     }
+    private sealed class SessionSftpClient(PasswordConnectionInfo info) : SftpClient(info)
+    {
+        protected override void Dispose(bool disposing)
+        {
+            try { base.Dispose(disposing); }
+            finally { if (disposing) info.Dispose(); }
+        }
+    }
+
     public async Task<string> ExecuteTextAsync(string text, CancellationToken ct = default)
     {
         if (client == null) throw new InvalidOperationException("服务器未连接。");
@@ -401,7 +434,9 @@ public sealed partial class SshSession : IDisposable
     public async Task VerifyWorkspaceKeyAsync(CancellationToken ct = default)
     {
         CreateWorkspaceKey(); var account = await RequestAsync<AccountInfo>("account_info", null, ct);
-        using var work = new SshClient(Host, Port, account.Username, new PrivateKeyFile(KeyPath));
+        using var key = new PrivateKeyFile(KeyPath);
+        using var authentication = new PrivateKeyAuthenticationMethod(account.Username, key);
+        using var work = new SshClient(sshRoute.Connection(Host, Port, account.Username, authentication));
         PinHostKeyAlgorithms(work.ConnectionInfo);
         work.HostKeyReceived += (_, e) => e.CanTrust = trustedKey != null && CryptographicOperations.FixedTimeEquals(trustedKey, e.HostKey);
         await work.ConnectAsync(ct); using var command = work.CreateCommand("id -un"); await command.ExecuteAsync(ct);

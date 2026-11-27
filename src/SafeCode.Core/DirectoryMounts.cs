@@ -31,16 +31,23 @@ public sealed partial class SshSession
         return new(guardedMappings.Count,mountState,mountMessage,since>0?(long)System.Diagnostics.Stopwatch.GetElapsedTime(since).TotalSeconds:0,Interlocked.Read(ref previousToServer)+stats.BytesToServer,Interlocked.Read(ref previousToLocal)+stats.BytesToLocal,Interlocked.Read(ref previousFiles)+stats.CompletedFiles,stats.ActiveTransfers,mountAuthenticationFailed);
     }
     private static void DisposeMountResource(IDisposable? resource){try{resource?.Dispose();}catch{}}
-    private sealed class MountSshClient(Renci.SshNet.ConnectionInfo info):SshClient(info)
+    private sealed class MountSshClient(PasswordConnectionInfo info):SshClient(info)
     {
         // 转发清理异常不能阻止关闭 SSH 会话，否则旧监听会阻塞后续重连。
         protected override void OnDisconnecting(){try{base.OnDisconnecting();}catch{}}
+        protected override void Dispose(bool disposing)
+        {
+            try { base.Dispose(disposing); }
+            finally { if (disposing) info.Dispose(); }
+        }
     }
     private SshClient NewMountConnection(ConnectionSettings? settings=null)
     {
         if(connection==null||trustedKey==null)throw new InvalidOperationException("尚未确认服务器身份，不能建立挂载通道。");
         settings??=connection;
-        var info=new PasswordConnectionInfo(settings.Host,settings.Port,settings.Username,settings.Password){Timeout=TimeSpan.FromSeconds(12),RetryAttempts=1};
+        var info = sshRoute.Password(settings);
+        info.Timeout = TimeSpan.FromSeconds(12);
+        info.RetryAttempts = 1;
         PinHostKeyAlgorithms(info);
         var transport=new MountSshClient(info){KeepAliveInterval=TimeSpan.FromSeconds(10)};
         transport.HostKeyReceived+=(_,e)=>{e.CanTrust=CryptographicOperations.FixedTimeEquals(trustedKey,e.HostKey);if(!e.CanTrust)mountTrustFailed=true;};
