@@ -136,6 +136,13 @@ internal static class MacSelfTest
             Console.WriteLine("MAC_CLAUDE_LAUNCH_AUTO_DEFAULT_OK");
         }
         finally { Directory.Delete(profileTest, true); }
+        using (var client = new HttpClient(new HistoryRetryFixture()) { BaseAddress = new Uri("https://history.invalid") })
+        using (var history = await DesktopWebHistory.GetAsync(client,"/v1/desktop-history",false,CancellationToken.None))
+        {
+            if (history?.RootElement.GetProperty("developer").GetBoolean() != true)
+                throw new Exception("历史同步重试后没有读到原响应。");
+        }
+        Console.WriteLine("MAC_HISTORY_RETRIES_TRANSIENT_READS_OK");
         await CheckKeyHistoryAsync();
         string fingerprint=new('A',64);
         var rdp=MacClients.FreeRdpArguments(new(22119,"fixture",fingerprint),new("workspace","fixture password"),
@@ -169,6 +176,21 @@ internal static class MacSelfTest
             Console.WriteLine("MAC_HOST_CONTROL_RESUME_SCOPE_AND_OPT_OUT_OK");
         }
         finally{Directory.Delete(folder,true);}
+    }
+
+    private sealed class HistoryRetryFixture : HttpMessageHandler
+    {
+        private int attempts;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            ++attempts switch
+            {
+                1 => throw new HttpRequestException(HttpRequestError.ConnectionError,"Fixture connection reset"),
+                2 => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadGateway)),
+                3 => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    { Content=new StringContent("{\"developer\":true}") }),
+                _ => throw new InvalidOperationException("Too many history requests")
+            };
     }
 
     private static async Task CheckKeyHistoryAsync()

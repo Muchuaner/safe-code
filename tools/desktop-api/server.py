@@ -38,7 +38,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 50
+GATEWAY_REVISION = 51
 DESKTOP_HISTORY = '/v1/desktop-history'
 DESKTOP_FOLLOWUPS = '/v1/desktop-followups'
 PUBLIC_KEY_QUEUE = 'public-key-queue'
@@ -266,6 +266,9 @@ class PublicHandler(Handler):
                 result = cloud.desktop_history_export(*path.groups())
             if not self.server.registry.desktop_policy(self.digest)[0]:
                 return self.device_error(403, '此 Key 未启用开发者模式。')
+            if self.path != DESKTOP_HISTORY:
+                # A full transcript can take longer to deliver than a small API reply.
+                self.connection.settimeout(60)
             return self.reply(200, result)
         except DeviceError:
             return self.device_error(403, '同步历史需要已配对的本机设备。')

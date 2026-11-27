@@ -205,7 +205,7 @@ internal static class DesktopWebHistory
             tracked.TryAdd(scope, entry with { Stamp = "" });
         DesktopKeyAccess.WriteProfileFile(manifest, JsonSerializer.SerializeToUtf8Bytes(tracked));
         var empty = new System.Collections.Concurrent.ConcurrentBag<string>();
-        await Parallel.ForEachAsync(pending, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+        await Parallel.ForEachAsync(pending, new ParallelOptions { MaxDegreeOfParallelism = 2, CancellationToken = ct },
             async (row, token) =>
             {
                 using var response = await GetAsync(gateway, $"{Endpoint}/{row.Project}/{row.Session}", optional:false, token);
@@ -302,17 +302,31 @@ internal static class DesktopWebHistory
         }));
     }
 
-    private static async Task<JsonDocument?> GetAsync(HttpClient client, string url, bool optional, CancellationToken ct)
+    internal static async Task<JsonDocument?> GetAsync(HttpClient client, string url, bool optional, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get,url);
-        if (url == Endpoint) request.Headers.Add("X-SafeCode-History-Mirror","1");
-        using var response = await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
-        if (optional && (response.StatusCode == HttpStatusCode.NotFound ||
-            (response.StatusCode == HttpStatusCode.Conflict && url.StartsWith(Followups+"/",StringComparison.Ordinal)))) return null;
-        if (!response.IsSuccessStatusCode)
-            throw new IOException($"CloudCLI 历史同步失败（HTTP {(int)response.StatusCode}）。");
-        await response.Content.LoadIntoBufferAsync(ResponseLimit,ct);
-        return JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct));
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get,url);
+                if (url == Endpoint) request.Headers.Add("X-SafeCode-History-Mirror","1");
+                using var response = await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
+                if (optional && (response.StatusCode == HttpStatusCode.NotFound ||
+                    (response.StatusCode == HttpStatusCode.Conflict && url.StartsWith(Followups+"/",StringComparison.Ordinal)))) return null;
+                if (response.IsSuccessStatusCode)
+                {
+                    await response.Content.LoadIntoBufferAsync(ResponseLimit,ct);
+                    return JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(ct));
+                }
+                if (attempt == 3 || response.StatusCode is not
+                    (HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout))
+                    throw new HttpRequestException($"CloudCLI 历史同步失败（HTTP {(int)response.StatusCode}）。", null, response.StatusCode);
+            }
+            catch (HttpRequestException error) when (attempt < 3 && !ct.IsCancellationRequested &&
+                error.StatusCode == null && error.HttpRequestError != HttpRequestError.SecureConnectionError) { }
+            catch (HttpIOException) when (attempt < 3 && !ct.IsCancellationRequested) { }
+            await Task.Delay(TimeSpan.FromMilliseconds(attempt * 400),ct);
+        }
     }
 
     private static string Uuid(string? value) => Guid.TryParseExact(value,"D",out var id)
