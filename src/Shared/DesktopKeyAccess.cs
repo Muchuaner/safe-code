@@ -34,6 +34,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     Func<byte[],byte[]> unprotect, string? profileDirectory=null,ClientServices? diagnostics=null,
     string? windowsPolicyPath=null) : IDisposable
 {
+    private const string DesktopTurnHeader = "X-SafeCode-Desktop-Turn";
+    private const string DesktopStopPath = "/v1/cloudcli/desktop-stop";
     private const int MaxMessagesRequest = 64 * 1024 * 1024;
     private const string DeviceAlreadyBoundMessage="该 Key 已绑定设备。请在原设备停用接入，或联系网关管理员检查绑定状态。";
     private const string UnbindPendingMessage="本机接入已停用，网关尚未确认解绑。请点击「重试解绑」查看结果。";
@@ -374,6 +376,15 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         foreach(var h in new[]{"anthropic-version","anthropic-beta","x-claude-code-session-id"})
             if(ctx.Request.Headers.TryGetValue(h,out var v))req.Headers.TryAddWithoutValidation(h,v.ToArray());
+        Guid? desktopSession = null;
+        string? desktopTurn = null;
+        var requestStarted = DateTimeOffset.UtcNow;
+        if (path == "/v1/messages" && Guid.TryParse(ctx.Request.Headers["x-claude-code-session-id"].ToString(), out var session))
+        {
+            desktopSession = session;
+            desktopTurn = Guid.NewGuid().ToString("N");
+            req.Headers.Add(DesktopTurnHeader, desktopTurn);
+        }
         var trace=diagnostics?.BeginDiagnostic("desktop_key_request");
         var gateway=trace==null?null:new GatewayDiagnostic(path switch
         {
@@ -450,12 +461,87 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         }
         finally
         {
+            if (desktopSession is Guid interruptedSession && desktopTurn is not null &&
+                ctx.RequestAborted.IsCancellationRequested)
+                await StopInterruptedDesktopTurnAsync(client, interruptedSession, desktopTurn, requestStarted);
             if(trace!=null&&(failure!=null||path=="/v1/messages")&&!ctx.RequestAborted.IsCancellationRequested)
             {
                 if(failure!=null)trace.Gateway=gateway?.Finish(bytes);
                 _=diagnostics!.SendDiagnosticAsync(trace,failure,CancellationToken.None);
             }
         }
+    }
+
+    private static async Task StopInterruptedDesktopTurnAsync(HttpClient client, Guid session, string turn,
+                                                               DateTimeOffset requestStarted)
+    {
+        var projects = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
+        // The SDK writes its explicit interruption marker just after closing
+        // the Messages stream. A transport disconnect alone must keep the run recoverable.
+        try
+        {
+            for (var attempt = 0; attempt < 12; attempt++)
+            {
+                if (!Directory.Exists(projects)) return;
+                var transcript = Directory.EnumerateDirectories(projects)
+                    .Select(project => Path.Combine(project, session.ToString("D") + ".jsonl"))
+                    .FirstOrDefault(File.Exists);
+                if (transcript is not null && TranscriptHasInterrupt(transcript, session, requestStarted))
+                {
+                    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    using var request = new HttpRequestMessage(HttpMethod.Post, DesktopStopPath);
+                    request.Headers.Add(DesktopTurnHeader, turn);
+                    using var response = await client.SendAsync(request, deadline.Token);
+                    return;
+                }
+                await Task.Delay(100);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or OperationCanceledException
+                                      or HttpRequestException or ObjectDisposedException or SecurityException)
+        {
+            // Desktop may be closing or using an older gateway.
+        }
+    }
+
+    internal static bool TranscriptHasInterrupt(string transcript, Guid session, DateTimeOffset requestStarted)
+    {
+        using var file = new FileStream(transcript, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        file.Position = Math.Max(0, file.Length - 256 * 1024);
+        using var reader = new StreamReader(file, Encoding.UTF8);
+        if (file.Position > 0) reader.ReadLine();
+        while (reader.ReadLine() is { } line)
+        {
+            const string interrupted = "[Request interrupted by user";
+            if (!line.Contains(interrupted, StringComparison.Ordinal)) continue;
+            try
+            {
+                using var row = JsonDocument.Parse(line);
+                var value = row.RootElement;
+                if (value.ValueKind != JsonValueKind.Object ||
+                    !value.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String ||
+                    type.GetString() != "user" ||
+                    !value.TryGetProperty("sessionId", out var scope) || scope.ValueKind != JsonValueKind.String ||
+                    !scope.TryGetGuid(out var recorded) ||
+                    recorded != session ||
+                    !value.TryGetProperty("timestamp", out var timestamp) || timestamp.ValueKind != JsonValueKind.String ||
+                    !timestamp.TryGetDateTimeOffset(out var written) || written < requestStarted ||
+                    !value.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object ||
+                    !message.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+                    continue;
+                if (content.EnumerateArray().Any(part => part.ValueKind == JsonValueKind.Object &&
+                    part.TryGetProperty("type", out var blockType) && blockType.ValueKind == JsonValueKind.String &&
+                    blockType.GetString() == "text" && part.TryGetProperty("text", out var text) &&
+                    text.ValueKind == JsonValueKind.String && text.GetString() is
+                        "[Request interrupted by user]" or "[Request interrupted by user for tool use]"))
+                    return true;
+            }
+            catch (JsonException)
+            {
+                // The writer may still be appending the last entry.
+            }
+        }
+        return false;
     }
 
     private static Task RelayError(HttpContext ctx,int status,string type,string code,string message)

@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 
 from claude_usage import read_subscription
 from desktop_gateway import CLOUDCLI_MODEL_ID, CLOUDCLI_REQUIRED, COUNT_TOKENS_PATH, MAX_MESSAGES_REQUEST, MESSAGES_PATH, CloudCliBackend, CloudCliError, GatewayError, Handler, Manager, diagnostic, load_cloudcli_config, binding_directory
-from desktop_gateway import IMPORTED_SESSION_NAMESPACE, IMPORTED_SESSIONS_FILE
+from desktop_gateway import DESKTOP_STOP_PATH, IMPORTED_SESSION_NAMESPACE, IMPORTED_SESSIONS_FILE
 from device_bridge import (DeviceAlreadyBound, DeviceError, DeviceOffline, Devices, OwnerHosts, SSH_DEVICE,
                            paired_device, pairing_lock, read_json, device_service_problem)
 from management import ANALYTICS_RANGES, KEY_ID, TOKEN_FIELDS, Capacity, KeyRegistry, RequestQueue, peer_disconnected, read_admin_line, send_admin
@@ -38,7 +38,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 57
+GATEWAY_REVISION = 58
 DESKTOP_HISTORY = '/v1/desktop-history'
 DESKTOP_FOLLOWUPS = '/v1/desktop-followups'
 PUBLIC_KEY_QUEUE = 'public-key-queue'
@@ -369,7 +369,7 @@ class PublicHandler(Handler):
 
     def handle_public(self):
         path = self.path.partition('?')[0]
-        if path not in (MESSAGES_PATH, COUNT_TOKENS_PATH, '/v1/device-control'):
+        if path not in (MESSAGES_PATH, COUNT_TOKENS_PATH, DESKTOP_STOP_PATH, '/v1/device-control'):
             return self.reply(404, {'error':{'message':'Unknown endpoint'}})
         if not self.server.public_enabled:
             return self.public_disabled()
@@ -406,6 +406,9 @@ class PublicHandler(Handler):
         except (OSError, sqlite3.Error):
             return self.reject_device_message(503, '暂时无法检查本机设备状态，请稍后重试。',
                                               'device_state_unavailable')
+        if path == DESKTOP_STOP_PATH:
+            self.close_connection = True
+            return self.desktop_stop(self.server.account(self.digest, self.platform, self.device, create=False))
         super().handle_messages()
 
     def verify_admitted_device(self):
@@ -538,6 +541,9 @@ class PublicHandler(Handler):
                 resumed = manager.cloudcli.resume_active(data, authorize=authorize_resume, **options)
                 if resumed is not None:
                     return resumed
+                steered = manager.cloudcli.steer_active(manager, data, authorize=authorize_resume, **options)
+                if steered is not None:
+                    return steered
                 manager.cloudcli.request_previous_stop(data, options.get('session_header'))
             with self.server.queue.slot(self.digest, lambda: peer_disconnected(self.connection),
                                         on_wait=stream.queue_ping if stream is not None else None):

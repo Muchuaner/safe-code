@@ -46,6 +46,35 @@ internal static class MacSelfTest
             if(transport.UseProxy)throw new Exception("固定证书网关不应经过系统代理的 CONNECT 隧道。");
         Console.WriteLine("MAC_PINNED_GATEWAY_DIRECT_TRANSPORT_OK");
         Console.WriteLine("MAC_CLAUDE_PROFILE_CHAT_AND_CLASSIFIER_CONFIGURATION_OK");
+        var stopScope = Guid.NewGuid();
+        var stopStart = DateTimeOffset.UtcNow;
+        var stopTranscript = Path.GetTempFileName();
+        try
+        {
+            string StopRecord(Guid session, DateTimeOffset timestamp, string role, string text) =>
+                JsonSerializer.Serialize(new
+                {
+                    type = role, sessionId = session, timestamp,
+                    message = new { role, content = new[] { new { type = "text", text } } }
+                });
+            const string marker = "[Request interrupted by user]";
+            File.WriteAllLines(stopTranscript,
+            [
+                StopRecord(stopScope, stopStart.AddSeconds(-1), "user", marker),
+                StopRecord(Guid.NewGuid(), stopStart, "user", marker),
+                StopRecord(stopScope, stopStart, "assistant", marker)
+            ]);
+            if (DesktopKeyAccess.TranscriptHasInterrupt(stopTranscript, stopScope, stopStart))
+                throw new Exception("无匹配的用户中断记录时不应停止云端任务。");
+            File.AppendAllLines(stopTranscript, [StopRecord(stopScope, stopStart, "user", marker)]);
+            if (!DesktopKeyAccess.TranscriptHasInterrupt(stopTranscript, stopScope, stopStart))
+                throw new Exception("未识别当前会话的用户中断记录。");
+            Console.WriteLine("MAC_CLAUDE_EXPLICIT_STOP_MARKER_OK");
+        }
+        finally
+        {
+            File.Delete(stopTranscript);
+        }
         string profileTest = Directory.CreateTempSubdirectory("safecode-mac-profile-").FullName;
         try
         {

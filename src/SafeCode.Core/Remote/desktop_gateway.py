@@ -178,6 +178,8 @@ def model_catalog(rows, home, *, include_options=False):
 
 REQUEST_DIAGNOSTIC = ContextVar('request_diagnostic', default=None)
 DIAGNOSTIC_HEADER = 'X-SafeCode-Gateway-Diagnostic'
+DESKTOP_STOP_PATH = '/v1/cloudcli/desktop-stop'
+DESKTOP_TURN_HEADER = 'X-SafeCode-Desktop-Turn'
 REJECTION_TYPES = frozenset((
     'invalid_request_error', 'authentication_error', 'billing_error', 'permission_error',
     'not_found_error', 'request_too_large', 'rate_limit_error', 'api_error', 'overloaded_error',
@@ -1451,6 +1453,7 @@ class CloudCliProgress:
         self.awaiting_decision = None
         self.on_session = None
         self.on_disconnect = None
+        self.turn_watch = None
         self.stop_requested = threading.Event()
         self.client_detached = threading.Event()
         self.output_closed = False
@@ -2328,6 +2331,9 @@ class ActiveCloudCliTurn:
         self.response = None
         self.error = None
         self.reader = False
+        self.desktop_turn_id = None
+        self.steer_lock = threading.Lock()
+        self.steers = {}
 
     def complete(self, response=None, error=None):
         with self.changed:
@@ -2335,11 +2341,28 @@ class ActiveCloudCliTurn:
             self.error = error
             self.changed.notify_all()
 
+    def steer_histories(self, messages, content):
+        assistant = {'role': 'assistant', 'content': content}
+        histories = []
+        ordered = [*messages, assistant] if content else list(messages)
+        with self.steer_lock:
+            for receipt in self.steers.values():
+                if receipt is None:
+                    continue
+                history, reply = receipt
+                histories.append(history_signature([*history, reply], 'cloudcli'))
+                if content:
+                    histories.append(history_signature([*history, reply, assistant], 'cloudcli'))
+                ordered.extend((history[-1], reply))
+                histories.append(history_signature(ordered, 'cloudcli'))
+        return histories
+
     def resume(self, stream):
         with self.changed:
             if self.reader:
                 raise CloudCliError('此会话已有桌面连接正在恢复。', 409)
             self.reader = True
+            self.desktop_turn_id = getattr(stream, 'desktop_turn_id', None)
         try:
             index = offset = 0
             while not stream.disconnected():
@@ -3407,6 +3430,7 @@ class CloudCliBackend:
             yield
             return
         observer = CloudCliStopWatch(self, progress, dispatch_ms)
+        progress.turn_watch = observer
         progress.on_session = observer.start
         progress.on_disconnect = observer.detach
         try:
@@ -3746,9 +3770,10 @@ class CloudCliBackend:
                 self.schedule_question_check(namespace, turn)
             return result
         confirmed = history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli')
+        aliases = progress.resume_turn.steer_histories(messages, content) if progress.resume_turn is not None else []
         anchor = self.turn_anchor(progress, session) if namespace.rpartition(':')[2] else None
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.save_session(db, namespace, previous_history, session, project, workspace, [confirmed])
+            self.save_session(db, namespace, previous_history, session, project, workspace, [confirmed, *aliases])
             if namespace.rpartition(':')[2]:
                 self.save_turn_state(db, namespace, session, previous_history, progress, anchor)
                 db.execute('UPDATE requests SET reply=NULL WHERE scope=? AND identity<>?', (namespace, identity))
@@ -3784,6 +3809,8 @@ class CloudCliBackend:
         histories = [history_signature(messages, 'cloudcli')]
         if content:
             histories.append(history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli'))
+        if progress.resume_turn is not None:
+            histories.extend(progress.resume_turn.steer_histories(messages, content))
         with closing(sqlite3.connect(self.path)) as db, db:
             previous = db.execute('SELECT tip_anchor FROM session_state WHERE scope=? AND session=?',
                                   (namespace, session)).fetchone()
@@ -4188,6 +4215,7 @@ class CloudCliBackend:
     @contextmanager
     def conversation_slot(self, conversation, history=None, stopped_requests=(), stream=None):
         turn = ActiveCloudCliTurn(history)
+        turn.desktop_turn_id = getattr(stream, 'desktop_turn_id', None)
         with self.active_lock:
             active = self.active_conversations.get(conversation)
             if active is None:
@@ -4237,6 +4265,98 @@ class CloudCliBackend:
             authorize(turn.progress.model)
         diagnostic(stage='session_route')
         return turn.resume(stream)
+
+    def stop_desktop_turn(self, turn_id):
+        with self.active_lock:
+            matches = [turn for turn in self.active_conversations.values() if turn.desktop_turn_id == turn_id]
+            if len(matches) != 1:
+                return False
+            matches[0].stop_requested.set()
+            return True
+
+    def steer_active(self, manager, data, *, session_header=None, stream=None, context_1m=False,
+                     authorize=None):
+        if not getattr(stream, 'desktop_turn_id', None) or not stream.send_events:
+            return None
+        scope = conversation_scope(data, session_header)
+        messages = data.get('messages')
+        if (not scope or not isinstance(messages, list) or len(messages) < 2
+                or any(not isinstance(item, dict) or item.get('role') not in ('user', 'assistant', 'system')
+                       for item in messages)):
+            return None
+        visible = without_desktop_model_commands([item for item in messages if item['role'] != 'system'])
+        if len(visible) < 2 or visible[-1]['role'] != 'user' or desktop_suggestion(visible):
+            return None
+        prefix = visible[:-1]
+        if prefix[-1]['role'] == 'assistant':
+            prefix = prefix[:-1]
+        with self.active_lock:
+            turn = self.active_conversations.get(self.identity+':'+scope)
+        if (turn is None or not prefix or turn.stop_requested.is_set() or turn.client_detached.is_set()):
+            return None
+        progress = turn.progress
+        if progress is None or not progress.session or progress.followup_cutoff is not None:
+            return None
+        observer = progress.turn_watch
+        model = data.get('model')
+        if observer is None or not isinstance(model, str) or self.resolve_model(model, context_1m)[0] != progress.model:
+            return None
+        content = blocks(visible[-1].get('content'))
+        if not content or any(part.get('type') != 'text' or not isinstance(part.get('text'), str)
+                              for part in content):
+            return None
+        texts = [part['text'] for part in content]
+        if any(text.strip() in DESKTOP_INTERRUPTIONS or PLAN_MODE_REMINDER.search(text) for text in texts):
+            return None
+        text = '\n'.join(SYSTEM_REMINDER.sub('', item) for item in texts).strip()
+        if not text or '<local-command-caveat>' in text:
+            return None
+        if authorize is not None:
+            authorize(progress.model)
+        message_id = str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE,
+                                    desktop_retry_fingerprint(data, context_1m)))
+        with turn.steer_lock:
+            if message_id in turn.steers:
+                if turn.steers[message_id] is None:
+                    raise CloudCliError('CloudCLI 未确认是否收到这条引导消息。', 503)
+                return turn.steers[message_id][1]
+            candidate = history_signature(visible[:-1], 'cloudcli')
+            verified = turn.history == history_signature(prefix, 'cloudcli') or any(
+                candidate == history_signature([*receipt[0], receipt[1]], 'cloudcli')
+                for receipt in turn.steers.values() if receipt is not None)
+            if not verified:
+                return None
+            started = observer.started_at or observer.find_run()
+            if started is None or observer.finished.is_set() or turn.stop_requested.is_set():
+                return None
+            _, raw = self.desktop_policy() if self.device and self.desktop_policy is not None else (False, False)
+            if not raw and manager.review_prompt is not None:
+                text = manager.review_prompt(text)
+            connect, websocket_error = cloudcli_websocket()
+            try:
+                with closing(self.web_socket(connect, timeout=4)) as ws:
+                    if (observer.finished.is_set() or turn.stop_requested.is_set()
+                            or self.running_since(progress.session) != started):
+                        return None
+                    turn.steers[message_id] = None
+                    ws.send(json.dumps({'type': 'chat.steer', 'sessionId': progress.session,
+                                        'messageId': message_id, 'content': text}, ensure_ascii=False))
+                    deadline = time.monotonic()+4
+                    while time.monotonic() < deadline:
+                        ws.settimeout(max(.01, deadline-time.monotonic()))
+                        event = json.loads(ws.recv())
+                        if event.get('sessionId') != progress.session or event.get('messageId') != message_id:
+                            continue
+                        if event.get('kind') == 'chat_steer_accepted':
+                            reply = self.local_reply(model, '> **SafeCode** · 引导消息已交给当前任务。')
+                            turn.steers[message_id] = (visible, reply)
+                            return reply
+                        if event.get('kind') == 'protocol_error':
+                            del turn.steers[message_id]
+                            return None
+            except (OSError, ValueError, AttributeError, websocket_error):
+                pass
+            raise CloudCliError('CloudCLI 未确认是否收到这条引导消息。', 503)
 
     @contextmanager
     def configuration_lock(self):
@@ -5182,6 +5302,8 @@ class CloudCliMessagesStream:
         self.open_kind = None
         self.wire_lock = threading.Lock()
         self.last_output = time.monotonic()
+        turn_id = getattr(handler, 'headers', {}).get(DESKTOP_TURN_HEADER, '')
+        self.desktop_turn_id = turn_id if re.fullmatch(r'[0-9a-f]{32}', turn_id) else None
 
     def ping_if_idle(self, finished):
         with self.wire_lock:
@@ -5358,6 +5480,10 @@ class Handler(BaseHTTPRequestHandler):
             response = self.manager.cloudcli.resume_active(data, **options)
             if response is not None:
                 return response
+            if isinstance(data, dict):
+                response = self.manager.cloudcli.steer_active(self.manager, data, **options)
+                if response is not None:
+                    return response
         if not self.manager.capacity.acquire(blocking=False):
             raise GatewayError('Too many active Desktop requests', 429)
         try:
@@ -5370,6 +5496,13 @@ class Handler(BaseHTTPRequestHandler):
         with self.request_diagnostic(backend):
             self.handle_messages()
 
+    def desktop_stop(self, manager):
+        turn_id = self.headers.get(DESKTOP_TURN_HEADER, '')
+        if not re.fullmatch(r'[0-9a-f]{32}', turn_id):
+            return self.message_error(None, 400, 'invalid_request_error', 'Invalid Desktop turn identifier')
+        backend = manager.cloudcli if manager is not None else None
+        return self.reply(200, {'stopping': bool(backend and backend.stop_desktop_turn(turn_id))})
+
     def handle_messages(self):
         self.close_connection = True
         if not self.authorized():return self.reply(401, {'error': {'type': 'authentication_error', 'message': 'Local bridge token required'}})
@@ -5378,6 +5511,8 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
         path = self.path.partition('?')[0]
+        if path == DESKTOP_STOP_PATH:
+            return self.desktop_stop(self.manager)
         if path not in (MESSAGES_PATH, COUNT_TOKENS_PATH):
             return self.reply(501, {'error': {'type': 'api_error', 'message': 'This endpoint is not supported by the VPS CLI bridge'}})
         stream = None
