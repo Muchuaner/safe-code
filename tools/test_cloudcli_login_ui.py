@@ -38,7 +38,7 @@ with sync_playwright() as playwright:
             if(m.op==='services.preferences')result={enabled:false,diagnosticsEnabled:false,confirmed:true};
             if(m.op==='notice.state')result={accepted:true};
             if(m.op==='connect'||m.op==='cloud.install'){
-              const server={osVersion:'24.04',cloudReady:m.op==='cloud.install',statuses:{},assignedIps:[]};
+              const server={osVersion:'24.04',cloudReady:m.op==='cloud.install',statuses:{account:true},assignedIps:[]};
               result=m.op==='connect'?{server}:server;
             }
             if(m.op==='cloud.login'){window.lookupCount++;window.lookup=m;return;}
@@ -59,14 +59,11 @@ with sync_playwright() as playwright:
         query = page.locator('#cloud-login')
         dialog = page.locator('#app-message-dialog')
         body = page.locator('#app-message-body')
-        expect(query).to_be_disabled()
+        # The installed web service can use a different systemd unit from the card's installer.
+        expect(query).to_be_enabled()
         left, right = install.bounding_box(), query.bounding_box()
         assert abs(left['y'] - right['y']) <= 1
         assert abs(left['width'] - right['width']) <= 1 and left['x'] + left['width'] < right['x']
-        install.click()
-        expect(install).to_have_text('已安装')
-        page.locator('#operation-log-dialog').press('Escape')
-        expect(query).to_be_enabled()
         assert page.evaluate('window.lookupCount') == 0
 
         for login, expected in ((account, '用户名 fixture-web'),

@@ -523,7 +523,7 @@ if (window.chrome?.webview && (location.host === 'safe-code.local' || (window.__
       for(const [key,ready] of [['mount',nativeServer?.mountReady],['cloud',nativeServer?.cloudReady]]){const button=$('#install-'+key);button.disabled=!!ready||busy;button.title=busy?'有任务正在执行，请查看进度。':'';button.textContent=advancedOperation&&!advancedOperation.done&&advancedOperation.key===(key==='cloud'?'cloud':'mount_install')?'安装中…':ready?'已安装':'安装';}
       if($('#open-cloud-remote'))$('#open-cloud-remote').disabled=!nativeServer?.cloudReady||busy;
       const checkingCloudLogin=cloudLoginAttempt===connectionAttempt;
-      $('#cloud-login').disabled=!connectionReady||!nativeServer?.cloudReady||busy||checkingCloudLogin;
+      $('#cloud-login').disabled=!connectionReady||!nativeServer?.statuses?.account||busy||checkingCloudLogin;
       $('#cloud-login').textContent=checkingCloudLogin?'查询中…':'查询密码';
     }
     for(const key of ['mount','cloud']){const log=document.createElement('p');log.id=key+'-live-log';log.className='advanced-live-log';log.hidden=true;$('#'+key+'-summary')?.after(log);if(!log.isConnected)$('#install-'+key).closest('.advanced-card').querySelector('.advanced-copy>div').append(log);log.title='点击查看安装日志';log.onclick=()=>{const op=operationHistory.get(key==='cloud'?'cloud':'mount_install');if(op){displayedOperation=op;$('#operation-log-title').textContent=op.label;$('#operation-log-status').textContent=op.status;$('#operation-log-output').textContent=op.lines.join('\n');$('#operation-log-dialog').showModal();}};}
