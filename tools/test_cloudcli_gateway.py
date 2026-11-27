@@ -2378,6 +2378,39 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(self.cloud.requests[-1][2]['message'], '.')
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
 
+    def test_sdk_json_title_does_not_change_the_scoped_conversation(self):
+        opening = '修复项目索引'
+        status, reply = self.request(conversation(opening))
+        self.assertEqual(status, 200)
+        requests = len(self.cloud.requests)
+        system = [{'type': 'text', 'text': 'You are naming a coding session so the user can pick it out of a long list of sessions.\n'
+                                           'Return JSON with a single "title" field. Capitalize the first letter of the title.'}]
+        schema = {'type': 'object', 'properties': {'title': {'type': 'string'}},
+                  'required': ['title'], 'additionalProperties': False}
+        task = (f'<session>\n{opening}\n</session>\n\nWrite the title in the predominant language of the session — '
+                "a stray word or code token in another language doesn't change it, and neither does the English of these instructions.")
+        payload = conversation(task, system=system, output_config={'format': {'type': 'json_schema', 'schema': schema}})
+        status, title = self.request(payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(title['content'][0]['text']), {'title': opening})
+        self.assertEqual(sum(title['usage'].values()), 0)
+        localized = f'<session>\n{opening}\n</session>\n\nWrite the title in Chinese. Keep technical terms and code identifiers in their original form.'
+        status, frames = self.request(conversation(localized, stream=True, messages=[
+            {'role': 'system', 'content': system}, {'role': 'user', 'content': localized}]))
+        self.assertEqual(status, 200)
+        text = ''.join(frame['delta']['text'] for frame in frames if frame['type'] == 'content_block_delta')
+        self.assertEqual(json.loads(text), {'title': opening})
+        self.assertEqual(len(self.cloud.requests), requests)
+        followup = [{'role': 'user', 'content': opening}, {'role': 'assistant', 'content': reply['content']},
+                    {'role': 'user', 'content': 'Continue.'}]
+        self.assertEqual(self.request(conversation('unused', messages=followup))[0], 200)
+        self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
+        self.assertEqual(self.cloud.requests[-1][2]['message'], 'Continue.')
+        # Quoting the same envelope in an ordinary user prompt must still run the task.
+        self.assertEqual(self.request(conversation(task), session=str(uuid.uuid4()))[0], 200)
+        self.assertTrue(self.cloud.requests[-1][2]['message'].startswith(task))
+        self.assertNoNativeFallback()
+
     def test_questions_and_approvals_reference_the_original_session(self):
         self.config['webOrigin'] = 'https://cloud.example.com/'
         self.save_config()
