@@ -230,6 +230,7 @@ internal sealed class MacBackend : IDisposable
                 LocalSecrets.Initialize(Convert.FromBase64String(Read("key")));return true;
             case "desktopKey.invalidate":keyDeviceTunnel?.Invalidate();session?.InvalidateHostVerification();return true;
             case "desktopKey.connection":return keyAccess?.ConnectionStatus;
+            case "desktopKey.prefetchHistory":keyAccess?.WakeHistory();return true;
             case "desktopKey.mode":
                 if (args.ValueKind==JsonValueKind.Object && args.TryGetProperty("enabled",out var apiMode))
                     preferences.SetApiAccessMode(apiMode.GetBoolean());

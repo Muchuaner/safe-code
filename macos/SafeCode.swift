@@ -126,6 +126,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                     Task { @MainActor in self?.request("desktopKey.invalidate") { _ in } }
                 }
             }
+            if !isolated {
+                NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.didActivateApplicationNotification,
+                    object:nil,queue:.main) { [weak self] event in
+                    let app = event.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                    if app?.bundleIdentifier == "com.anthropic.claudefordesktop" {
+                        Task { @MainActor in self?.wakeHistoryPrefetch() }
+                    }
+                }
+            }
             makeMenu(); makeWindow(); makeStatus()
             if !isolated { notifications.configure { [weak self] in self?.showMain() } }
             if !isolated {
@@ -135,6 +144,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             web.loadFileURL(index,allowingReadAccessTo:resources.appendingPathComponent("Web",isDirectory:true))
             window.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)
         } catch { fail(error.localizedDescription); NSApp.terminate(nil) }
+    }
+    func applicationDidBecomeActive(_ notification: Notification) { wakeHistoryPrefetch() }
+    private func wakeHistoryPrefetch() {
+        guard !isolated, backend != nil else {return}
+        request("desktopKey.prefetchHistory") { _ in }
     }
     private func makeMenu() {
         let main=NSMenu();let app=NSMenu();let root=NSMenuItem();root.submenu=app;main.addItem(root)

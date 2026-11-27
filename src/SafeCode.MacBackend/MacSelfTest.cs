@@ -147,6 +147,7 @@ internal static class MacSelfTest
         Console.WriteLine("MAC_HISTORY_RETRIES_TRANSIENT_READS_OK");
         CheckMirroredHistoryMigration();
         CheckColdLaunchRecoveredTurn();
+        await CheckHistoryPrefetchAsync();
         await CheckKeyHistoryAsync();
         string fingerprint=new('A',64);
         var rdp=MacClients.FreeRdpArguments(new(22119,"fixture",fingerprint),new("workspace","fixture password"),
@@ -277,6 +278,64 @@ internal static class MacSelfTest
                     { Content=new StringContent("{\"developer\":true}") }),
                 _ => throw new InvalidOperationException("Too many history requests")
             };
+    }
+
+    private static async Task CheckHistoryPrefetchAsync()
+    {
+        using var directory = new TempMirrorDirectory();
+        string userData=Path.Combine(directory.Path,"Claude"), data=Path.Combine(directory.Path,"SafeCode");
+        string account=Guid.NewGuid().ToString("D"), organization=Guid.NewGuid().ToString("D");
+        Directory.CreateDirectory(userData);
+        File.WriteAllText(Path.Combine(userData,"config.json"),JsonSerializer.Serialize(new {lastKnownAccountUuid=account}));
+        var fixture=new HistoryPrefetchFixture();
+        using var client=new HttpClient(fixture){BaseAddress=new Uri("http://fixture.test")};
+        async Task Fetch() => await DesktopWebHistory.PrefetchAsync(client,userData,data,organization,LocalSecrets.Protect,CancellationToken.None);
+        await Fetch();
+        await Fetch();
+        if(fixture.Downloads!=1 || Directory.Exists(Path.Combine(userData,"claude-code-sessions")))
+            throw new Exception("后台缓存重复下载或提前写入了 Claude 会话。");
+        var cache=Directory.GetFiles(data,"*.aes",SearchOption.AllDirectories).Single();
+        if(Encoding.UTF8.GetString(File.ReadAllBytes(cache)).Contains("Stored fixture",StringComparison.Ordinal))
+            throw new Exception("后台会话缓存未加密。");
+        await DesktopWebHistory.SyncAsync(client,userData,data,organization,"claude-fixture",CancellationToken.None,LocalSecrets.Unprotect);
+        if(fixture.Downloads!=1 || Directory.GetFiles(userData,"*.jsonl",SearchOption.AllDirectories).Length!=1)
+            throw new Exception("冷启动未复用缓存或错误导入了会话。");
+        fixture.Developer=false;
+        await Fetch();
+        if(Directory.GetFiles(data,"*.aes",SearchOption.AllDirectories).Length!=0)
+            throw new Exception("关闭开发者模式后未清理缓存。");
+        Console.WriteLine("MAC_HISTORY_BACKGROUND_PREFETCH_AND_COLD_REUSE_OK");
+    }
+
+    private sealed class HistoryPrefetchFixture : HttpMessageHandler
+    {
+        private readonly string project=Guid.NewGuid().ToString("D"), scope=Guid.NewGuid().ToString("D"),
+            session=Guid.NewGuid().ToString("D"), busy=Guid.NewGuid().ToString("D"), busyScope=Guid.NewGuid().ToString("D");
+        internal bool Developer = true;
+        internal int Downloads;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
+        {
+            var prefetch=request.Headers.Contains("X-SafeCode-History-Prefetch");
+            var path=request.RequestUri!.AbsolutePath;
+            object result;
+            if(path=="/v1/desktop-history")
+            {
+                var sessions=new[]{new {id=session,scope,title="Fixture",updated=1700000000000,count=1},
+                    new {id=busy,scope=busyScope,title="Busy",updated=1700000000001,count=1}};
+                result=new {developer=Developer,deferredSessions=new[]{busy},
+                    projects=new[]{new {id=project,name="Fixture",sessions=prefetch?sessions:sessions[..1]}}};
+            }
+            else
+            {
+                if(!prefetch || !path.EndsWith("/"+session,StringComparison.Ordinal))
+                    throw new Exception("未使用后台缓存，或试图读取运行中的会话。");
+                Downloads++;
+                result=new {scope,messages=new[]{new {role="assistant",kind="text",content="Stored fixture"}}};
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {Content=new StringContent(JsonSerializer.Serialize(result))});
+        }
     }
 
     private static async Task CheckKeyHistoryAsync()

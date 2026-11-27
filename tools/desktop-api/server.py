@@ -38,7 +38,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 54
+GATEWAY_REVISION = 55
 DESKTOP_HISTORY = '/v1/desktop-history'
 DESKTOP_FOLLOWUPS = '/v1/desktop-followups'
 PUBLIC_KEY_QUEUE = 'public-key-queue'
@@ -254,15 +254,23 @@ class PublicHandler(Handler):
             cloud = self.manager.cloudcli
             if not cloud or not cloud.config.get('desktopQuestions'):
                 return self.device_error(503, CLOUDCLI_REQUIRED)
+            prefetch = self.headers.get('X-SafeCode-History-Prefetch') == '1'
+            def running_ids():
+                return sorted({row['sessionId'] for row in cloud.running_sessions()
+                               if isinstance(row, dict) and isinstance(row.get('sessionId'), str)})
             if self.path == DESKTOP_HISTORY:
                 if self.headers.get('X-SafeCode-History-Mirror') == '1':
                     result = {'developer': True, **cloud.desktop_history_index(mirror=True)}
+                    if prefetch:
+                        result['deferredSessions'] = running_ids()
                 else:
                     result = {'developer': True, 'projects': cloud.desktop_history_index()}
             else:
                 path = re.fullmatch(r'/v1/desktop-history/([a-f0-9-]{36})/([a-f0-9-]{36})', self.path)
                 if path is None:
                     return self.device_error(404, '找不到该网页会话。')
+                if prefetch and path[2] in running_ids():
+                    return self.device_error(409, '会话正在工作，完成后再读取历史。')
                 result = cloud.desktop_history_export(*path.groups())
             if not self.server.registry.desktop_policy(self.digest)[0]:
                 return self.device_error(403, '此 Key 未启用开发者模式。')

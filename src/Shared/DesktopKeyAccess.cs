@@ -45,9 +45,46 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     private sealed record Relay(WebApplication App,HttpClient Client,int Port,Func<bool>? HostReady,long StartedAt,RelayConnection Connection) : IAsyncDisposable
     {
         private readonly CancellationTokenSource probeLifetime = new();
+        private readonly SemaphoreSlim historyWake = new(0,1);
         private Task? probeTask;
+        private Task? historyTask;
 
-        internal void StartProbing(Ticket ticket) => probeTask = MonitorGatewayAsync(ticket, Connection, probeLifetime.Token);
+        internal void StartProbing(Ticket ticket) => probeTask = MonitorGatewayAsync(ticket, Connection, WakeHistory, probeLifetime.Token);
+
+        internal void StartHistory(Func<CancellationToken,Task> prefetch)
+        {
+            historyTask = RunHistoryAsync(prefetch,probeLifetime.Token);
+            WakeHistory();
+        }
+
+        internal void WakeHistory()
+        {
+            try { historyWake.Release(); }
+            catch (Exception error) when (error is SemaphoreFullException or ObjectDisposedException) { }
+        }
+
+        private async Task RunHistoryAsync(Func<CancellationToken,Task> prefetch, CancellationToken ct)
+        {
+            long notBefore = 0;
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    await historyWake.WaitAsync(TimeSpan.FromSeconds(45),ct).ConfigureAwait(false);
+                    long wait = notBefore - Environment.TickCount64;
+                    if (wait > 0) await Task.Delay(TimeSpan.FromMilliseconds(wait),ct).ConfigureAwait(false);
+                    if (!Connection.GatewayConnected) continue;
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(70));
+                    try { await prefetch(timeout.Token).ConfigureAwait(false); }
+                    catch (Exception error) when (error is HttpRequestException or IOException or UnauthorizedAccessException
+                                                   or JsonException or CryptographicException or InvalidOperationException or KeyNotFoundException
+                                                   or OperationCanceledException) { }
+                    notBefore = Environment.TickCount64 + 10_000;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        }
 
         public async ValueTask DisposeAsync()
         {
@@ -61,6 +98,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 {
                     Client.Dispose();
                     if (probeTask != null) await probeTask.ConfigureAwait(false);
+                    if (historyTask != null) await historyTask.ConfigureAwait(false);
+                    historyWake.Dispose();
                     probeLifetime.Dispose();
                 }
             }
@@ -189,7 +228,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         return new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false,UseProxy=false,
             ServerCertificateCustomValidationCallback=(_,cert,_,_)=>MatchesPin(pin,cert)};
     }
-    private static async Task MonitorGatewayAsync(Ticket ticket, RelayConnection connection, CancellationToken ct)
+    internal void WakeHistory() => Volatile.Read(ref relay)?.WakeHistory();
+
+    private static async Task MonitorGatewayAsync(Ticket ticket, RelayConnection connection, Action reconnected,CancellationToken ct)
     {
         var endpoint = new Uri(ticket.Url);
         var pin = Convert.FromHexString(ticket.Pin);
@@ -198,7 +239,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         {
             do
             {
+                bool wasConnected = connection.GatewayConnected;
                 connection.GatewayConnected = await CheckGatewayHandshakeAsync(endpoint, pin, ct).ConfigureAwait(false);
+                if (connection.GatewayConnected && !wasConnected) reconnected();
             }
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false));
         }
@@ -926,6 +969,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var library=Library(saved);
             var organization=OperatingSystem.IsMacOS()?BindHistoryOrganization(saved.Remote,saved):null;
             var profile=PrepareProfile(library,saved.Profile,saved.Port,saved.Local,organization);
+            organization??=ProfileText(profile,"deploymentOrganizationUuid");
             await relay.Connection.CheckDeviceAsync(true,ct);
             var available=await CheckLaunchRouteAsync(saved.Port,saved.Local,ct);
             ValidateProfileModels(profile,available);
@@ -940,7 +984,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 if(organization!=null)
                 {
                     var fallback=ProfileText(profile["inferenceModels"]![0]!.AsObject(),"name")!;
-                    await DesktopWebHistory.SyncAsync(relay.Client,userData,dataDirectory,organization,fallback,time.Token);
+                    await DesktopWebHistory.SyncAsync(relay.Client,userData,dataDirectory,organization,fallback,time.Token,unprotect);
                 }
             }
             if(OperatingSystem.IsWindows())
@@ -1127,6 +1171,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     " 已被占用。请先退出占用该端口的程序，再恢复接入。",error);
             }
             Action? undoPolicy=null,undoLegacyPolicy=null;
+            string historyOrganization;
             bool profileWritten=false,metaWritten=false;
             try
             {
@@ -1137,7 +1182,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     ["deploymentMode"]="3p",["disableDeploymentModeChooser"]=true,["deploymentDisplayName"]="SafeCode",
                     ["inferenceModels"]=models,["modelDiscoveryEnabled"]=false,["autoModeEnabled"]=true,
                     ["codeDefaultPermissionMode"]="auto",["inferenceGatewayAutoModeServerChecks"]=false,["chatTabEnabled"]=true};
-                ApplyHistoryOrganization(profile,BindHistoryOrganization(t,previous,device!=null));
+                historyOrganization=BindHistoryOrganization(t,previous,device!=null);
+                ApplyHistoryOrganization(profile,historyOrganization);
                 if(classifier!=null)SetClassifier(profile,classifier);
                 if(OperatingSystem.IsWindows())
                 {
@@ -1176,6 +1222,9 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             }
             var oldRelay=relay;relay=next;
             if(oldRelay!=null)await oldRelay.DisposeAsync();
+            if(device!=null)
+                next.StartHistory(token=>DesktopWebHistory.PrefetchAsync(next.Client,Path.GetDirectoryName(lib)!,
+                    dataDirectory,historyOrganization,protect,token));
             return Status();
         }
         catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}

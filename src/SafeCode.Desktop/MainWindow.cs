@@ -111,6 +111,7 @@ public sealed class MainWindow : Window
         if(!IsAcceptance)
         {
             keyAccess=new DesktopKeyAccess(dataDirectory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null);
+            Activated+=(_,_)=>keyAccess?.WakeHistory();
             claudeBridge=new ClaudeCodexBridge(dataDirectory);
             integrationTimer.Tick+=async(_,_)=>
             {

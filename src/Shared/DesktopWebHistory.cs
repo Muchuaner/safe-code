@@ -16,6 +16,7 @@ internal static class DesktopWebHistory
     private const string Followups = "/v1/desktop-followups";
     private const string MirrorFormat = "text-auto-v1/";
     private const int ResponseLimit = 40 * 1024 * 1024;
+    private const long PrefetchLimit = 96 * 1024 * 1024;
     private sealed record Entry(string Stamp, string Cwd);
     private sealed record Pending(string Project, string Scope, string Session, string Title, long Updated, Entry Entry);
 
@@ -208,29 +209,82 @@ internal static class DesktopWebHistory
         return frame.ToJsonString();
     }
 
+    internal static async Task PrefetchAsync(HttpClient gateway, string userData, string dataDirectory,
+                                             string organization, Func<byte[],byte[]> protect, CancellationToken ct)
+    {
+        var root = SessionRoot(userData,organization);
+        if (root is null) return;
+        using var index = await GetAsync(gateway,Endpoint,optional:true,ct,prefetch:true);
+        if (index is null) return;
+        var cache = HistoryCache(dataDirectory,organization,root);
+        if (!index.RootElement.GetProperty("developer").GetBoolean())
+        {
+            PruneCache(cache,[]);
+            return;
+        }
+        if (!index.RootElement.TryGetProperty("deferredSessions",out var deferred)) return;
+        var running = deferred.EnumerateArray().Select(row => row.GetString()).ToHashSet();
+        var before = ReadManifest(root);
+        var pending = new List<(string File,string Project,string Session,string Scope,long Updated)>();
+        foreach (var project in index.RootElement.GetProperty("projects").EnumerateArray())
+        {
+            var id = Uuid(Text(project,"id"));
+            foreach (var row in project.GetProperty("sessions").EnumerateArray())
+            {
+                var session = Uuid(Text(row,"id"));
+                var scope = Uuid(Text(row,"scope"));
+                if (running.Contains(session) || HasNativeScope(root,row,scope)) continue;
+                var stamp = HistoryStamp(row);
+                if (before.TryGetValue(scope,out var prior) && prior.Stamp == stamp &&
+                    File.Exists(Path.Combine(root,"local_"+scope+".json"))) continue;
+                pending.Add((CacheFile(scope,stamp),id,session,scope,Timestamp(row,"updated",0)));
+            }
+        }
+        PruneCache(cache,pending.Select(row => row.File).ToHashSet(StringComparer.Ordinal));
+        Directory.CreateDirectory(cache);
+        long bytes = Directory.EnumerateFiles(cache,"*.aes").Sum(path => new FileInfo(path).Length);
+        foreach (var row in pending.OrderByDescending(row => row.Updated))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (bytes >= PrefetchLimit) break;
+            var path = Path.Combine(cache,row.File);
+            if (File.Exists(path)) continue;
+            using var document = await GetAsync(gateway,$"{Endpoint}/{row.Project}/{row.Session}",optional:true,ct,prefetch:true);
+            if (document is null || Text(document.RootElement,"scope") != row.Scope ||
+                document.RootElement.GetProperty("messages").GetArrayLength() == 0) continue;
+            var plain = JsonSerializer.SerializeToUtf8Bytes(document.RootElement);
+            try
+            {
+                if (plain.LongLength > ResponseLimit || plain.LongLength + 4096 > PrefetchLimit - bytes) continue;
+                var encrypted = protect(plain);
+                if (encrypted.LongLength > PrefetchLimit - bytes) continue;
+                DesktopKeyAccess.WriteProfileFile(path,encrypted);
+                bytes += encrypted.LongLength;
+            }
+            finally { CryptographicOperations.ZeroMemory(plain); }
+        }
+    }
+
     internal static async Task SyncAsync(HttpClient gateway, string userData, string dataDirectory,
-                                        string organization, string fallbackModel, CancellationToken ct)
+                                        string organization, string fallbackModel, CancellationToken ct,
+                                        Func<byte[],byte[]>? unprotect=null)
     {
         using var index = await GetAsync(gateway, Endpoint, optional:true, ct);
         if (index is null) return;
-        var configPath = Path.Combine(userData, "config.json");
-        if (!File.Exists(configPath)) return;
-        using var config = JsonDocument.Parse(File.ReadAllBytes(configPath));
-        if (!Guid.TryParse(Text(config.RootElement, "lastKnownAccountUuid"), out var account)) return;
-        var root = Path.Combine(userData, "claude-code-sessions", account.ToString("D"), Uuid(organization));
+        var root = SessionRoot(userData,organization);
+        if (root is null) return;
+        var cache = HistoryCache(dataDirectory,organization,root);
         var staging = Path.Combine(root, "imported-staging");
         var manifest = Path.Combine(root, "safecode-web-history.json");
-        var before = File.Exists(manifest)
-            ? JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllBytes(manifest)) ?? new()
-            : new Dictionary<string, Entry>();
+        var before = ReadManifest(root);
         var enabled = index.RootElement.GetProperty("developer").GetBoolean();
+        if (!enabled) PruneCache(cache,[]);
         var projectManifest = Path.Combine(root, "safecode-web-projects.json");
         var oldFolders = File.Exists(projectManifest)
             ? JsonSerializer.Deserialize<string[]>(File.ReadAllBytes(projectManifest)) ?? [] : Array.Empty<string>();
         if (!enabled && before.Count == 0 && oldFolders.Length == 0) return;
         var projects = Path.Combine(dataDirectory, "CloudCLI Projects", organization);
         var folders = new HashSet<string>();
-        var native = new HashSet<string>();
         var removed = new HashSet<string>();
         var next = new Dictionary<string, Entry>();
         var pending = new List<Pending>();
@@ -250,22 +304,12 @@ internal static class DesktopWebHistory
                     cwd = directory;
                 foreach (var row in project.GetProperty("sessions").EnumerateArray())
                 {
-                    var count = row.GetProperty("count");
                     var scope = Uuid(Text(row, "scope"));
-                    if (row.TryGetProperty("localScopes", out var localScopes))
-                    {
-                        foreach (var local in localScopes.EnumerateArray())
-                        {
-                            var localId = Uuid(local.GetString());
-                            if (localId != scope && File.Exists(Path.Combine(root, "local_"+localId+".json")))
-                                native.Add(scope);
-                        }
-                        if (native.Contains(scope)) continue;
-                    }
+                    if (HasNativeScope(root,row,scope)) continue;
                     var session = Uuid(Text(row, "id"));
                     var updated = Timestamp(row, "updated", 0);
-                    var stamp = row.GetProperty("updated").GetRawText()+"/"+count.GetRawText()+"/"+Text(row,"title");
-                    var entry = new Entry(MirrorFormat+stamp, cwd);
+                    var stamp = HistoryStamp(row);
+                    var entry = new Entry(stamp, cwd);
                     next.Add(scope, entry);
                     var metadata = Path.Combine(root, "local_"+scope+".json");
                     if (before.TryGetValue(scope, out var prior) && File.Exists(metadata))
@@ -274,7 +318,7 @@ internal static class DesktopWebHistory
                             MigrateMirror(metadata, staging, scope);
                         else
                             SetMirrorAuto(metadata);
-                        if (prior == entry || prior == new Entry(stamp,cwd))
+                        if (prior == entry || prior == new Entry(stamp[MirrorFormat.Length..],cwd))
                             continue;
                     }
                     pending.Add(new(id, scope, session, Text(row, "title") ?? "CloudCLI", updated, entry));
@@ -292,7 +336,9 @@ internal static class DesktopWebHistory
         await Parallel.ForEachAsync(pending, new ParallelOptions { MaxDegreeOfParallelism = 2, CancellationToken = ct },
             async (row, token) =>
             {
-                using var response = await GetAsync(gateway, $"{Endpoint}/{row.Project}/{row.Session}", optional:false, token);
+                var file = Path.Combine(cache,CacheFile(row.Scope,row.Entry.Stamp));
+                using var response = ReadCached(file,unprotect) ??
+                    await GetAsync(gateway, $"{Endpoint}/{row.Project}/{row.Session}", optional:false, token);
                 if (Text(response!.RootElement, "scope") != row.Scope)
                     throw new InvalidDataException("CloudCLI 返回了错误的网页会话。");
                 var messages = response.RootElement.GetProperty("messages");
@@ -321,6 +367,48 @@ internal static class DesktopWebHistory
         }
         DesktopKeyAccess.WriteProfileFile(projectManifest, JsonSerializer.SerializeToUtf8Bytes(folders));
         DesktopKeyAccess.WriteProfileFile(manifest, JsonSerializer.SerializeToUtf8Bytes(next));
+    }
+
+    private static string? SessionRoot(string userData,string organization)
+    {
+        var path = Path.Combine(userData,"config.json");
+        if (!File.Exists(path)) return null;
+        using var config = JsonDocument.Parse(File.ReadAllBytes(path));
+        return Guid.TryParse(Text(config.RootElement,"lastKnownAccountUuid"),out var account)
+            ? Path.Combine(userData,"claude-code-sessions",account.ToString("D"),Uuid(organization)) : null;
+    }
+
+    private static Dictionary<string,Entry> ReadManifest(string root)
+    {
+        var path = Path.Combine(root,"safecode-web-history.json");
+        return File.Exists(path) ? JsonSerializer.Deserialize<Dictionary<string,Entry>>(File.ReadAllBytes(path)) ?? new() : new();
+    }
+
+    private static bool HasNativeScope(string root,JsonElement row,string scope) =>
+        row.TryGetProperty("localScopes",out var scopes) && scopes.EnumerateArray().Select(local => Uuid(local.GetString()))
+            .Any(id => id != scope && File.Exists(Path.Combine(root,"local_"+id+".json")));
+
+    private static string HistoryStamp(JsonElement row) => MirrorFormat+row.GetProperty("updated").GetRawText()
+        +"/"+row.GetProperty("count").GetRawText()+"/"+Text(row,"title");
+
+    private static string HistoryCache(string dataDirectory,string organization,string root) =>
+        Path.Combine(dataDirectory,"CloudCLI History Cache",Uuid(organization),Path.GetFileName(Path.GetDirectoryName(root))!);
+
+    private static string CacheFile(string scope,string stamp) =>
+        scope+"-"+Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(stamp)))+".aes";
+
+    private static void PruneCache(string cache,HashSet<string> keep)
+    {
+        if (!Directory.Exists(cache)) return;
+        foreach (var path in Directory.EnumerateFiles(cache,"*.aes"))
+            if (!keep.Contains(Path.GetFileName(path))) File.Delete(path);
+    }
+
+    private static JsonDocument? ReadCached(string path,Func<byte[],byte[]>? unprotect)
+    {
+        if (unprotect is null || !File.Exists(path)) return null;
+        try { return JsonDocument.Parse(unprotect(File.ReadAllBytes(path))); }
+        catch(Exception error) when(error is IOException or CryptographicException or JsonException) { return null; }
     }
 
     private static void SetMirrorAuto(string metadataPath)
@@ -474,7 +562,8 @@ internal static class DesktopWebHistory
         }));
     }
 
-    internal static async Task<JsonDocument?> GetAsync(HttpClient client, string url, bool optional, CancellationToken ct)
+    internal static async Task<JsonDocument?> GetAsync(HttpClient client, string url, bool optional, CancellationToken ct,
+                                                       bool prefetch=false)
     {
         for (var attempt = 1; ; attempt++)
         {
@@ -482,9 +571,10 @@ internal static class DesktopWebHistory
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get,url);
                 if (url == Endpoint) request.Headers.Add("X-SafeCode-History-Mirror","1");
+                if (prefetch) request.Headers.Add("X-SafeCode-History-Prefetch","1");
                 using var response = await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
                 if (optional && (response.StatusCode == HttpStatusCode.NotFound ||
-                    (response.StatusCode == HttpStatusCode.Conflict && url.StartsWith(Followups+"/",StringComparison.Ordinal)))) return null;
+                    (response.StatusCode == HttpStatusCode.Conflict && (prefetch || url.StartsWith(Followups+"/",StringComparison.Ordinal))))) return null;
                 if (response.IsSuccessStatusCode)
                 {
                     await response.Content.LoadIntoBufferAsync(ResponseLimit,ct);
