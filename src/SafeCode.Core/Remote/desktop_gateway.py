@@ -2753,7 +2753,9 @@ class CloudCliBackend:
             raise CloudCliError('网页项目不存在或已归档。', 404)
         self.verify_imported_session(project_id, path, session)
         pages, size = [], 0
-        for rows, _ in self.history_pages(session, 12):
+        # Desktop mirrors fetch several complete transcripts concurrently.
+        # Give background exports a separate budget from live-chat anchor lookups.
+        for rows, _ in self.history_pages(session, 45, page_timeout=15):
             size += sum(len(json.dumps(row).encode()) for row in rows)
             if size > 32 * 1024 * 1024:
                 raise CloudCliError('该网页会话超出单次同步容量。', 413)
@@ -3106,10 +3108,12 @@ class CloudCliBackend:
                     if len(raw) > response_limit:
                         raise CloudCliWebResponseTooLarge('CloudCLI web response exceeds the gateway limit')
                     return json.loads(raw)
+        except TimeoutError:
+            raise CloudCliError('CloudCLI web API timed out', 504) from None
         except (OSError, HTTPException, ValueError, RecursionError):
             raise CloudCliError('CloudCLI did not return a valid web API response', 502) from None
 
-    def history_pages(self, session, timeout):
+    def history_pages(self, session, timeout, *, page_timeout=5):
         if not CLOUDCLI_SESSION_ID.fullmatch(session):
             raise CloudCliError('CloudCLI returned an invalid session identifier')
         # CloudCLI returns the newest page first, ordered oldest-to-newest
@@ -3124,7 +3128,7 @@ class CloudCliBackend:
                 raise CloudCliError('CloudCLI history anchor lookup timed out', 504)
             path = f'/api/providers/sessions/{session}/messages?limit={page_size}&offset={offset}'
             try:
-                result = self.web_request('GET', path, timeout=min(5, remaining), response_limit=CLOUDCLI_HISTORY_LIMIT)
+                result = self.web_request('GET', path, timeout=min(page_timeout, remaining), response_limit=CLOUDCLI_HISTORY_LIMIT)
             except CloudCliWebResponseTooLarge:
                 if page_size == 1:
                     raise

@@ -984,8 +984,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(mirror['projects'][0]['sessions'][0]['count'], 0)
         scope = index[0]['sessions'][0]['scope']
         messages = [{'role': 'user', 'content': 'previous user'}, {'role': 'assistant', 'content': 'previous answer'}]
-        with patch.object(backend, 'history_pages', return_value=[([messages[1]], True), ([messages[0]], False)]):
+        with patch.object(backend, 'history_pages', return_value=[([messages[1]], True), ([messages[0]], False)]) as pages:
             self.assertEqual(backend.desktop_history_export(project,session), {'scope':scope,'messages':messages})
+            pages.assert_called_once_with(session, 45, page_timeout=15)
         with closing(sqlite3.connect(backend.path)) as db:
             self.assertEqual(backend.imported_session(db, 'namespace', scope, True), (project,session,str(self.project)))
             with self.assertRaisesRegex(gateway.CloudCliError, '开发者模式已关闭'):
