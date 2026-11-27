@@ -481,5 +481,56 @@ class Tests(unittest.TestCase):
         self.assertEqual(data['messages'][-1]['role'],'system')
         self.assertEqual(response['content'][0]['text'],'OK')
 
+    def _stop_watch(self,stream):
+        patcher=patch.object(g,'cloudcli_websocket',lambda:(object(),OSError))
+        patcher.start();self.addCleanup(patcher.stop)
+        class Socket:
+            def __init__(self):self.sent=[]
+            def __enter__(self):return self
+            def __exit__(self,*args):return False
+            def send(self,payload):self.sent.append(json.loads(payload))
+            def close(self):pass
+        class Backend:
+            config={'desktopQuestions':{'username':'u','password':'p'}}
+            socket=Socket()
+            def running_since(self,session,**kwargs):return 1000
+            def web_socket(self,connect,timeout=6):return self.socket
+        class Progress:
+            def __init__(self):
+                self.stream=stream;self.stopping=threading.Event()
+                self.stop_requested=threading.Event();self.client_detached=threading.Event()
+                self.output_closed=False
+        backend=Backend();progress=Progress()
+        watch=g.CloudCliStopWatch(backend,progress,900)
+        watch.session='session-1';watch.started_at=1000;watch.opened_ms=1100
+        return watch,backend.socket,progress
+
+    def test_desktop_disconnect_aborts_the_cloudcli_run(self):
+        class Stream:
+            def disconnected(self):return True
+        watch,socket,progress=self._stop_watch(Stream())
+        watch.detach(progress.stream)
+        self.assertEqual(socket.sent,[{'type':'chat.abort','sessionId':'session-1'}])
+        self.assertTrue(progress.stopping.is_set())
+        self.assertTrue(progress.client_detached.is_set())
+
+    def test_stop_after_stream_finished_still_aborts(self):
+        class Stream:
+            def disconnected(self):return False
+        watch,socket,progress=self._stop_watch(Stream())
+        watch.finished.set()
+        watch.stop(progress.stream)
+        self.assertEqual(socket.sent,[{'type':'chat.abort','sessionId':'session-1'}])
+
+    def test_stop_never_aborts_a_replacement_run(self):
+        class Stream:
+            def disconnected(self):return True
+        watch,socket,progress=self._stop_watch(Stream())
+        # CloudCLI restarted the run after the UI replaced it: same session,
+        # different startedAt. The stop must not touch the replacement.
+        watch.backend.running_since=lambda *a,**k:2000
+        watch.detach(progress.stream)
+        self.assertEqual(socket.sent,[])
+        self.assertFalse(progress.stopping.is_set())
 
 if __name__=='__main__':unittest.main()

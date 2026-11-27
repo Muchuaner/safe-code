@@ -60,6 +60,17 @@ home=$(getent passwd "$user" | cut -d: -f6)
 [[ -n "$home" && "$user" =~ ^[a-z_][a-z0-9_-]*$ && "$user" != root ]]
 app=/opt/safe-code/desktop-api
 state="$home/.local/state/safe-code-desktop-api"
+
+# cloudcli_websocket() needs this package, but only raises when a Desktop
+# question, stop request or attachment reaches that path. The gateway itself
+# starts fine without it, so the failure surfaces later as an unexplained 503.
+ensure_websocket_client() {
+    python3 -c 'import websocket' 2>/dev/null && return 0
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y python3-websocket >/dev/null 2>&1 || true
+    fi
+    python3 -c 'import websocket' 2>/dev/null || printf '提示：缺少 python3-websocket，Desktop 的停止、提问和附件功能会返回 503。\n' >&2
+}
 if [[ ${SAFECODE_INITIAL_API_INSTALL:-} == 1 ]]; then
     runuser -u "$user" -- test ! -e "$state/public-enabled" || {
         printf '检测到已启用过的公网网关配置，请在 VPS 恢复原服务。\n' >&2
@@ -67,6 +78,7 @@ if [[ ${SAFECODE_INITIAL_API_INSTALL:-} == 1 ]]; then
     }
 fi
 stage_program "$app"
+ensure_websocket_client
 runuser -u "$user" -- python3 - "$state" "$bind" "$port" "$public_ip" "${SAFECODE_INITIAL_API_INSTALL:-}" <<'PY'
 import json,sys,os,ipaddress
 from pathlib import Path

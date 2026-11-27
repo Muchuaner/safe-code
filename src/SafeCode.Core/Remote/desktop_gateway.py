@@ -2245,10 +2245,17 @@ class CloudCliStopWatch:
     def detach(self, stream):
         if not self.inactive(stream):
             self.progress.client_detached.set()
+            # Desktop's stop button ends the response stream. Abort the CloudCLI
+            # run instead of leaving it executing after the user asked to stop.
+            self.stop(stream)
 
     def stop(self, stream):
+        # A disconnected client must still abort the run: `inactive` only means
+        # this response stream is over, not that CloudCLI stopped working. The
+        # run-identity check below (same run this turn dispatched) already keeps
+        # a replacement run started from the CloudCLI UI safe.
         with self.lock:
-            if self.attempted or self.session is None or self.inactive(stream):
+            if self.attempted or self.session is None:
                 return
             self.attempted = True
             if not self.can_abort:
@@ -2265,9 +2272,7 @@ class CloudCliStopWatch:
             if started is None:
                 return
             with closing(self.backend.web_socket(connect)) as ws:
-                if self.inactive(stream) or self.backend.running_since(self.session) != started:
-                    return
-                if self.inactive(stream):
+                if self.backend.running_since(self.session) != started:
                     return
                 self.progress.stopping.set()
                 ws.send(json.dumps({'type': 'chat.abort', 'sessionId': self.session}))
