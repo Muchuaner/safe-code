@@ -1463,9 +1463,6 @@ class CloudCliProgress:
         self.thinking_chars = 0
         self.tools = {}
         self.tool_failures = set()
-        self.bash_cards = False
-        self.bash_ids = {}
-        self.bash_viewer = None
         self.reported_results = set()
         self.activity_detail_bytes = 0
         self.device_command = shlex.split(device['command']) if device else ()
@@ -1510,23 +1507,6 @@ class CloudCliProgress:
             if kind == 'thinking':
                 block['signature'] = ''
             self.parts.append(block)
-
-    def remote_block(self, block):
-        if self.output_closed:
-            return
-        self.reply_bytes += len(json.dumps(block, ensure_ascii=False).encode())
-        if self.reply_bytes > MAX_CLOUDCLI_REPLY:
-            raise CloudCliError('CloudCLI reply exceeds the gateway response size limit')
-        if self.stream is not None and not self.client_detached.is_set():
-            try:
-                self.stream.remote_block(block)
-            except ConnectionAbortedError:
-                if self.on_disconnect is None:
-                    raise
-                self.on_disconnect(self.stream)
-                if self.output_closed:
-                    return
-        self.parts.append(block)
 
     def notice(self, title, output=None, *, action=None):
         body = '\n\n> **SafeCode** · '+title
@@ -1731,20 +1711,10 @@ class CloudCliProgress:
         if not event.get('parentToolUseId') and identifier not in self.reported_results:
             self.reported_results.add(identifier)
             tool = self.tools[identifier]
-            card = self.bash_ids.pop(identifier, None)
-            if card:
-                preview = self.result_preview(output) or ''
-                code = nested.get('exitCode')
-                self.remote_block({'type':'bash_code_execution_tool_result', 'tool_use_id':card, 'content':{
-                    'type':'bash_code_execution_result', 'stdout':'' if failed else preview,
-                    'stderr':preview if failed else '', 'return_code':code if type(code) is int else int(failed),
-                    'content':[]}})
-                if self.bash_viewer:
-                    state = '失败' if failed else '已完成'
-                    self.notice(f'Bash {state} · [查看命令和输出]({self.bash_viewer}{card})')
-            elif tool != 'AskUserQuestion':
+            if tool != 'AskUserQuestion':
                 state = '失败' if failed else '已返回'
-                self.activity_detail(f'`{tool}` {state}', self.result_preview(output))
+                detail = None if tool == 'Bash' else self.result_preview(output)
+                self.activity_detail(f'`{tool}` {state}', detail)
 
     def incomplete(self, message, status=502):
         if self.device_failure:
@@ -1840,20 +1810,11 @@ class CloudCliProgress:
                     self.plan_candidate = data
                 self.activity()
                 if not parent:
-                    if (tool == 'Bash' and self.bash_cards and isinstance(data, dict)
-                            and isinstance(data.get('command'), str)):
-                        # Reserve space for both halves before emitting a native server tool.
-                        if self.activity_detail_bytes + 3200 <= min(32000, MAX_CLOUDCLI_REPLY // 4):
-                            self.activity_detail_bytes += 3200
-                            card = 'srvtoolu_sc'+uuid.uuid4().hex
-                            self.bash_ids[identifier] = card
-                            self.remote_block({'type':'server_tool_use', 'name':'bash_code_execution',
-                                               'id':card, 'input':{'command':self.preview(data['command'], 600)}})
-                        else:
-                            self.activity_detail('Bash 运行中', None)
-                    else:
+                    detail = None
+                    if tool != 'Bash':
                         detail = self.fields(data, {'description': '说明', 'command': '命令', 'file_path': '文件'})
-                        self.activity_detail(f'正在运行 `{tool}`', self.preview(detail, 600))
+                        detail = self.preview(detail, 600)
+                    self.activity_detail(f'正在运行 `{tool}`', detail)
         elif kind == 'tool_result':
             self.tool_result(event)
             self.activity()
@@ -4465,14 +4426,6 @@ class CloudCliBackend:
             progress = CloudCliProgress(stream, self.config.get('webOrigin'), native_tools, model,
                                         approval_transport if existing_project else tool_approvals,
                                         None if existing_project else self.device)
-            progress.bash_cards = bool(scope and isinstance(offered, list) and any(
-                isinstance(tool, dict) and tool.get('name') == 'Bash' for tool in offered))
-            headers = getattr(getattr(stream, 'handler', None), 'headers', {})
-            viewer = headers.get('X-SafeCode-Bash-Viewer', '')
-            if scope and re.fullmatch(r'[1-9][0-9]{0,4}/[a-f0-9]{32}', viewer):
-                port, capability = viewer.split('/')
-                if int(port) <= 65535:
-                    progress.bash_viewer = f'http://127.0.0.1:{port}/bash/{capability}/{scope}/'
             progress.account_footer = manager.account_footer
             progress.stop_requested = active_turn.stop_requested
             progress.client_detached = active_turn.client_detached
@@ -5064,20 +5017,6 @@ class CloudCliMessagesStream:
                 'content': [], 'stop_reason': None, 'stop_sequence': None,
                 'usage': dict.fromkeys(CLOUDCLI_USAGE_FIELDS, 0),
             }})
-
-    def remote_block(self, block):
-        if not self.send_events:
-            return
-        with self.wire_lock:
-            try:
-                self.start_message()
-                self.close_block()
-                for event, payload in sse_content_block(block, self.index):
-                    self.handler.send_sse(event, payload)
-                self.index += 1
-                self.last_output = time.monotonic()
-            except OSError:
-                raise ConnectionAbortedError('Desktop disconnected during a CloudCLI stream') from None
 
     def write_part(self, kind, part):
         try:

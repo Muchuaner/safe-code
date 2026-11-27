@@ -630,8 +630,9 @@ class CloudCLIGatewayTests(unittest.TestCase):
                 prefix = ''.join(event['delta'].get('text', '') for event in decoded if event['type'] == 'content_block_delta')
                 self.assertIn('正在执行工具操作', prefix)
                 self.assertIn('正在运行 `Bash`', prefix)
-                self.assertLess(prefix.index('命令: fixture command'), prefix.index('`Bash` 已返回'))
-                self.assertLess(prefix.index('fixture command output'), prefix.index('Fixture '))
+                self.assertLess(prefix.index('`Bash` 已返回'), prefix.index('Fixture '))
+                self.assertNotIn('fixture command', prefix)
+                self.assertNotIn('bash_code_execution', json.dumps(decoded))
                 self.assertNotIn('Reasoning excerpt from the fixture', prefix)
                 self.assertEqual([(event['index'], event['content_block']['type']) for event in decoded
                                   if event['type'] == 'content_block_start'], [(0, 'text'), (1, 'thinking'), (2, 'text')])
@@ -2592,7 +2593,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
 
     def test_remote_outputs_render_only_text_once_and_stay_bounded(self):
         progress = gateway.CloudCliProgress(None, None)
-        progress.feed({'kind': 'tool_use', 'toolName': 'Bash', 'toolId': 'remote'})
+        progress.feed({'kind': 'tool_use', 'toolName': 'Read', 'toolId': 'remote'})
         result = {'kind': 'tool_result', 'toolId': 'remote', 'isError': True, 'content': json.dumps([
             {'type': 'image', 'source': {'data': 'opaque-image-data'}},
             {'type': 'text', 'text': 'first line\n' + 'x'*3000 + 'hidden tail'}
@@ -2600,7 +2601,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         progress.feed(result)
         progress.feed(result)
         visible = progress.finish()[0]['text']
-        self.assertEqual(visible.count('`Bash` 失败'), 1)
+        self.assertEqual(visible.count('`Read` 失败'), 1)
         self.assertEqual(visible.count('first line'), 1)
         self.assertNotIn('opaque-image-data', visible)
         self.assertNotIn('hidden tail', visible)
