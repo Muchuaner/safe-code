@@ -1315,7 +1315,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                 var workflow=new JsonObject{["name"]=ultracode,["labelOverride"]=label+" · Ultracode",["maxEffort"]="xhigh"};
                 if(m?["ultracode_supports_1m"] is {} extended)workflow["supports1m"]=extended.DeepClone();
                 if(entry["prefer1m"] is {} preferred)workflow["prefer1m"]=preferred.DeepClone();
-                if(entry["behavesAs"] is {} resolved)workflow["behavesAs"]=resolved.DeepClone();
+                // The gateway routes this workflow preset using a fixed Ultracode effort.
                 models.Add(workflow);
             }
         }

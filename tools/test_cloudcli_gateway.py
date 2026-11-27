@@ -1124,7 +1124,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
     def test_catalog_only_advertises_verified_effort_for_an_allowed_model(self):
         self.config['desktopQuestions'] = {'username': 'fixture-user', 'password': 'fixture-password'}
         self.cloud.model_options = [
-            {'value': 'haiku', 'label': 'Alias should not be assigned', 'effort': {'values': [{'value': 'max'}]}},
+            {'value': 'haiku', 'label': 'Alias should not be assigned', 'resolvedModel': MODEL,
+             'effort': {'values': [{'value': 'max'}]}},
             {'value': MODEL, 'label': 'Fixture Haiku', 'effort': {'values': [
                 {'value': 'medium'}, {'value': 'low'}, {'value': 'ultracode'}, {'value': 'medium'},
             ]}},
@@ -1144,6 +1145,47 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertFalse(self.cloud.requests)
         self.assertEqual(self.cloud.model_requests, ['Bearer fixture.web.token'])
         self.assertNoNativeFallback()
+
+    def test_configured_gateway_exposes_cloudcli_effort_controls_without_changing_routes(self):
+        self.config['desktopQuestions'] = {'username': 'fixture-user', 'password': 'fixture-password'}
+        effort = {'values': [{'value': level} for level in ('low', 'medium', 'high', 'xhigh', 'max', 'ultracode')]}
+        self.cloud.model_options = [
+            {'value': name, 'label': name, 'effort': effort}
+            for name in ('default', 'best', 'fable', 'sonnet', 'sonnet[1m]', 'opus', 'opusplan')
+        ] + [{'value': 'haiku', 'label': 'Haiku'}, {'value': 'vendor/unknown', 'effort': effort}]
+        concrete = {'default': 'claude-opus-5-5', 'fable': 'claude-fable-5-2',
+                    'sonnet': 'claude-sonnet-5-5', 'opus': 'claude-opus-5-5', 'haiku': MODEL}
+        self.native_catalog.return_value = gateway.model_catalog([
+            {'value': name, 'resolvedModel': model, 'supportedEffortLevels': ['low', 'high']}
+            for name, model in concrete.items()
+        ], self.home, include_options=True)
+        self.save_config()
+        self.start_gateway()
+        with patch.object(gateway, '_native_catalog_expires', 0.0), patch.object(gateway, '_native_catalog_options', {}):
+            status, catalog = self.request(path='/v1/models')
+            self.assertEqual(status, 200)
+            rows = {row['id']: row for row in catalog['data']}
+            for model, resolved in {**concrete, 'best': concrete['fable'], 'opusplan': concrete['sonnet']}.items():
+                if model == 'haiku':
+                    self.assertEqual(rows[model]['supported_effort_levels'], [])
+                    self.assertNotIn('behaves_as', rows[model])
+                else:
+                    self.assertEqual(rows[model]['behaves_as'], resolved)
+                    self.assertEqual(rows[model]['supported_effort_levels'], [level['value'] for level in effort['values']])
+            self.assertEqual(rows['sonnet']['desktop_model_id'], 'safecode-cloudcli-sonnet')
+            self.assertTrue(rows['sonnet']['supports_1m'])
+            self.assertNotIn('behaves_as', rows['vendor/unknown'])
+            self.assertEqual([row['id'] for row in self.manager.cloudcli.catalog(['sonnet', 'sonnet[1m]'])['data']],
+                             ['sonnet'])
+        self.native_catalog.assert_called_once()
+        self.native_turn.assert_not_called()
+        self.assertFalse(self.cloud.requests)
+
+        status, _ = self.request(conversation('Fixture', model='safecode-cloudcli-sonnet[1m]',
+                                              output_config={'effort': 'xhigh'}))
+        self.assertEqual(status, 200)
+        task = self.cloud.requests[-1][2]
+        self.assertEqual((task['model'], task['effort']), ('sonnet[1m]', 'xhigh'))
 
     def use_automatic_models(self, *, web_catalog=False):
         project = self.home / gateway.DEFAULT_CLOUDCLI_PROJECT

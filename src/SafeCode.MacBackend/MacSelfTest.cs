@@ -39,7 +39,7 @@ internal static class MacSelfTest
         if(!models.Select(model=>(string?)model?["name"]).SequenceEqual(names)||
            (string?)models[1]!["maxEffort"]!="max"||(bool?)models[1]!["supports1m"]!=true||
            (string?)models[2]!["maxEffort"]!="xhigh"||(bool?)models[2]!["supports1m"]!=true||
-           (string?)models[2]!["behavesAs"]!="claude-fixture-opus"||
+           (string?)models[1]!["behavesAs"]!="claude-fixture-opus"||models[2]!["behavesAs"] is not null||
            (string?)models[3]!["maxEffort"]!="high"||classifier!="claude-fixture-classifier")
             throw new Exception("Claude Desktop API Key 模型、思考强度或分类器配置错误。");
         using(var transport=DesktopKeyAccess.RemoteHandler(new("https://gateway.example",new string('0',64),new string('a',43))))

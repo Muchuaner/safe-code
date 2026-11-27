@@ -2510,11 +2510,33 @@ class CloudCliBackend:
         levels = effort.get('values') if isinstance(effort, dict) else None
         return [level.get('value') for level in levels if isinstance(level, dict)] if isinstance(levels, list) else []
 
+    @staticmethod
+    def desktop_model_identity(model, option, native):
+        base = model.removesuffix('[1m]')
+        # CloudCLI's best selects Fable when available, and Opus otherwise.
+        # Opus Plan normally executes on Sonnet and changes to Opus in Plan mode.
+        fallback = {'best': ('fable', 'opus'), 'opusplan': ('sonnet',)}
+        candidates = (option.get('behaves_as'), option.get('resolvedModel'),
+                      *(native.get(alias, {}).get('behaves_as')
+                        for alias in (model, base, *fallback.get(base, ()))))
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.startswith('claude-') and MODEL.fullmatch(candidate):
+                return candidate.removesuffix('[1m]')
+        return None
+
     def catalog(self, allowed_models=None):
         choices = self.model_choices()
         if allowed_models is not None:
             choices = {model: option for model, option in choices.items()
                        if option.get('route', model) in allowed_models}
+        provider, custom_only = self.verified_model_options()
+        # Configured gateways use the web catalog for the available routes and
+        # efforts. The CLI fills in model identities absent from the web rows.
+        # Give that information only to non-custom selectors.
+        native = native_cloudcli_options() if provider and not custom_only and any(
+            model.removesuffix('[1m]') in (*CLAUDE_MODEL_FAMILIES, *CLOUDCLI_MODEL_SELECTORS)
+            and self.supported_efforts(option) and not self.desktop_model_identity(model, option, {})
+            for model, option in choices.items()) else {}
         families = set()
         data = []
         for model, option in choices.items():
@@ -2537,8 +2559,8 @@ class CloudCliBackend:
             description = option.get('description')
             if isinstance(description, str) and description.isprintable():
                 row['description'] = description[:320]
-            resolved = option.get('behaves_as')
-            if isinstance(resolved, str) and resolved.startswith('claude-') and MODEL.fullmatch(resolved):
+            resolved = self.desktop_model_identity(model, option, native)
+            if resolved and (levels or model.startswith('claude-')):
                 row['behaves_as'] = resolved
             if model != base:
                 row['prefer_1m'] = True
