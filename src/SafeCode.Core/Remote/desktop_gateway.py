@@ -1430,6 +1430,7 @@ class CloudCliPausedTurn:
     reply: dict
     expected: str
     timer: Optional[threading.Timer] = None
+    alternate_history: Optional[str] = None
 
 
 SSH_TRANSPORT_ERROR = re.compile(
@@ -2425,6 +2426,11 @@ class ActiveCloudCliTurn:
                 ordered.extend((history[-1], reply))
                 histories.append(history_signature(ordered, 'cloudcli'))
         return histories
+
+    def steer_replies(self, response):
+        with self.steer_lock:
+            return [('steer:'+message_id, receipt, receipt.after(response))
+                    for message_id, receipt in self.steers.items() if receipt is not None]
 
     def resume(self, stream, receipt=None):
         index, offset = receipt.cursor if receipt is not None else (0, 0)
@@ -3788,7 +3794,8 @@ class CloudCliBackend:
                                    (identity, namespace, json.dumps(reply, ensure_ascii=False), time.time()))
                         # Keep the receipt until the next task so a retry under a new UUID can be explained.
                         return reply
-            if turn is None or expected != turn.expected or card != turn.question.block['id']:
+            if (turn is None or expected not in (turn.expected, turn.alternate_history)
+                    or card != turn.question.block['id']):
                 raise CloudCliError('No matching pending question for this Desktop conversation', 409)
             if check_model is not None:
                 check_model(turn.progress.model)
@@ -3804,6 +3811,8 @@ class CloudCliBackend:
                     db.execute('DELETE FROM question_receipts WHERE scope=?', (namespace,))
                 self.question_action(turn.question, action)
                 turn.progress.stream = stream
+                turn.progress.resume_turn = None
+                turn.progress.client_detached.clear()
                 turn.progress.awaiting_decision = turn.question.request_id
                 # The card completes the existing run, even if the picker changed meanwhile.
                 original_model = turn.reply['model']
@@ -3838,10 +3847,17 @@ class CloudCliBackend:
             expected = history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli')
             turn = CloudCliPausedTurn(events, progress, question, previous_history, project, workspace, identity,
                                       result, expected)
+            steer_replies = progress.resume_turn.steer_replies(result) if progress.resume_turn is not None else []
+            for _, receipt, reply in reversed(steer_replies):
+                if receipt.cursor is not None:
+                    turn.alternate_history = expected
+                    turn.expected = history_signature([*receipt.history, reply], 'cloudcli')
+                    break
             with closing(sqlite3.connect(self.path)) as db, db:
                 db.execute('UPDATE request_operations SET pending=0 WHERE identity=?', (identity,))
+                self.save_steer_replies(db, steer_replies)
                 db.execute('INSERT OR REPLACE INTO question_receipts VALUES (?,?,?,?,?,?,?,?)',
-                           (namespace, expected, question.block['id'], question.session, progress.model,
+                           (namespace, turn.expected, question.block['id'], question.session, progress.model,
                             project, workspace, time.time()))
             with self.active_lock:
                 self.paused_turns[namespace] = turn
@@ -3849,6 +3865,7 @@ class CloudCliBackend:
             return result
         confirmed = history_signature(messages+[{'role': 'assistant', 'content': content}], 'cloudcli')
         aliases = progress.resume_turn.steer_histories(messages, content) if progress.resume_turn is not None else []
+        steer_replies = progress.resume_turn.steer_replies(result) if progress.resume_turn is not None else []
         anchor = self.turn_anchor(progress, session) if namespace.rpartition(':')[2] else None
         with closing(sqlite3.connect(self.path)) as db, db:
             self.save_session(db, namespace, previous_history, session, project, workspace, [confirmed, *aliases])
@@ -3859,6 +3876,7 @@ class CloudCliBackend:
                 db.execute('INSERT OR REPLACE INTO workspace_prompts VALUES (?, ?, ?, ?)',
                            (namespace, session, progress.turn_position, progress.workspace_prompt_fingerprint))
             db.execute('UPDATE requests SET reply=? WHERE identity=?', (json.dumps(result, ensure_ascii=False), identity))
+            self.save_steer_replies(db, steer_replies)
             if progress.resume_prompt:
                 db.execute('INSERT OR REPLACE INTO desktop_resume_receipts VALUES (?,?,?,?,?)',
                            (namespace,identity,session,progress.resume_prompt,time.time()))
@@ -4352,6 +4370,26 @@ class CloudCliBackend:
             matches[0].stop_requested.set()
             return True
 
+    @staticmethod
+    def save_steer_replies(db, replies):
+        db.executemany('UPDATE requests SET reply=? WHERE identity=?',
+                       [(json.dumps(reply, ensure_ascii=False), key) for key, _, reply in replies])
+
+    def replay_steer(self, namespace, message_id, model, context_1m, authorize):
+        with closing(sqlite3.connect(self.path)) as db:
+            row = db.execute('SELECT reply FROM requests WHERE identity=? AND scope=?',
+                             ('steer:'+message_id, namespace)).fetchone()
+        if row is None:
+            return None
+        if authorize is not None:
+            authorize(self.resolve_model(model, context_1m)[0])
+        if row[0] is None:
+            raise CloudCliError('原引导已经提交，网关没有收到可恢复的结果。', 503)
+        reply = json.loads(row[0])
+        if reply['model'] != model:
+            raise CloudCliError('请使用原任务的模型重试这条引导。', 409)
+        return reply
+
     def steer_active(self, manager, data, *, session_header=None, stream=None, context_1m=False,
                      authorize=None):
         if not getattr(stream, 'desktop_turn_id', None) or not stream.send_events:
@@ -4365,19 +4403,8 @@ class CloudCliBackend:
         visible = without_desktop_model_commands([item for item in messages if item['role'] != 'system'])
         if len(visible) < 2 or visible[-1]['role'] != 'user' or desktop_suggestion(visible):
             return None
-        prefix = visible[:-1]
-        if prefix[-1]['role'] == 'assistant':
-            prefix = prefix[:-1]
-        with self.active_lock:
-            turn = self.active_conversations.get(self.identity+':'+scope)
-        if turn is None or not prefix or turn.stop_requested.is_set():
-            return None
-        progress = turn.progress
-        if progress is None or not progress.session or progress.followup_cutoff is not None:
-            return None
-        observer = progress.turn_watch
         model = data.get('model')
-        if observer is None or not isinstance(model, str) or self.resolve_model(model, context_1m)[0] != progress.model:
+        if not isinstance(model, str):
             return None
         content = blocks(visible[-1].get('content'))
         if not content or any(part.get('type') != 'text' or not isinstance(part.get('text'), str)
@@ -4389,12 +4416,26 @@ class CloudCliBackend:
         text = '\n'.join(SYSTEM_REMINDER.sub('', item) for item in texts).strip()
         if not text or '<local-command-caveat>' in text:
             return None
-        if authorize is not None:
-            authorize(progress.model)
         message_id = str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, scope+':'+history_signature(visible, 'cloudcli')))
+        namespace = self.identity+':'+scope
+        with self.active_lock:
+            turn = self.active_conversations.get(namespace)
+        if turn is None or turn.progress is None or turn.progress.turn_watch is None:
+            return self.replay_steer(namespace, message_id, model, context_1m, authorize)
+        progress = turn.progress
+        observer = progress.turn_watch
         with turn.steer_lock:
             if message_id not in turn.steers:
-                candidate = history_signature(visible[:-1], 'cloudcli')
+                prior = self.replay_steer(namespace, message_id, model, context_1m, authorize)
+                if prior is not None:
+                    return prior
+                prefix = visible[:-1]
+                candidate = history_signature(prefix, 'cloudcli')
+                if prefix[-1]['role'] == 'assistant':
+                    prefix = prefix[:-1]
+                if (not prefix or not progress.session or progress.followup_cutoff is not None
+                        or turn.stop_requested.is_set() or self.resolve_model(model, context_1m)[0] != progress.model):
+                    return None
                 start = history_signature(prefix, 'cloudcli')
                 verified = turn.history == start or any(
                     candidate == history_signature([*receipt.history, receipt.reply], 'cloudcli')
@@ -4402,20 +4443,27 @@ class CloudCliBackend:
                     for receipt in turn.steers.values() if receipt is not None)
                 if not verified:
                     return None
+                if authorize is not None:
+                    authorize(progress.model)
                 _, raw = self.desktop_policy() if self.device and self.desktop_policy is not None else (False, False)
                 if not raw and manager.review_prompt is not None:
                     text = manager.review_prompt(text)
                 reply = self.local_reply(model, '> **SafeCode** · 引导消息已交给当前任务。\n\n')
                 receipt = DesktopSteerReceipt(visible, reply, turn.steer_cursor(observer))
-                if not self.send_steer(turn, observer, message_id, text):
+                if not self.send_steer(turn, observer, namespace, message_id, text):
                     return None
                 turn.steers[message_id] = receipt
-            receipt = turn.steers[message_id]
+            else:
+                if authorize is not None:
+                    authorize(progress.model)
+                receipt = turn.steers[message_id]
+                if receipt is not None and receipt.reply['model'] != model:
+                    raise CloudCliError('请使用原任务的模型重试这条引导。', 409)
             if receipt is None:
                 raise CloudCliError('CloudCLI 未确认是否收到这条引导消息。', 503)
         return turn.resume(stream, receipt) if receipt.cursor is not None else receipt.reply
 
-    def send_steer(self, turn, observer, message_id, text):
+    def send_steer(self, turn, observer, namespace, message_id, text):
         started = observer.started_at or observer.find_run()
         if started is None or observer.finished.is_set() or turn.stop_requested.is_set():
             return False
@@ -4426,6 +4474,11 @@ class CloudCliBackend:
                 if (observer.finished.is_set() or turn.stop_requested.is_set()
                         or self.running_since(session) != started):
                     return False
+                identity = 'steer:'+message_id
+                with closing(sqlite3.connect(self.path)) as db, db:
+                    if not db.execute('INSERT OR IGNORE INTO requests VALUES (?,?,NULL,?)',
+                                      (identity, namespace, time.time())).rowcount:
+                        raise CloudCliError('这条引导已经提交，暂时无法恢复结果。', 503)
                 turn.steers[message_id] = None
                 ws.send(json.dumps({'type': 'chat.steer', 'sessionId': session, 'messageId': message_id,
                                     'content': text}, ensure_ascii=False))
@@ -4438,6 +4491,8 @@ class CloudCliBackend:
                     if event.get('kind') == 'chat_steer_accepted':
                         return True
                     if event.get('kind') == 'protocol_error':
+                        with closing(sqlite3.connect(self.path)) as db, db:
+                            db.execute('DELETE FROM requests WHERE identity=?', (identity,))
                         del turn.steers[message_id]
                         return False
         except (OSError, ValueError, AttributeError, websocket_error):
@@ -4627,7 +4682,7 @@ class CloudCliBackend:
             if paused is not None:
                 if paused.request == identity:
                     return paused.reply
-                if paused.expected not in interrupted_prefixes:
+                if not ({paused.expected, paused.alternate_history} & set(interrupted_prefixes)):
                     raise CloudCliError('This CloudCLI conversation is waiting for a Desktop answer', 409)
                 # Desktop explicitly stopped this exact card before sending a new task.
                 paused.timer.cancel()

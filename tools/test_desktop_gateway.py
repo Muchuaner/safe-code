@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import queue
+import sqlite3
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -68,6 +69,9 @@ class Tests(unittest.TestCase):
         turn.client_detached.set()
         backend = object.__new__(g.CloudCliBackend)
         backend.identity = 'test'
+        backend.path = Path(self.temp.name)/'steer-test.db'
+        with g.closing(sqlite3.connect(backend.path)) as db:
+            db.execute('CREATE TABLE requests (identity TEXT PRIMARY KEY, scope TEXT, reply TEXT, created REAL)')
         backend.active_lock = threading.Lock()
         backend.active_conversations = {'test:'+session: turn}
         backend.resolve_model = Mock(return_value=(model, None))
@@ -93,10 +97,16 @@ class Tests(unittest.TestCase):
             response = backend.steer_active(manager, guide, session_header=session, stream=resumed,
                                             authorize=authorize)
             retry = backend.steer_active(manager, guide, session_header=session, stream=stream())
+            with g.closing(sqlite3.connect(backend.path)) as db, db:
+                backend.save_steer_replies(db, turn.steer_replies(turn.response))
+            backend.active_conversations.clear()
+            completed_retry = backend.steer_active(manager, guide, session_header=session, stream=stream())
+            self.assertIsNone(backend.steer_active(manager, guide, session_header=str(g.uuid.uuid4()), stream=stream()))
         native.send.assert_called_once()
         self.assertEqual(json.loads(native.send.call_args.args[0])['content'], 'Use ORCHID')
         authorize.assert_called_once_with(model)
         self.assertEqual(response, retry)
+        self.assertEqual(response['content'], completed_retry['content'])
         self.assertEqual(response['id'], resumed.message_id)
         resumed.write.assert_called_once_with('text', ', then finished with ORCHID')
         self.assertNotIn('Already visible', response['content'][0]['text'])
