@@ -128,6 +128,8 @@ internal static class MacSelfTest
             string prepared = File.ReadAllText(activePath);
             var preparedProfile = JsonNode.Parse(prepared);
             if ((string?)preparedProfile?["codeDefaultPermissionMode"]!="auto" ||
+                (bool?)preparedProfile?["inferenceGatewayAutoModeServerChecks"] != false ||
+                (bool?)preparedProfile?["autoModeEnabled"] != true ||
                 (string?)preparedProfile?["inferenceGatewayApiKey"]!="fixture-local-token")
                 throw new Exception("打开 Claude Desktop 前未保留原接入并设为 Auto。");
             DesktopKeyAccess.PrepareProfile(library,tokenId,18899,"fixture-local-token");
@@ -143,6 +145,7 @@ internal static class MacSelfTest
                 throw new Exception("历史同步重试后没有读到原响应。");
         }
         Console.WriteLine("MAC_HISTORY_RETRIES_TRANSIENT_READS_OK");
+        CheckMirroredHistoryMigration();
         await CheckKeyHistoryAsync();
         string fingerprint=new('A',64);
         var rdp=MacClients.FreeRdpArguments(new(22119,"fixture",fingerprint),new("workspace","fixture password"),
@@ -176,6 +179,39 @@ internal static class MacSelfTest
             Console.WriteLine("MAC_HOST_CONTROL_RESUME_SCOPE_AND_OPT_OUT_OK");
         }
         finally{Directory.Delete(folder,true);}
+    }
+
+    private static void CheckMirroredHistoryMigration()
+    {
+        using var directory = new TempMirrorDirectory();
+        var scope = Guid.NewGuid().ToString("D");
+        var staged = Path.Combine(directory.Path,scope+".jsonl");
+        var meta = Path.Combine(directory.Path,"local_"+scope+".json");
+        string user = Guid.NewGuid().ToString("D"), tool = Guid.NewGuid().ToString("D"), assistant = Guid.NewGuid().ToString("D");
+        string Line(string id, string? parent, string role, object content) => JsonSerializer.Serialize(new {
+            uuid=id,parentUuid=parent,sessionId=scope,type=role,userType="external",
+            message=new {id="msg_"+id.Replace("-",""),role,content,stop_reason="end_turn",usage=new {input_tokens=0,output_tokens=0}}
+        });
+        File.WriteAllLines(staged,new[] {
+            Line(user,null,"user","Keep this user message."),
+            Line(tool,user,"assistant",new[] {new {type="text",text="**TaskStop**\n{\"isError\":false,\"toolUseResult\":{}}"}}),
+            Line(assistant,tool,"assistant",new[] {new {type="text",text="Keep this answer."}})
+        });
+        File.WriteAllText(meta,JsonSerializer.Serialize(new {permissionMode="default",completedTurns=3,lastAssistantUuid=assistant}));
+        DesktopWebHistory.MigrateMirror(meta,directory.Path,scope,directory.Path);
+        var frames = File.ReadLines(staged).Select(row=>JsonNode.Parse(row)!).ToArray();
+        var updated = JsonNode.Parse(File.ReadAllText(meta))!;
+        if (frames.Length != 2 || (string?)frames[1]["uuid"] != assistant ||
+            (string?)frames[1]["parentUuid"] != user || (string?)updated["permissionMode"] != "auto" ||
+            (int?)updated["completedTurns"] != 3)
+            throw new Exception("历史更新未保留原消息、会话信息及 Auto 权限模式。");
+        Console.WriteLine("MAC_MIRRORED_HISTORY_HIDES_TOOLS_AND_PRESERVES_TURNS_OK");
+    }
+
+    private sealed class TempMirrorDirectory : IDisposable
+    {
+        internal string Path { get; } = Directory.CreateTempSubdirectory("safecode-mirror-format-").FullName;
+        public void Dispose() => Directory.Delete(Path,true);
     }
 
     private sealed class HistoryRetryFixture : HttpMessageHandler

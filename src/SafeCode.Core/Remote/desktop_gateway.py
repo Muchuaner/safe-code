@@ -677,23 +677,6 @@ def conversation_scope(data, header=None):
     return body_id or header_id or ''
 
 
-def desktop_permission_mode(data):
-    """Read Claude Code's turn mode without transferring its local permission rules."""
-    safeguards = data.get('safeguards')
-    if not isinstance(safeguards, list):
-        return None
-    contexts = [item.get('classifier_context') for item in safeguards
-                if isinstance(item, dict) and item.get('type') == 'dangerous_tool_use']
-    if len(contexts) != 1 or not isinstance(contexts[0], dict):
-        return None
-    context = contexts[0]
-    version = context.get('v')
-    mode = context.get('permission_mode')
-    if type(version) is int and version == 1 and mode in ('auto', 'plan'):
-        return mode
-    return None
-
-
 def desktop_model_probe(data, messages, content):
     maximum = data.get('max_tokens')
     if (type(maximum) is not int or maximum != 1 or len(messages) != 1 or data.get('tools')
@@ -3282,7 +3265,7 @@ class CloudCliBackend:
                        suppress_origin=True, http_no_proxy=['127.0.0.1'])
 
     def call_chat(self, payload, progress, attachments, plan_mode, edit=None, *, title_text, review=False,
-                  unrestricted=False, existing_project=False, desktop_project=False, auto_mode=False):
+                  unrestricted=False, existing_project=False, desktop_project=False):
         connect, websocket_error = cloudcli_websocket()
         session = payload.get('sessionId')
         try:
@@ -3313,7 +3296,7 @@ class CloudCliBackend:
                         raise CloudCliError('CloudCLI did not return an attachment session identifier')
                 permission = ('default' if existing_project or not unrestricted and (progress.native_tools or progress.tool_approvals)
                               else 'bypassPermissions')
-                if existing_project and auto_mode:
+                if existing_project:
                     permission = 'auto'
                 options = {'model': payload['model'], 'attachments': descriptors, 'unattended': True,
                            'permissionMode': 'plan' if plan_mode else permission}
@@ -4440,7 +4423,7 @@ class CloudCliBackend:
             def dispatch():
                 if existing_project:
                     return self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=label or task,
-                                          existing_project=True, auto_mode=desktop_permission_mode(data) == 'auto')
+                                          existing_project=True)
                 return (self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=label or task,
                                        unrestricted=unrestricted, desktop_project=desktop_project)
                         if chat_mode or attachments else self.call(payload, progress))

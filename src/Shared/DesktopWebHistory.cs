@@ -13,6 +13,7 @@ internal static class DesktopWebHistory
 {
     private const string Endpoint = "/v1/desktop-history";
     private const string Followups = "/v1/desktop-followups";
+    private const string MirrorFormat = "text-auto-v1/";
     private const int ResponseLimit = 40 * 1024 * 1024;
     private sealed record Entry(string Stamp, string Cwd);
     private sealed record Pending(string Project, string Scope, string Session, string Title, long Updated, Entry Entry);
@@ -188,11 +189,18 @@ internal static class DesktopWebHistory
                     var session = Uuid(Text(row, "id"));
                     var updated = Timestamp(row, "updated", 0);
                     var stamp = row.GetProperty("updated").GetRawText()+"/"+count.GetRawText()+"/"+Text(row,"title");
-                    var entry = new Entry(stamp, cwd);
+                    var entry = new Entry(MirrorFormat+stamp, cwd);
                     next.Add(scope, entry);
-                    if (before.TryGetValue(scope, out var prior) && prior == entry &&
-                        File.Exists(Path.Combine(root, "local_"+scope+".json")))
-                        continue;
+                    var metadata = Path.Combine(root, "local_"+scope+".json");
+                    if (before.TryGetValue(scope, out var prior) && File.Exists(metadata))
+                    {
+                        if (!prior.Stamp.StartsWith(MirrorFormat,StringComparison.Ordinal))
+                            MigrateMirror(metadata, staging, scope);
+                        else
+                            SetMirrorAuto(metadata);
+                        if (prior == entry || prior == new Entry(stamp,cwd))
+                            continue;
+                    }
                     pending.Add(new(id, scope, session, Text(row, "title") ?? "CloudCLI", updated, entry));
                 }
             }
@@ -239,6 +247,112 @@ internal static class DesktopWebHistory
         DesktopKeyAccess.WriteProfileFile(manifest, JsonSerializer.SerializeToUtf8Bytes(next));
     }
 
+    private static void SetMirrorAuto(string metadataPath)
+    {
+        var metadata = JsonNode.Parse(File.ReadAllBytes(metadataPath))!.AsObject();
+        if ((string?)metadata["permissionMode"] == "auto") return;
+        metadata["permissionMode"] = "auto";
+        DesktopKeyAccess.WriteProfileFile(metadataPath,JsonSerializer.SerializeToUtf8Bytes(metadata));
+    }
+
+    // Full sync runs before Claude Desktop starts. Only migrate scopes owned by this mirror,
+    // and preserve the IDs of every retained frame, including any newer local turns.
+    internal static void MigrateMirror(string metadataPath, string staging, string scope, string? nativeProjects = null)
+    {
+        var metadata = JsonNode.Parse(File.ReadAllBytes(metadataPath))!.AsObject();
+        var staged = Path.Combine(staging,scope+".jsonl");
+        var nativeRoot = nativeProjects ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".claude","projects");
+        var cwd = (string?)metadata["cwd"];
+        Dictionary<string,string?> removed = new(StringComparer.Ordinal);
+        if (File.Exists(staged)) StripMirroredTools(staged,scope,removed);
+        if (cwd is not null && Path.IsPathFullyQualified(cwd))
+        {
+            var project = Regex.Replace(cwd,@"[^A-Za-z0-9]","-");
+            var native = Path.Combine(nativeRoot,project,scope+".jsonl");
+            if (File.Exists(native)) StripMirroredTools(native,scope,removed);
+        }
+        var lastAssistant = (string?)metadata["lastAssistantUuid"];
+        var retained = RetainedParent(lastAssistant,removed);
+        if ((string?)metadata["permissionMode"] != "auto" || retained != lastAssistant)
+        {
+            metadata["permissionMode"] = "auto";
+            if (retained != lastAssistant)
+            {
+                if (retained == null) metadata.Remove("lastAssistantUuid");
+                else metadata["lastAssistantUuid"] = retained;
+            }
+            DesktopKeyAccess.WriteProfileFile(metadataPath,JsonSerializer.SerializeToUtf8Bytes(metadata));
+        }
+    }
+
+    private static string? RetainedParent(string? id, Dictionary<string,string?> removed)
+    {
+        while (id != null && removed.TryGetValue(id,out var parent))
+            id = parent;
+        return id;
+    }
+
+    private static void StripMirroredTools(string path, string scope, Dictionary<string,string?> removed)
+    {
+        var file = new FileInfo(path);
+        if (file.Length == 0 || file.Length > 64*1024*1024 || file.Attributes.HasFlag(FileAttributes.ReparsePoint) ||
+            file.Directory!.Attributes.HasFlag(FileAttributes.ReparsePoint)) return;
+        var changed = false;
+        using var output = new MemoryStream();
+        foreach (var line in File.ReadLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var frame = JsonNode.Parse(line)!.AsObject();
+            var parent = (string?)frame["parentUuid"];
+            var retained = RetainedParent(parent,removed);
+            if ((string?)frame["sessionId"] == scope && LegacyMirroredTool(frame) && (string?)frame["uuid"] is string id &&
+                id != retained)
+            {
+                removed[id] = retained;
+                changed = true;
+                continue;
+            }
+            if (retained != parent)
+            {
+                frame["parentUuid"] = retained;
+                JsonSerializer.Serialize(output,frame);
+                changed = true;
+            }
+            else
+                output.Write(Encoding.UTF8.GetBytes(line));
+            output.WriteByte((byte)'\n');
+        }
+        if (changed) DesktopKeyAccess.WriteProfileFile(path,output.ToArray());
+    }
+
+    private static bool LegacyMirroredTool(JsonObject frame)
+    {
+        var id = (string?)frame["uuid"];
+        if ((string?)frame["type"] != "assistant" || (string?)frame["userType"] != "external" ||
+            id == null || frame["message"] is not JsonObject message ||
+            (string?)message["id"] != "msg_"+id.Replace("-","") ||
+            (string?)message["stop_reason"] != "end_turn" ||
+            message["usage"] is not JsonObject usage || usage.Count != 2 ||
+            (long?)usage["input_tokens"] != 0 || (long?)usage["output_tokens"] != 0 ||
+            message["content"] is not JsonArray parts) return false;
+        if (parts.Count == 2 && parts[0] is JsonObject call && parts[1] is JsonObject result &&
+            (string?)call["type"] == "server_tool_use" && (string?)call["name"] == "bash_code_execution" &&
+            (string?)result["type"] == "bash_code_execution_tool_result" &&
+            (string?)call["id"] is string callId && callId.StartsWith("srvtoolu_sc",StringComparison.Ordinal) &&
+            (string?)result["tool_use_id"] == callId) return true;
+        if (parts.Count != 1 || parts[0] is not JsonObject part || (string?)part["type"] != "text" ||
+            (string?)part["text"] is not string text) return false;
+        var header = Regex.Match(text,@"\A\*\*[a-zA-Z0-9_]+\*\*\n(?=\{)");
+        if (!header.Success) return false;
+        try
+        {
+            return JsonNode.Parse(text[header.Length..]) is JsonObject tool &&
+                   (tool.ContainsKey("isError") || tool.ContainsKey("toolUseResult"));
+        }
+        catch (JsonException) { return false; }
+    }
+
     private static void WriteSession(string root, string staging, Pending row, JsonElement messages, string fallbackModel)
     {
         var sessionId = "local_"+row.Scope;
@@ -250,32 +364,14 @@ internal static class DesktopWebHistory
         using var output = new MemoryStream();
         foreach (var message in messages.EnumerateArray())
         {
-            var role = Text(message, "role");
-            var text = Text(message, "content");
-            object? bash = null;
-            if (Text(message, "toolName") == "Bash" && message.TryGetProperty("toolInput", out var input) &&
-                Text(input, "command") is string command && message.TryGetProperty("toolResult", out var toolResult) &&
-                toolResult.ValueKind == JsonValueKind.Object)
-            {
-                var card = "srvtoolu_sc" + Guid.NewGuid().ToString("N");
-                var failed = toolResult.TryGetProperty("isError", out var err) && err.ValueKind == JsonValueKind.True;
-                var result = Text(toolResult, "content") ?? "";
-                bash = new object[] {
-                    new { type="server_tool_use", name="bash_code_execution", id=card, input=new {command} },
-                    new { type="bash_code_execution_tool_result", tool_use_id=card, content=new {
-                        type="bash_code_execution_result", stdout=failed ? "" : result, stderr=failed ? result : "",
-                        return_code=failed ? 1 : 0, content=Array.Empty<object>() } }
-                };
-                role = "assistant";
-            }
-            if (bash is null && (role is not ("user" or "assistant") || string.IsNullOrEmpty(text)))
-            {
-                var tool = Text(message, "toolName");
-                if (tool is null) continue;
-                role = "assistant";
-                text = "**"+tool+"**\n"+(Text(message,"toolResult") ??
-                    (message.TryGetProperty("toolResult", out var result) ? result.GetRawText() : ""));
-            }
+            var role = Text(message,"role");
+            var text = Text(message,"content");
+            var kind = Text(message,"kind");
+            if (role is not ("user" or "assistant") || string.IsNullOrEmpty(text) ||
+                kind is not (null or "text") || Text(message,"toolName") is not null ||
+                Text(message,"parentToolUseId") is not null ||
+                role == "user" && text.TrimStart().StartsWith("<task-notification>",StringComparison.Ordinal))
+                continue;
             var time = Timestamp(message, "timestamp", updated);
             if (created == 0) created = time;
             updated = Math.Max(updated, time);
@@ -283,7 +379,7 @@ internal static class DesktopWebHistory
             model = Text(message,"model") ?? model;
             object body = role == "assistant"
                 ? new { role, id = "msg_"+id.Replace("-", ""), type = "message", model,
-                        content = bash ?? new[]{new {type="text",text}}, stop_reason="end_turn",
+                        content = new[]{new {type="text",text}}, stop_reason="end_turn",
                         usage = new { input_tokens=0, output_tokens=0 } }
                 : new { role, content = text };
             var frame = new { parentUuid=parent, isSidechain=false, userType="external", cwd=row.Entry.Cwd,
@@ -298,7 +394,7 @@ internal static class DesktopWebHistory
         {
             sessionId, cliSessionId=row.Scope, cwd=row.Entry.Cwd, originCwd=row.Entry.Cwd, title=row.Title,
             createdAt=created == 0 ? updated : created, lastActivityAt=updated, indexedAt=updated, titleSetAtMs=updated,
-            model, isArchived=false, permissionMode="default", importedFrom="local-1p-code", stagedTranscriptPath=transcript
+            model, isArchived=false, permissionMode="auto", importedFrom="local-1p-code", stagedTranscriptPath=transcript
         }));
     }
 

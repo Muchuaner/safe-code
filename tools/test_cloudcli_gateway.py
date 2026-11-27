@@ -864,7 +864,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
             self.assertEqual(self.request(automatic, session=str(uuid.uuid4()))[0], 200)
             self.assertEqual([item['projectPath'] for item in self.cloud.created_sessions], [str(self.project)] * 2)
             self.assertEqual([item['sessionId'] for item in commands], identifiers)
-            self.assertEqual([c['options']['permissionMode'] for c in commands], ['default', 'auto'])
+            self.assertEqual([c['options']['permissionMode'] for c in commands], ['auto', 'auto'])
             self.assertIn(f'The CloudCLI working directory for this project is `{self.project}` on the VPS.',
                           commands[0]['content'])
             self.assertNotIn('ssh desk-fixture', commands[0]['content'])

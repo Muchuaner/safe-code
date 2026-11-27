@@ -700,6 +700,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             ["inferenceModels"]=PolicyValue.FromString((profile["inferenceModels"] as JsonArray??throw new IOException("Claude 配置缺少模型列表。")).ToJsonString()),
             ["modelDiscoveryEnabled"]=PolicyValue.FromDWord(0),
             ["autoModeEnabled"]=PolicyValue.FromDWord(1),
+            ["inferenceGatewayAutoModeServerChecks"]=PolicyValue.FromDWord(0),
+            ["codeDefaultPermissionMode"]=PolicyValue.FromString("auto"),
             ["chatTabEnabled"]=PolicyValue.FromDWord(1)
         };
         if(ProfileText(profile,"deploymentOrganizationUuid") is {} organization)
@@ -1002,6 +1004,15 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             profile["codeDefaultPermissionMode"]="auto";
             changed=true;
         }
+        if (!JsonNode.DeepEquals(profile["autoModeEnabled"], JsonValue.Create(true)) ||
+            !JsonNode.DeepEquals(profile["inferenceGatewayAutoModeServerChecks"], JsonValue.Create(false)))
+        {
+            profile["autoModeEnabled"] = true;
+            // The CloudCLI bridge doesn't return provider-side classifier verdicts to Desktop.
+            // Claude Code's built-in Auto safety review remains active.
+            profile["inferenceGatewayAutoModeServerChecks"] = false;
+            changed = true;
+        }
         if(changed)WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
         return profile;
     }
@@ -1120,7 +1131,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
                     ["inferenceGatewayAuthScheme"]="bearer",["inferenceCredentialKind"]="static",["inferenceGatewayApiKey"]=local,
                     ["deploymentMode"]="3p",["disableDeploymentModeChooser"]=true,["deploymentDisplayName"]="SafeCode",
                     ["inferenceModels"]=models,["modelDiscoveryEnabled"]=false,["autoModeEnabled"]=true,
-                    ["codeDefaultPermissionMode"]="auto",["chatTabEnabled"]=true};
+                    ["codeDefaultPermissionMode"]="auto",["inferenceGatewayAutoModeServerChecks"]=false,["chatTabEnabled"]=true};
                 ApplyHistoryOrganization(profile,BindHistoryOrganization(t,previous,device!=null));
                 if(classifier!=null)SetClassifier(profile,classifier);
                 if(OperatingSystem.IsWindows())
