@@ -531,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         func launch() {
             let freshLaunch = NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).allSatisfy { $0.isTerminated }
             request("claudeDesktop.prepare",["syncHistory":freshLaunch],
-                    deadline:(freshLaunch ? 660 : 30,"桌面启动检查或历史同步超时，请确认 SafeCode 接入状态。")){result in
+                    deadline:(freshLaunch ? 660 : 55,"桌面启动检查或历史同步超时，请确认 SafeCode 接入状态。")){result in
                 guard case .success(let value)=result,let since=value as? NSNumber else {
                     if case .failure(let error)=result {self.answer(id,error:error.localizedDescription)}
                     else {self.answer(id,error:"未能确认 SafeCode 网关状态。")}
@@ -556,7 +556,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
         let apps=NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).filter{!$0.isTerminated}
         guard restart && !apps.isEmpty else {launch();return}
-        request("claudeDesktop.prepare",deadline:(30,"检查本机网关超时，请确认 SafeCode 接入状态。")){result in
+        request("claudeDesktop.prepare",deadline:(55,"检查本机网关超时，请确认 SafeCode 接入状态。")){result in
             guard case .success=result else {self.answer(id,with:result);return}
             for app in apps {_=app.terminate()}
             let deadline=Date().addingTimeInterval(15)

@@ -59,6 +59,7 @@ CLOUDCLI_MODEL_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}(?:\[1m\])?')
 CLAUDE_MODEL_FAMILIES = ('opus', 'sonnet', 'haiku', 'fable', 'mythos')
 CLOUDCLI_MODEL_SELECTORS = ('default', 'best', 'opusplan')
 DESKTOP_MODEL_ALIAS_PREFIX = 'safecode-cloudcli-'
+DESKTOP_CONTEXT_MODEL_PREFIX = 'safecode-cloudcli-context-1m/'
 DESKTOP_ULTRACODE_PREFIX = 'safecode-ultracode/'
 
 
@@ -2038,6 +2039,7 @@ class CloudCliSocketEvents:
         self.started = False
         self.complete = False
         self.first_frame = None
+        self.startup_active = None
         self.background_state = background_state
         self.progress = progress
         self.following = False
@@ -2070,10 +2072,20 @@ class CloudCliSocketEvents:
     def readline(self, limit, deadline):
         if not self.started:
             self.started = True
-            self.first_frame = self.read_event(limit, deadline)
-            if not self.first_frame:
-                return b''
-            return b'data: '+json.dumps({'type': 'session-id', 'sessionId': self.session}).encode()
+            if self.startup_active is None:
+                self.first_frame = self.read_event(limit, deadline)
+            else:
+                while True:
+                    try:
+                        self.first_frame = self.read_event(limit, min(deadline, time.monotonic()+10))
+                        break
+                    except TimeoutError:
+                        if self.startup_active():
+                            # CloudCLI reserves the run before the CLI can start.
+                            return self.confirmed_session()
+                        if time.monotonic() >= deadline:
+                            raise
+            return self.confirmed_session() if self.first_frame else b''
         if self.first_frame is not None:
             event, self.first_frame = self.first_frame, None
             return event
@@ -2082,6 +2094,9 @@ class CloudCliSocketEvents:
         if self.complete:
             return b'data: {"type":"done"}'
         return self.read_event(limit, deadline)
+
+    def confirmed_session(self):
+        return b'data: '+json.dumps({'type': 'session-id', 'sessionId': self.session}).encode()
 
     def close_followup(self, finished):
         self.following = False
@@ -2423,11 +2438,11 @@ class CloudCliBackend:
                        'prefix TEXT NOT NULL, position INTEGER NOT NULL, fingerprint TEXT NOT NULL, '
                        'dispatched INTEGER NOT NULL, ended INTEGER NOT NULL, PRIMARY KEY (scope,session))')
 
-    def verified_model_options(self):
+    def verified_model_options(self, *, refresh=False):
         if not self.config.get('desktopQuestions'):
             return {}, False
         with self.model_options_lock:
-            if time.monotonic() < self.model_options_expires:
+            if not refresh and time.monotonic() < self.model_options_expires:
                 return self.model_options
             try:
                 body = self.fetch_model_options()
@@ -2435,9 +2450,13 @@ class CloudCliBackend:
                 options = {entry['value']: entry for entry in listing['OPTIONS']
                            if isinstance(entry, dict) and isinstance(entry.get('value'), str)
                            and CLOUDCLI_MODEL_ID.fullmatch(entry['value'])}
+                if refresh and not options:
+                    raise ValueError('CloudCLI returned an empty model catalog')
                 self.model_options = options, listing.get('CUSTOM_MODELS_ONLY') is True
                 self.model_options_expires = time.monotonic()+600
             except (CloudCliError, OSError, HTTPException, ValueError, TypeError, KeyError, RecursionError):
+                if refresh:
+                    raise CloudCliError('CloudCLI web model catalog is unavailable', 503) from None
                 self.model_options_expires = time.monotonic()+60
             return self.model_options
 
@@ -2524,7 +2543,33 @@ class CloudCliBackend:
                 return candidate.removesuffix('[1m]')
         return None
 
-    def catalog(self, allowed_models=None):
+    def web_desktop_catalog(self, allowed_models):
+        provider, custom_only = self.verified_model_options(refresh=True)
+        native = native_cloudcli_options() if not custom_only else {}
+        data = []
+        for model, option in provider.items():
+            if allowed_models is not None and model not in allowed_models:
+                continue
+            levels = self.supported_efforts(option)
+            label = option.get('label')
+            label = label if isinstance(label, str) and label.strip() and label.isprintable() else model
+            row = {'id': model, 'type': 'model', 'display_name': label[:160],
+                   'supported_effort_levels': [level for level in EFFORT_ORDER if level in levels]}
+            if model.endswith('[1m]'):
+                # Desktop otherwise invents a label for the context variant.
+                row['desktop_model_id'] = DESKTOP_CONTEXT_MODEL_PREFIX+model.removesuffix('[1m]')
+            elif model in (*CLAUDE_MODEL_FAMILIES, *CLOUDCLI_MODEL_SELECTORS):
+                row['desktop_model_id'] = DESKTOP_MODEL_ALIAS_PREFIX+model
+            resolved = self.desktop_model_identity(model, option, native)
+            if resolved and levels:
+                row['behaves_as'] = resolved
+            data.append(row)
+        return {'data': data, 'has_more': False, 'first_id': data[0]['id'] if data else None,
+                'last_id': data[-1]['id'] if data else None}
+
+    def catalog(self, allowed_models=None, *, web_desktop=False):
+        if web_desktop and self.config.get('desktopQuestions'):
+            return self.web_desktop_catalog(allowed_models)
         choices = self.model_choices()
         if allowed_models is not None:
             choices = {model: option for model, option in choices.items()
@@ -2589,6 +2634,8 @@ class CloudCliBackend:
         return list(models.values())
 
     def resolve_model(self, requested, context_1m=False, effort=None):
+        if requested.startswith(DESKTOP_CONTEXT_MODEL_PREFIX):
+            requested = requested.removeprefix(DESKTOP_CONTEXT_MODEL_PREFIX).removesuffix('[1m]')+'[1m]'
         base = requested.removesuffix('[1m]')
         extended = context_1m or base != requested
         if self.automatic_models or self.config.get('desktopQuestions') or base.startswith(DESKTOP_ULTRACODE_PREFIX) or effort == 'ultracode':
@@ -3328,10 +3375,11 @@ class CloudCliBackend:
             raise CloudCliError('CloudCLI did not return its running sessions')
         return sessions
 
-    def running_since(self, session):
+    def running_since(self, session, *, interruptible=True):
         return next((entry['startedAt'] for entry in self.running_sessions() if isinstance(entry, dict)
                      and entry.get('sessionId') == session and entry.get('provider') == 'claude'
-                     and entry.get('background') is not True and entry.get('canInterrupt') is not False
+                     and entry.get('background') is not True
+                     and (not interruptible or entry.get('canInterrupt') is not False)
                      and type(entry.get('startedAt')) is int), None)
 
     def background_active(self, session, *, following=False):
@@ -3442,6 +3490,14 @@ class CloudCliBackend:
                 ws.send(json.dumps(command, ensure_ascii=False))
                 diagnostic(stage='cloudcli_response')
                 source = CloudCliSocketEvents(ws, session, time.monotonic()+20 if review else None, progress=progress)
+                if not review:
+                    def startup_active():
+                        try:
+                            started = self.running_since(session, interruptible=False)
+                            return started is not None and started >= dispatch_ms
+                        except CloudCliError:
+                            return False
+                    source.startup_active = startup_active
                 if not review and progress.stream is not None:
                     source.background_state = lambda: self.background_active(session, following=source.following)
                     source.background_history = lambda cutoff: self.read_followup_history(session,int(cutoff*1000))
@@ -4975,9 +5031,9 @@ class Manager:
         self.models_lock = threading.Lock()
         self.models = None
 
-    def catalog(self):
+    def catalog(self, *, web_desktop=False):
         if self.cloudcli is not None:
-            return self.cloudcli.catalog()
+            return self.cloudcli.catalog(web_desktop=web_desktop)
         with self.models_lock:
             if self.models is None:
                 self.models = native_model_catalog()
@@ -5281,7 +5337,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():return self.reply(401, {'error': {'type': 'authentication_error', 'message': 'Local bridge token required'}})
         if self.path == '/health':return self.reply(200, self.manager.status())
         if self.path.split('?')[0] == '/v1/models':
-            try:return self.reply(200, self.manager.catalog())
+            try:return self.reply(200, self.manager.catalog(web_desktop=self.path.partition('?')[2] == 'catalog=web'))
             except (GatewayError, OSError, ValueError, TypeError, AttributeError):
                 return self.reply(503, {'error': {'type': 'api_error', 'message': 'Native Claude Code model discovery unavailable'}})
         self.reply(404, {'error': {'type': 'not_found_error', 'message': 'Unknown CLI bridge endpoint'}})

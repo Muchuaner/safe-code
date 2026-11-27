@@ -347,7 +347,12 @@ internal static class MacSelfTest
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(options=>options.Listen(IPAddress.Loopback,0,listener=>listener.UseHttps(certificate)));
         await using var gateway=builder.Build();
-        gateway.MapGet("/v1/cloudcli/models",()=>new {data=new[]{new {id="claude-fixture"}}});
+        string model="claude-fixture";
+        bool rejectCatalog=false;
+        gateway.MapGet("/v1/cloudcli/models",(HttpRequest request)=>
+            rejectCatalog||request.Query["catalog"]!="web"
+                ? Results.StatusCode(503)
+                : Results.Json(new {data=new[]{new {id=model}}}));
         gateway.MapGet("/v1/models",()=>new {data=new[]{new {id="claude-fixture"}}});
         gateway.MapPost("/v1/cloudcli/messages", () => Results.StatusCode(503));
         await gateway.StartAsync();
@@ -430,6 +435,27 @@ internal static class MacSelfTest
                 var models=await DesktopKeyAccess.CheckLaunchRouteAsync(endpoint.Port,bearer,deadline.Token);
                 if(models.Count!=1||CurrentHistory()!=firstHistory)
                     throw new Exception("恢复同一把 Key 后，原桌面地址或历史失效。");
+
+                model="claude-new-fixture";
+                await recovered.PrepareLaunchAsync(deadline.Token);
+                var current=JsonNode.Parse(File.ReadAllText(savedProfile))!;
+                if(!current["inferenceModels"]!.AsArray().Select(row=>(string?)row?["name"]).SequenceEqual(new[]{model})||
+                   (string?)current["inferenceGatewayApiKey"]!=bearer||CurrentHistory()!=firstHistory)
+                    throw new Exception("启动时未替换模型列表，或覆盖了已有 Key 与历史。");
+
+                rejectCatalog=true;
+                try
+                {
+                    await recovered.PrepareLaunchAsync(deadline.Token);
+                    throw new Exception("模型目录失败时仍通过启动检查。");
+                }
+                catch(InvalidOperationException error) when(error.Message.Contains("HTTP 503"))
+                {
+                    if(!JsonNode.DeepEquals(current,JsonNode.Parse(File.ReadAllText(savedProfile))))
+                        throw new Exception("模型目录失败时覆盖了已有配置。");
+                }
+                rejectCatalog=false;
+                model="claude-fixture";
             }
             Console.WriteLine("MAC_DESKTOP_RELAY_RESTART_PRESERVES_ENDPOINT_OK");
             await access.DisableAsync(deadline.Token);

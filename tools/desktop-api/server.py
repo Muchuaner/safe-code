@@ -38,7 +38,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 56
+GATEWAY_REVISION = 57
 DESKTOP_HISTORY = '/v1/desktop-history'
 DESKTOP_FOLLOWUPS = '/v1/desktop-followups'
 PUBLIC_KEY_QUEUE = 'public-key-queue'
@@ -228,7 +228,8 @@ class PublicHandler(Handler):
         try:
             allowed = self.server.registry.model_policy(self.digest)
             manager = self.manager
-            return self.reply(200, manager.catalog() if allowed is None else manager.cloudcli.catalog(allowed))
+            web_desktop = self.path.partition('?')[2] == 'catalog=web'
+            return self.reply(200, manager.cloudcli.catalog(allowed, web_desktop=web_desktop))
         except GatewayError as error:
             return self.device_error(error.status, str(error))
         except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):

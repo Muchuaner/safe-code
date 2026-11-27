@@ -327,6 +327,36 @@ class CloudCLIStreamTests(unittest.TestCase):
             with self.assertRaisesRegex(gateway.CloudCliError, 'prompt review timed out'):
                 next(gateway.cloudcli_events(review, gateway.CloudCliProgress(None, None)))
 
+    def test_websocket_waits_for_confirmed_native_queue_before_first_provider_event(self):
+        from websocket import WebSocketTimeoutException
+        clock = 0
+        frames = [
+            {'kind': 'text', 'role': 'assistant', 'content': 'Sonnet reply', 'sessionId': CLOUD_SESSION},
+            {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION},
+        ]
+
+        class QueuedSocket(ChatSocketFixture):
+            def settimeout(self, timeout):
+                self.timeout = timeout
+
+            def recv_data(self, *, control_frame):
+                nonlocal clock
+                if self.timeout is not None:
+                    clock += self.timeout
+                    raise WebSocketTimeoutException()
+                clock = 20 * 60
+                return super().recv_data(control_frame=control_frame)
+
+        socket = QueuedSocket(None, frames)
+        source = gateway.CloudCliSocketEvents(socket, CLOUD_SESSION)
+        source.startup_active = lambda: clock >= 20
+        with patch.object(gateway.time, 'monotonic', side_effect=lambda: clock):
+            with self.assertRaises(StopIteration) as completed:
+                next(gateway.cloudcli_events(source, gateway.CloudCliProgress(None, None)))
+        self.assertEqual(completed.exception.value[0], CLOUD_SESSION)
+        self.assertEqual(completed.exception.value[1][0]['text'], 'Sonnet reply')
+        self.assertEqual(clock, 1200)
+
     def test_websocket_keeps_original_stream_open_for_background_completion(self):
         from websocket import WebSocketTimeoutException
 
@@ -1290,6 +1320,36 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual([request[2]['model'] for request in self.cloud.requests], ['company/only-model[1m]'])
         self.assertNoNativeFallback()
 
+    def test_web_desktop_catalog_replaces_rows_names_and_order_on_every_fetch(self):
+        self.use_automatic_models(web_catalog=True)
+        effort = {'values': [{'value': 'medium'}, {'value': 'max'}, {'value': 'ultracode'}]}
+        self.cloud.model_options = [
+            {'value': 'sonnet', 'label': 'Sonnet', 'effort': effort},
+            {'value': 'sonnet[1m]', 'label': 'Sonnet (1M context)', 'effort': effort},
+            {'value': 'opus', 'label': 'Opus'},
+        ]
+        _, first = self.request(path='/v1/models?catalog=web')
+        self.assertEqual([(row['id'], row['display_name']) for row in first['data']],
+                         [('sonnet', 'Sonnet'), ('sonnet[1m]', 'Sonnet (1M context)'), ('opus', 'Opus')])
+        base, extended, _ = first['data']
+        self.assertNotIn('desktop_ultracode_model_id', base)
+        self.assertNotIn('supports_1m', base)
+        self.assertEqual(extended['supported_effort_levels'], ['medium', 'max'])
+        status, _ = self.request(conversation('Fixture', model=extended['desktop_model_id'],
+                                             output_config={'effort': 'medium'}))
+        self.assertEqual(status, 200)
+        self.assertEqual((self.cloud.requests[-1][2]['model'], self.cloud.requests[-1][2]['effort']),
+                         ('sonnet[1m]', 'medium'))
+
+        self.cloud.model_options = [
+            {'value': 'haiku', 'label': 'Haiku'},
+            {'value': 'sonnet', 'label': 'Sonnet Latest', 'effort': effort},
+        ]
+        _, second = self.request(path='/v1/models?catalog=web')
+        self.assertEqual([(row['id'], row['display_name']) for row in second['data']],
+                         [('haiku', 'Haiku'), ('sonnet', 'Sonnet Latest')])
+        self.assertEqual(len(self.cloud.model_requests), 2)
+
     def test_extended_context_is_opt_in_and_keeps_existing_session_routing(self):
         opus = 'claude-opus-5-5'
         self.config['models'].append(opus)
@@ -2042,6 +2102,8 @@ class CloudCLIGatewayTests(unittest.TestCase):
         fable, = request('/v1/cloudcli/models')[1]['data']
         self.assertEqual(fable['id'], 'fable')
         self.assertFalse(fable['supports_1m'])
+        web_fable, = request('/v1/cloudcli/models?catalog=web')[1]['data']
+        self.assertEqual((web_fable['id'], web_fable['display_name']), ('fable', 'Fable'))
         for model in ('default', 'vendor/model', 'fable[1m]'):
             status, error = request('/v1/cloudcli/messages', model)
             self.assertEqual((status, error['error']['type']), (403, 'permission_error'))

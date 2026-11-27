@@ -971,8 +971,8 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var profile=PrepareProfile(library,saved.Profile,saved.Port,saved.Local,organization);
             organization??=ProfileText(profile,"deploymentOrganizationUuid");
             await relay.Connection.CheckDeviceAsync(true,ct);
-            var available=await CheckLaunchRouteAsync(saved.Port,saved.Local,ct);
-            ValidateProfileModels(profile,available);
+            var (models,classifier)=await ReadLaunchCatalogAsync(saved.Port,saved.Local,ct);
+            saved=UpdateModelCatalog(saved,profile,models,classifier);
             if(syncHistory&&(organization!=null || saved.Device!=null))
             {
                 var userData=Path.GetDirectoryName(library)!;
@@ -999,19 +999,14 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
         finally{gate.Release();}
     }
 
-    internal static void ValidateProfileModels(JsonObject profile,JsonArray available)
-    {
-        var names=available.Select(row=>ProfileText(row!.AsObject(),"name")).ToHashSet(StringComparer.Ordinal);
-        if(profile["inferenceModels"] is not JsonArray {Count:>0} configured ||
-            configured.Any(row=>row is not JsonObject entry || !names.Contains(ProfileText(entry,"name"))))
-            throw new InvalidOperationException("Claude 配置里的模型已变更，请在 SafeCode 接入设置中刷新模型列表，再打开 Claude。");
-    }
-
     internal static async Task<JsonArray> CheckLaunchRouteAsync(int port,string bearer,CancellationToken ct)
+        =>(await ReadLaunchCatalogAsync(port,bearer,ct)).Models;
+
+    private static async Task<(JsonArray Models,string? Classifier)> ReadLaunchCatalogAsync(int port,string bearer,CancellationToken ct)
     {
         using var client=new HttpClient(new HttpClientHandler{AllowAutoRedirect=false,UseProxy=false,UseCookies=false})
-            {Timeout=TimeSpan.FromSeconds(10),MaxResponseContentBufferSize=1024*1024};
-        using var request=new HttpRequestMessage(HttpMethod.Get,$"http://127.0.0.1:{port}/v1/models");
+            {Timeout=TimeSpan.FromSeconds(45),MaxResponseContentBufferSize=1024*1024};
+        using var request=new HttpRequestMessage(HttpMethod.Get,$"http://127.0.0.1:{port}/v1/models?catalog=web");
         request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bearer);
         try
         {
@@ -1023,7 +1018,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             var body=JsonNode.Parse(await response.Content.ReadAsStringAsync(ct));
             if(body is not JsonObject root || root["data"] is not JsonArray rows)
                 throw new JsonException();
-            try{return ReadModelCatalog(rows).Models;}
+            try{return ReadModelCatalog(rows);}
             catch(IOException e){throw new InvalidOperationException("网关没有返回可用的聊天模型，请检查 Key 的模型权限。",e);}
             catch(Exception e) when(e is InvalidOperationException or FormatException or InvalidCastException){throw new JsonException("Invalid model",e);}
         }
@@ -1243,42 +1238,49 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             timeout.CancelAfter(TimeSpan.FromSeconds(20));
             var (models,classifier)=await FetchModelCatalogAsync(client,timeout.Token);
 
-            string library=Library(saved), path=Path.Combine(library,saved.Profile+".json");
-            var original=File.ReadAllBytes(path);
-            var profile=JsonNode.Parse(original) as JsonObject;
-            if((string?)ReadProfileMeta(library)["appliedId"]!=saved.Profile||
-                (string?)profile?["inferenceGatewayBaseUrl"]!="http://127.0.0.1:"+saved.Port)
-                throw new InvalidOperationException("Claude Desktop 已切换接入配置，请重新启用 Safe Code API Key。");
-
-            profile!["inferenceModels"]=models;
-            profile.Remove("autoModeClassifierModel");
-            if(classifier!=null)SetClassifier(profile,classifier);
-            else if(profile["claudeCodeSettings"]?["env"] is JsonObject env)
-                env.Remove("CLAUDE_CODE_AUTO_MODE_MODEL");
-            Action? undoPolicy=null;
-            bool profileWritten=false;
-            try
-            {
-                if(OperatingSystem.IsWindows())
-                {
-                    var (owned,changes)=PlanWindowsPolicy(profile,saved);
-                    undoPolicy=ApplyWindowsPolicy(changes);
-                    saved=saved with{WindowsPolicy=owned};
-                }
-                WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
-                profileWritten=true;
-                if(undoPolicy!=null)Save(saved);
-            }
-            catch
-            {
-                try{if(profileWritten)WriteProfileFile(path,original);}
-                finally{undoPolicy?.Invoke();}
-                throw;
-            }
+            var profile=PrepareProfile(Library(saved),saved.Profile,saved.Port,saved.Local);
+            UpdateModelCatalog(saved,profile,models,classifier);
             return Status();
         }
         catch(Exception error)when(IsProfileAccessError(error)){throw ProfileError(error);}
         finally{gate.Release();}
+    }
+
+    private Saved UpdateModelCatalog(Saved saved,JsonObject profile,JsonArray models,string? classifier)
+    {
+        var previous=profile.DeepClone();
+        profile["inferenceModels"]=models;
+        profile.Remove("autoModeClassifierModel");
+        if(classifier!=null)SetClassifier(profile,classifier);
+        else if(profile["claudeCodeSettings"]?["env"] is JsonObject env)
+            env.Remove("CLAUDE_CODE_AUTO_MODE_MODEL");
+        if(JsonNode.DeepEquals(previous,profile))return saved;
+        var path=Path.Combine(Library(saved),saved.Profile+".json");
+        var original=File.ReadAllBytes(path);
+        if(!JsonNode.DeepEquals(previous,JsonNode.Parse(original)))
+            throw new InvalidOperationException("Claude Desktop 配置在刷新期间已变更，请重试。");
+
+        Action? undoPolicy=null;
+        bool profileWritten=false;
+        try
+        {
+            if(OperatingSystem.IsWindows())
+            {
+                var (owned,changes)=PlanWindowsPolicy(profile,saved);
+                undoPolicy=ApplyWindowsPolicy(changes);
+                saved=saved with{WindowsPolicy=owned};
+            }
+            WriteProfileFile(path,JsonSerializer.SerializeToUtf8Bytes(profile));
+            profileWritten=true;
+            if(undoPolicy!=null)Save(saved);
+            return saved;
+        }
+        catch
+        {
+            try{if(profileWritten)WriteProfileFile(path,original);}
+            finally{undoPolicy?.Invoke();}
+            throw;
+        }
     }
 
     private static async Task<(JsonArray Models,string? Classifier)> FetchModelCatalogAsync(HttpClient client,CancellationToken ct)
@@ -1335,7 +1337,7 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
     {
         try
         {
-            var response = await client.GetAsync("/v1/cloudcli/models", ct);
+            var response = await client.GetAsync("/v1/cloudcli/models?catalog=web", ct);
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable)
             {
                 response.Dispose();
