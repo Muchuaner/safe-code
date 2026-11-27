@@ -43,7 +43,8 @@ from urllib.parse import urlsplit
 MAX_REQUEST = 8 * 1024 * 1024
 MAX_MESSAGES_REQUEST = 64 * 1024 * 1024
 MAX_CLOUDCLI_REPLY = 32 * 1024 * 1024
-MAX_CLOUDCLI_ATTACHMENT = 10 * 1024 * 1024  # CloudCLI /api/assets/files per-file limit
+# CloudCLI's multipart parser rejects a file when it reaches the limit.
+MAX_CLOUDCLI_ATTACHMENT = 10 * 1024 * 1024 - 1
 CLOUDCLI_SSE_PING_INTERVAL = 15
 API_ONLY_TURN_RUNNING = '上一轮仍在 CloudCLI 中执行。请等待完成后在本对话重试；如需立即停止，请在 CloudCLI 中停止上一轮。'
 CLOUDCLI_START_TIMEOUT = 120
@@ -246,7 +247,14 @@ CLOUDCLI_USAGE_FIELDS = {
 CLOUDCLI_MEDIA = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
                   'application/pdf': '.pdf', 'text/plain': '.txt', 'text/markdown': '.md',
                   'text/csv': '.csv', 'text/tab-separated-values': '.tsv', 'application/json': '.json'}
+DESKTOP_PREVIEW_MEDIA = {extension: media for media, extension in CLOUDCLI_MEDIA.items()
+                         if media.startswith('text/') or media == 'application/json'}
+DESKTOP_DOCUMENT_MEDIA = re.compile(r'(?:application|text)/[a-z0-9][a-z0-9.+_-]{0,126}')
 SYSTEM_REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.S)
+DESKTOP_READ_INPUT = re.compile(
+    r'<system-reminder>\r?\nCalled the Read tool with the following input: (.+)\r?\n</system-reminder>', re.S)
+DESKTOP_READ_RESULT = re.compile(
+    r'<system-reminder>\r?\nResult of calling the Read tool:\r?\n(.*?)\r?\n</system-reminder>', re.S)
 DESKTOP_MESSAGE_PREAMBLE = re.compile(
     r'\A<system-reminder>\s*Attribution for git commits and pull requests you create\b'
     r'.*?</system-reminder>[ \t]*(?:\r?\n){1,2}', re.S)
@@ -1174,11 +1182,16 @@ def cloudcli_attachment(block, number):
     media, encoding, value = source.get('media_type'), source.get('type'), source.get('data')
     if media is None and encoding == 'text':
         media = 'text/plain'
-    if not isinstance(media, str) or media not in CLOUDCLI_MEDIA or not isinstance(value, str):
-        raise CloudCliError('CloudCLI supports inline PNG, JPEG, GIF, WebP, PDF and text attachments', 400)
     image = block.get('type') == 'image'
-    if image != media.startswith('image/') or (encoding != 'base64' and (encoding != 'text' or not media.startswith('text/'))):
-        raise CloudCliError('CloudCLI attachments must contain inline image, PDF or text data', 400)
+    if not isinstance(media, str) or not isinstance(value, str):
+        raise CloudCliError('CloudCLI attachments must include inline data and a MIME type', 400)
+    if image:
+        if not media.startswith('image/') or media not in CLOUDCLI_MEDIA:
+            raise CloudCliError('CloudCLI supports PNG, JPEG, GIF and WebP images', 400)
+    elif not DESKTOP_DOCUMENT_MEDIA.fullmatch(media):
+        raise CloudCliError('CloudCLI received an unsupported document MIME type', 400)
+    if encoding != 'base64' and (encoding != 'text' or media not in DESKTOP_PREVIEW_MEDIA.values()):
+        raise CloudCliError('CloudCLI attachments must contain inline base64 or text data', 400)
     try:
         data = base64.b64decode(value, validate=True) if encoding == 'base64' else value.encode()
     except (ValueError, binascii.Error, UnicodeError):
@@ -1186,14 +1199,16 @@ def cloudcli_attachment(block, number):
     if not data:
         raise CloudCliError('Desktop sent an empty attachment', 400)
     if len(data) > MAX_CLOUDCLI_ATTACHMENT:
-        raise CloudCliError('Desktop attachment exceeds 10 MiB', 413)
+        raise CloudCliError('Desktop attachment must be smaller than 10 MiB', 413)
     name = block.get('title')
     name = re.sub(r'[^\w.-]+', '_', name).strip('._')[:100] if isinstance(name, str) else ''
     if not name:
         name = f'attachment-{number}'
-    extension = CLOUDCLI_MEDIA[media]
-    if not name.lower().endswith(extension):
+    extension = CLOUDCLI_MEDIA.get(media)
+    if extension and not name.lower().endswith(extension):
         name += extension
+    elif extension is None and not PurePosixPath(name).suffix:
+        name += '.bin'
     return name, media, data
 
 
@@ -1209,31 +1224,32 @@ def desktop_read_attachments(messages, task, first_number):
                                             for text in texts if isinstance(text, str))):
             break
         candidates[:0] = [text for text in texts if isinstance(text, str)]
-    files = []
-    path = None
+    files, consumed = [], set()
+    pending = None
     for text in candidates:
-        input_prefix = '<system-reminder>\nCalled the Read tool with the following input: '
-        result_prefix = '<system-reminder>\nResult of calling the Read tool:\n'
-        trailer = '\n</system-reminder>'
-        if text.startswith(input_prefix) and text.endswith(trailer):
-            path = None
+        if match := DESKTOP_READ_INPUT.fullmatch(text):
+            pending = None
             try:
-                candidate = json.loads(text[len(input_prefix):-len(trailer)]).get('file_path')
+                candidate = json.loads(match[1]).get('file_path')
             except (ValueError, AttributeError):
                 continue
-            if (valid_mac_workspace(candidate) and f'@"{candidate}"' in task
-                    and PurePosixPath(candidate).name.lower().endswith(('.txt', '.md', '.csv', '.tsv', '.json'))):
-                path = candidate
-        elif path and text.startswith(result_prefix) and text.endswith(trailer):
-            preview = text[len(result_prefix):-len(trailer)]
-            lines = preview.split('\n')
-            if lines and all(re.match(r'^\s*\d+\t', line) for line in lines):
+            path = binding_directory(candidate)
+            if path and f'@"{candidate}"' in task:
+                pending = (path, text)
+        elif pending and (match := DESKTOP_READ_RESULT.fullmatch(text)):
+            path, original = pending
+            pending = None
+            media = DESKTOP_PREVIEW_MEDIA.get(path.suffix.lower())
+            if not media:
+                continue
+            lines = match[1].split('\n')
+            if all(re.match(r'^[ \t]*\d+\t', line) for line in lines):
                 contents = '\n'.join(line.partition('\t')[2] for line in lines)
                 if contents:
-                    files.append(cloudcli_attachment({'type': 'document', 'title': PurePosixPath(path).name,
-                        'source': {'type': 'text', 'data': contents}}, first_number+len(files)))
-            path = None
-    return files
+                    files.append(cloudcli_attachment({'type': 'document', 'title': path.name,
+                        'source': {'type': 'text', 'media_type': media, 'data': contents}}, first_number+len(files)))
+                    consumed.update((original, text))
+    return files, consumed
 
 
 def cloudcli_failure(event, progress=None):
@@ -4109,9 +4125,12 @@ class CloudCliBackend:
                 raise CloudCliError('CloudCLI cannot use this Desktop content block', 400)
         plan_mode = any(PLAN_MODE_REMINDER.search(text) for text in texts)
         developer, raw = self.desktop_policy() if self.device and self.desktop_policy is not None else (False, False)
-        task = '\n'.join(texts) if raw else '\n'.join(SYSTEM_REMINDER.sub('', text) for text in texts).strip()
-        if not raw and scope and self.device and self.device['platform'] == 'macos':
-            attachments.extend(desktop_read_attachments(messages, task, len(attachments)+1))
+        visible_task = '\n'.join(SYSTEM_REMINDER.sub('', text) for text in texts).strip()
+        task = '\n'.join(texts) if raw else visible_task
+        attachment_previews = set()
+        if scope:
+            files, attachment_previews = desktop_read_attachments(messages, visible_task, len(attachments)+1)
+            attachments.extend(files)
         if len(attachments) > 10:
             raise CloudCliError('Desktop can send up to 10 attachments per turn', 413)
         # The composer can include an already executed /compact command in
@@ -4119,9 +4138,10 @@ class CloudCliBackend:
         dispatch_task = (DESKTOP_LOCAL_COMMAND.sub('', task).strip()
                          if not raw and '<local-command-caveat>' in task else task)
         if raw and scope:
-            # Claude Desktop prefixes transport metadata to the typed message.
-            # CloudCLI hides rows starting with a system reminder. Remove only
-            # the leading envelope while leaving the actual input and retry key intact.
+            # Matched Read frames are carried by the uploaded attachments.
+            if attachment_previews:
+                dispatch_task = '\n'.join(text for text in texts if text not in attachment_previews)
+            # CloudCLI hides rows starting with the native attribution reminder.
             dispatch_task = DESKTOP_MESSAGE_PREAMBLE.sub('', dispatch_task, count=1)
         chat_mode = bool(attachments) or plan_mode
         unrestricted = manager.unrestricted_tools and not plan_mode and bool(self.config.get('desktopQuestions'))

@@ -2713,7 +2713,7 @@ class CloudCLIGatewayTests(unittest.TestCase):
         events = [{'kind': 'text', 'role': 'assistant', 'content': 'Files received.', 'sessionId': CLOUD_SESSION},
                   {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION}]
         inline = {'type': 'document', 'source': {'type': 'text', 'data': 'Inline text without a MIME field.'}}
-        raw = b'a' * (10 * 1024 * 1024)
+        raw = b'a' * (10 * 1024 * 1024 - 1)
         source = {'type': 'base64', 'media_type': 'text/plain', 'data': base64.b64encode(raw).decode()}
         content = [inline, {'type': 'document', 'title': 'large.txt', 'source': source}]
         payload = conversation('unused', messages=[{'role': 'user', 'content': content}])
@@ -2804,6 +2804,48 @@ class CloudCLIGatewayTests(unittest.TestCase):
         self.assertEqual(self.request(conversation('unused', messages=followup))[0], 200)
         self.assertEqual(self.cloud.requests[-1][2]['sessionId'], CLOUD_SESSION)
         self.assertEqual(len(self.cloud.uploads), 1)
+
+    def test_windows_raw_prompt_keeps_native_file_preview_and_inline_photo(self):
+        self.enable_cloudcli_web_fixture()
+        backend = self.manager.cloudcli
+        backend.device = {'id': CLIENT_ID, 'platform': 'windows', 'hostname': 'Example PC',
+                          'alias': 'desk-win', 'command': 'ssh desk-win'}
+        backend.desktop_policy = lambda: (True, True)
+        path = r'C:\\Work\\July report.csv'
+        text = f'@"{path}"\nCompare this report and photo.'
+        start = '<system-reminder>\r\nCalled the Read tool with the following input: ' + json.dumps({'file_path': path}) + '\r\n</system-reminder>'
+        result = '<system-reminder>\r\nResult of calling the Read tool:\r\n1\tname,count\r\n2\twidget,2\r\n</system-reminder>'
+        photo = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l5sAAAAASUVORK5CYII=')
+        payload = conversation('unused', messages=[
+            {'role': 'user', 'content': start},
+            {'role': 'user', 'content': [{'type': 'text', 'text': result}, {'type': 'text', 'text': text},
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png',
+                                             'data': base64.b64encode(photo).decode()}}]},
+        ])
+        actions = []
+        events = [{'kind': 'text', 'role': 'assistant', 'content': 'Received.', 'sessionId': CLOUD_SESSION},
+                  {'kind': 'complete', 'exitCode': 0, 'sessionId': CLOUD_SESSION}]
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *a, **kw: ChatSocketFixture(actions.append, events), OSError)):
+            status, reply = self.request(payload)
+            self.assertEqual(status, 200, reply)
+            self.assertEqual(self.request(payload), (200, reply))
+        self.assertEqual(self.cloud.uploads, [
+            ('attachment-1.png', 'image/png', photo), ('July_report.csv', 'text/csv', b'name,count\r\nwidget,2')])
+        command, = actions
+        self.assertEqual(command['content'], text)
+        self.assertEqual(command['sessionId'], CLOUD_SESSION)
+        self.assertEqual(len(command['options']['attachments']), 2)
+
+    def test_binary_document_keeps_its_uploaded_name_and_media_type(self):
+        media = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        workbook = b'PK\x03\x04 fixture workbook'
+        content = {'type': 'document', 'title': 'workbook.xlsx', 'source': {'type': 'base64',
+                   'media_type': media, 'data': base64.b64encode(workbook).decode()}}
+        self.assertEqual(gateway.cloudcli_attachment(content, 1), ('workbook.xlsx', media, workbook))
+        content['source']['media_type'] = 'application/octet-stream\r\nX-Bad: header'
+        with self.assertRaises(gateway.CloudCliError):
+            gateway.cloudcli_attachment(content, 1)
 
     def test_paired_mac_recovers_workspace_from_the_matching_desktop_session(self):
         self.manager.cloudcli.device = {'id': CLIENT_ID, 'platform': 'macos', 'hostname': 'Example Mac',
