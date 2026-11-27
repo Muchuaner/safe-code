@@ -14,7 +14,8 @@ namespace SafeCode.Core;
 
 public sealed partial class SshSession : IDisposable
 {
-    private static readonly TimeSpan SshConnectTimeout=TimeSpan.FromSeconds(18);
+    private static readonly TimeSpan SshLoginTimeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan SshSetupTimeout = TimeSpan.FromSeconds(90);
     private SshClient? client;
     private string remoteDirectory = "";
     private string prefix = "";
@@ -55,7 +56,7 @@ public sealed partial class SshSession : IDisposable
             foreach (var route in routes)
             {
                 var info = route.Password(settings);
-                info.Timeout = SshConnectTimeout;
+                info.Timeout = SshLoginTimeout;
                 info.RetryAttempts = 2;
                 var candidate = new MountSshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(20) };
                 client = candidate;
@@ -77,42 +78,54 @@ public sealed partial class SshSession : IDisposable
                     }
                 };
                 Log?.Invoke($"正在尝试 SSH {route.Label}…");
+                using var loginDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                loginDeadline.CancelAfter(SshLoginTimeout);
                 try
                 {
-                    await candidate.ConnectAsync(cancellationToken);
+                    await candidate.ConnectAsync(loginDeadline.Token);
+                    loginDeadline.Token.ThrowIfCancellationRequested();
                     sshRoute = route;
                     break;
                 }
                 catch (Exception error) when (routes.Length > 1 && route == routes[0] &&
-                    !hostKeyReceived && SshRoute.IsNetworkFailure(error) && !cancellationToken.IsCancellationRequested)
+                    !hostKeyReceived && !cancellationToken.IsCancellationRequested &&
+                    (SshRoute.IsNetworkFailure(error) || error is OperationCanceledException && loginDeadline.IsCancellationRequested))
                 {
                     DisposeMountResource(candidate);
                     client = null;
                 }
+                catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested && loginDeadline.IsCancellationRequested)
+                {
+                    throw new SshOperationTimeoutException("SSH 登录超时。", error);
+                }
             }
+            using var setupDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            setupDeadline.CancelAfter(SshSetupTimeout);
+            var setupToken = setupDeadline.Token;
             Log?.Invoke("SSH 认证成功，检查操作系统…");
             string osRelease;
-            try{osRelease=await ExecuteTextAsync("cat /etc/os-release", cancellationToken);}
+            try{osRelease=await ExecuteTextAsync("cat /etc/os-release", setupToken);}
             catch(InvalidOperationException){throw new UnsupportedOsException("无法安装环境：未能识别为 Ubuntu，请确认系统类型并检查连接；未写入部署文件。");}
             Log?.Invoke("操作系统信息已读取。");
             if (!ParseOsRelease(osRelease).TryGetValue("ID", out var id) || id != "ubuntu")
                 throw new UnsupportedOsException("无法安装环境：本软件仅支持 Ubuntu。当前服务器未通过系统检查，未写入任何部署文件。");
-            string uid = (await ExecuteTextAsync("id -u", cancellationToken)).Trim();
+            string uid = (await ExecuteTextAsync("id -u", setupToken)).Trim();
             if (uid != "0")
             {
-                try{await ExecuteTextAsync("sudo -n true", cancellationToken);}
+                try{await ExecuteTextAsync("sudo -n true", setupToken);}
                 catch(InvalidOperationException){throw new InvalidOperationException("此账户没有免密 sudo 安装权限，请使用 root 或配置免密 sudo 后重新连接。");}
                 prefix = "sudo -n ";
             }
-            remoteDirectory = (await ExecuteTextAsync("mktemp -d /tmp/safe-code.XXXXXXXX", cancellationToken)).Trim();
+            remoteDirectory = (await ExecuteTextAsync("mktemp -d /tmp/safe-code.XXXXXXXX", setupToken)).Trim();
             Log?.Invoke("准备远端部署模块…");
-            using var sftp = MakeSftp(); await sftp.ConnectAsync(cancellationToken);
-            await UploadManagementModulesAsync(sftp, remoteDirectory, cancellationToken);
+            using var sftp = MakeSftp(); await sftp.ConnectAsync(setupToken);
+            await UploadManagementModulesAsync(sftp, remoteDirectory, setupToken);
             WriteKnownHost();
             Log?.Invoke("部署模块已就绪，检查服务器环境…");
-            Server = await RequestAsync<ServerInfo>("inspect", null, cancellationToken);
+            Server = await RequestAsync<ServerInfo>("inspect", null, setupToken);
             Log?.Invoke("检测服务器实际出口 IP…");
-            try{observedEgressIp=(await RequestAsync<EgressProbe>("egress_probe",null,cancellationToken)).Ip;Server.ObservedEgressIp=observedEgressIp;}catch{Log?.Invoke("出口 IP 暂未确认，可在进阶设置中选择。");}
+            try{observedEgressIp=(await RequestAsync<EgressProbe>("egress_probe",null,setupToken)).Ip;Server.ObservedEgressIp=observedEgressIp;}catch{Log?.Invoke("出口 IP 暂未确认，可在进阶设置中选择。");}
+            cancellationToken.ThrowIfCancellationRequested();
             return Server;
         }
         catch { DisposeMountResource(client); client = null;if(trustRequired!=null)throw trustRequired;throw; }

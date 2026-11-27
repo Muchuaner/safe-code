@@ -739,7 +739,7 @@ public sealed class MainWindow : Window
                 if(connectionPending)throw new InvalidOperationException("连接正在处理中，请稍候。");
                 if(gatewayWindow?.Busy==true)throw new InvalidOperationException("请等待当前密钥操作完成。");
                 gatewayWindow?.Close();
-                connectionPending=true;try{connecting?.Dispose();connecting=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);connecting.CancelAfter(TimeSpan.FromSeconds(90));
+                connectionPending=true;try{connecting?.Dispose();connecting=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                 session?.Dispose(); session = new SshSession(dataDirectory);
                 session.Log += text => {if(IsAcceptance)File.AppendAllText(arguments[2]+".stage.log","SSH "+text+"\n");QueueLog(activeStep,text);};
                 session.DirectoryLog+=text=>QueueLog("folder",text);
@@ -758,10 +758,15 @@ public sealed class MainWindow : Window
                         try
                         {
                             if(claudeBridge?.Preference is {} bridgePreference&&bridgePreference.Matches(current))
-                                try{await RunWithDiagnosticAsync("codex_bridge_restore",()=>claudeBridge.StartAsync(current,bridgePreference.LocalPort,bridgePreference.Model,bridgePreference.Writable,connecting.Token),background:true);}catch(Exception error){gatewayWarnings.Add("Codex 网关恢复失败："+error.Message);}
+                            {
+                                using var restoreDeadline = CancellationTokenSource.CreateLinkedTokenSource(connecting.Token);
+                                restoreDeadline.CancelAfter(TimeSpan.FromSeconds(90));
+                                try{await RunWithDiagnosticAsync("codex_bridge_restore",()=>claudeBridge.StartAsync(current,bridgePreference.LocalPort,bridgePreference.Model,bridgePreference.Writable,restoreDeadline.Token),background:true);}catch(Exception error){gatewayWarnings.Add("Codex 网关恢复失败："+error.Message);}
+                            }
                         }
                         finally{deploying=false;}
                     }
+                    connecting.Token.ThrowIfCancellationRequested();
                     return new{ready=true,server,gatewayWarnings};
                 }catch(HostTrustRequiredException error){string token=Guid.NewGuid().ToString("N");pendingHostTrust=(token,error.Key);return new{requiresTrust=true,token,key=error.Key};}
                 catch(Exception error){

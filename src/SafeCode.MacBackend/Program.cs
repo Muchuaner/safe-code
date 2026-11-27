@@ -396,7 +396,7 @@ internal sealed class MacBackend : IDisposable
                 if(Interlocked.CompareExchange(ref connectionPending,1,0)!=0)throw new InvalidOperationException("正在连接，请稍候。");
                 try
                 {
-                    connecting?.Dispose();connecting=CancellationTokenSource.CreateLinkedTokenSource(ct);connecting.CancelAfter(TimeSpan.FromSeconds(90));
+                    connecting?.Dispose();connecting=CancellationTokenSource.CreateLinkedTokenSource(ct);
                     session?.Dispose();session=new(directory);session.Log+=line=>Log(step,line);session.DirectoryLog+=line=>Log("folder",line);
                     var settings=new ConnectionSettings(Read("host"),Read("username"),Read("password"),args.TryGetProperty("port",out var port)?port.GetInt32():22);
                     var server=await session.ConnectAsync(settings,_=>false,connecting.Token);challenge=null;
