@@ -40,6 +40,8 @@ public sealed class MainWindow : Window
     private (SshSession Session,int Generation,bool Enabled,string Outcome)? gatewayObservation;
     private bool closingApproved;
     private bool exitRequested,exitInProgress;
+    private WindowState mainWindowState = WindowState.Normal;
+    private bool mainPageNeedsReload;
     private MountTray? mountTray;
     private DesktopKeyAccess? keyAccess;
     private DesktopKeyAccess.DeviceSetup? pendingKeyDevice;
@@ -107,7 +109,7 @@ public sealed class MainWindow : Window
         }
         SystemEvents.PowerModeChanged+=PowerChanged;
         Closed+=(_,_)=>SystemEvents.PowerModeChanged-=PowerChanged;
-        Loaded += async (_, _) => await InitializeAsync();
+        Loaded += LoadMainPage;
         if(!IsAcceptance)
         {
             keyAccess=new DesktopKeyAccess(dataDirectory,LocalSecrets.Protect,LocalSecrets.Unprotect,diagnostics:CanReportDiagnostics?services:null);
@@ -124,13 +126,17 @@ public sealed class MainWindow : Window
             integrationTimer.Start();
             mountTray=new MountTray(this,()=>session?.GetMountStatus()??new(0,"idle","未挂载目录",0,0,0,0,0),ShowMainWindow,ReconnectMountsFromTrayAsync,()=>{exitRequested=true;Close();},PublishMountStatus,TrayStatus,()=>KeyAccess.ListKeysAsync(lifetime.Token),
                 async id=>await KeyAccess.SavedBalanceAsync(id,lifetime.Token),dataDirectory);
-            StateChanged+=(_,_)=>{if(WindowState==WindowState.Minimized){ShowInTaskbar=false;Hide();}};
+            StateChanged += (_, _) =>
+            {
+                if (WindowState == WindowState.Minimized) HideMainWindow();
+                else mainWindowState = WindowState;
+            };
         }
         Closing += async (_, e) =>
         {
             if(!closingApproved&&(exitInProgress||installingUpdate)){e.Cancel=true;return;}
             if(!closingApproved&&!IsAcceptance&&!exitRequested&&(session?.HasMounts==true||hostControl?.Enabled==true||claudeBridge?.Running==true||keyAccess?.Running==true||deploying))
-            {e.Cancel=true;ShowInTaskbar=false;Hide();mountTray?.NotifyHidden();return;}
+            {e.Cancel=true;HideMainWindow();mountTray?.NotifyHidden();return;}
             if(!closingApproved&&(connectionPending||deploying||maintenanceOperations>0||gatewayWindow?.Busy==true))
             {e.Cancel=true;exitRequested=false;ShowMainWindow();MessageBox.Show(this,"任务正在执行，请等待完成后退出。","Safe Code");return;}
             if(!closingApproved)
@@ -167,7 +173,47 @@ public sealed class MainWindow : Window
             claudeBridge?.Dispose();hostControl?.Dispose();mountTray?.Dispose();integrationTimer.Stop();logTimer.Stop();lifetime.Cancel();services.Dispose();clients.Dispose();session?.Dispose();browser.Dispose();
         };
     }
-    private void ShowMainWindow(){ShowInTaskbar=true;Show();WindowState=WindowState.Normal;Activate();}
+    private async void LoadMainPage(object sender, RoutedEventArgs e)
+    {
+        Loaded -= LoadMainPage;
+        await InitializeAsync();
+    }
+
+    private void HideMainWindow()
+    {
+        // Hide the WebView before its host so it can be shown again in a laid-out window.
+        browser.Visibility = Visibility.Hidden;
+        Hide();
+        ShowInTaskbar = false;
+    }
+
+    private void ShowMainWindow()
+    {
+        WindowState = mainWindowState;
+        ShowInTaskbar = true;
+        Show();
+        Activate();
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            if (!IsVisible || WindowState == WindowState.Minimized || lifetime.IsCancellationRequested) return;
+            browser.Visibility = Visibility.Visible;
+            if (!mainPageNeedsReload || browser.CoreWebView2 is not { } view) return;
+            mainPageNeedsReload = false;
+            try { view.Reload(); }
+            catch (COMException error) { RecordMainPageFailure($"Reload: {error.HResult:X8}"); }
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void RecordMainPageFailure(string detail)
+    {
+        try
+        {
+            File.WriteAllText(Path.Combine(dataDirectory, "last-error.txt"),
+                $"{DateTimeOffset.Now:O} Safe Code main WebView: {detail}");
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
     private async Task ReconnectMountsFromTrayAsync()
     {
         if(exitInProgress||session is not {HasMounts:true} target)return;
@@ -266,8 +312,20 @@ public sealed class MainWindow : Window
             };
             browser.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; try { WindowsClients.OpenUrl(e.Uri); } catch { } };
             browser.CoreWebView2.WebMessageReceived += OnMessage;
+            browser.CoreWebView2.ProcessFailed += (_, e) =>
+            {
+                RecordMainPageFailure($"ProcessFailed: {e.ProcessFailedKind}, {e.Reason}, {e.ExitCode}");
+                if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited)
+                    mainPageNeedsReload = true;
+            };
             browser.CoreWebView2.NavigationCompleted += async (_, e) =>
             {
+                if (!e.IsSuccess && e.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+                {
+                    RecordMainPageFailure($"NavigationCompleted: {e.WebErrorStatus}");
+                    mainPageNeedsReload = true;
+                }
+                else if (e.IsSuccess) mainPageNeedsReload = false;
                 if(e.IsSuccess&&IsAcceptance){if(arguments[0]=="--updates-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunUpdateAcceptance()");else if(arguments[0]=="--ip-acceptance"){using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunIpAcceptance("+cfg.RootElement.GetRawText()+")");}else if(arguments[0]=="--maintenance-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunMaintenanceAcceptance()");else if(arguments[0]=="--connection-acceptance"){using var cfg=JsonDocument.Parse(File.ReadAllText(arguments[1]));await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunConnectionAcceptance("+cfg.RootElement.GetRawText()+")");}else if(arguments[0]=="--services-acceptance")await browser.CoreWebView2.ExecuteScriptAsync("window.safeCodeRunServicesAcceptance()");else await RunAcceptanceAsync(arguments[1],arguments[2]);}
             };
             browser.Source = new Uri("https://safe-code.local/web/index.html");
@@ -579,7 +637,10 @@ public sealed class MainWindow : Window
                 Left = Math.Max(0, (SystemParameters.WorkArea.Width - Width) / 2); Top = Math.Max(0, (SystemParameters.WorkArea.Height - Height) / 2); return true;
             case "window.drag":
                 ReleaseCapture(); SendMessage(new System.Windows.Interop.WindowInteropHelper(this).Handle, 0xA1, (IntPtr)2, IntPtr.Zero); return true;
-            case "window.minimize": WindowState = WindowState.Minimized; return true;
+            case "window.minimize":
+                if (IsAcceptance) WindowState = WindowState.Minimized;
+                else HideMainWindow();
+                return true;
             case "window.maximize": WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized; return true;
             case "window.close": Close(); return true;
             case "copy": Clipboard.SetText(Read("text")); return true;
