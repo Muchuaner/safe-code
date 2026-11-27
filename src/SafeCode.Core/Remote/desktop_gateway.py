@@ -1622,15 +1622,19 @@ class CloudCliProgress:
 
     def task(self, event):
         status = event.get('status')
-        if not status and event.get('event') in ('started', 'progress'):
-            status = 'running'
         task = event.get('taskId')
-        task = task if isinstance(task, str) else None
+        if not isinstance(task, str) or not task:
+            return
         previous = self.tasks.get(task)
+        event_type = event.get('event')
+        if not status and (event_type == 'started' or event_type == 'progress' and previous is None):
+            status = 'running'
+        labels = {'running': '运行中', 'completed': '已完成', 'failed': '失败', 'stopped': '已停止'}
+        if not isinstance(status, str) or status not in labels or status == previous:
+            return
         self.tasks[task] = status
         self.activity()
-        labels = {'running': '运行中', 'completed': '已完成', 'failed': '失败', 'stopped': '已停止'}
-        if isinstance(status, str) and status in labels and status != previous and not event.get('parentToolUseId'):
+        if not event.get('parentToolUseId'):
             detail = event.get('summary') or event.get('description')
             self.activity_detail('后台任务' + labels[status], self.preview(detail, 800) if isinstance(detail, str) else None)
 
@@ -2187,10 +2191,17 @@ class CloudCliSocketEvents:
                 if kind == 'complete':
                     self.complete = True
                     succeeded = event.get('exitCode') == 0 and event.get('success') is not False and not event.get('aborted')
-                    if succeeded and not self.following and self.background_state and self.background_state() is True:
-                        self.following = True
-                        self.progress.followup_cutoff = time.time()
-                        self.progress.notice('后台任务仍在运行，后续进度会在本对话更新')
+                    if succeeded and not self.following and self.background_state:
+                        cutoff = time.time()
+                        tasks = self.progress.tasks.values()
+                        running = 'running' in tasks or self.background_state() is True
+                        # Claude may already have settled the last task and still owe
+                        # its automatic reply. That reply can start more tasks.
+                        if running or any(status in ('completed', 'failed') for status in tasks):
+                            self.following = True
+                            self.progress.followup_cutoff = cutoff
+                            if running:
+                                self.progress.notice('后台任务仍在运行，后续进度会在本对话更新')
                 elif (self.following and kind == 'text' and event.get('role') == 'user'
                       and not event.get('isSynthetic') and '<task-notification>' not in (event.get('content') or '')):
                     return b''

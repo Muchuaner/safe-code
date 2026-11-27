@@ -394,6 +394,45 @@ class CloudCLIStreamTests(unittest.TestCase):
         self.assertEqual(progress.tasks,{'a':'completed'})
         self.assertIsNone(progress.followup_cutoff)
 
+    def test_background_completion_gap_keeps_the_automatic_followup_in_the_same_stream(self):
+        from websocket import WebSocketTimeoutException
+
+        class Socket(ChatSocketFixture):
+            def recv_data(self, *, control_frame):
+                opcode, data = super().recv_data(control_frame=control_frame)
+                if not data:
+                    raise WebSocketTimeoutException()
+                return opcode, data
+
+        events = [
+            {'kind': 'task_status', 'taskId': 'first', 'event': 'started'},
+            {'kind': 'text', 'role': 'assistant', 'content': 'I will report back.'},
+            {'kind': 'task_status', 'taskId': 'first', 'event': 'notification', 'status': 'completed'},
+            {'kind': 'complete', 'exitCode': 0},
+            {'kind': 'text', 'role': 'user', 'content': '<task-notification>First task ended</task-notification>'},
+            {'kind': 'task_status', 'taskId': 'second', 'event': 'started', 'description': 'Wait for sampling'},
+            {'kind': 'task_status', 'taskId': 'second', 'event': 'updated', 'description': 'Still waiting'},
+            {'kind': 'text', 'role': 'assistant', 'content': 'Sampling is underway.'},
+            {'kind': 'task_status', 'taskId': 'second', 'event': 'notification', 'status': 'completed'},
+            {'kind': 'task_status', 'taskId': 'second', 'event': 'progress'},
+            {'kind': 'text', 'role': 'assistant', 'content': 'Sampling finished.'},
+        ]
+        frames = [{**event, 'sessionId': CLOUD_SESSION} for event in events]
+        for snapshot in (False, None):
+            with self.subTest(snapshot=snapshot):
+                progress = gateway.CloudCliProgress(None, None, model=MODEL)
+                states = iter([snapshot, False, False])
+                source = gateway.CloudCliSocketEvents(Socket(None, frames), CLOUD_SESSION,
+                                                       background_state=lambda: next(states), progress=progress)
+                with patch.object(source, 'BACKGROUND_QUIET_SECONDS', 0), self.assertRaises(StopIteration) as result:
+                    next(gateway.cloudcli_events(source, progress))
+                text = ''.join(part.get('text', '') for part in result.exception.value[1])
+                self.assertLess(text.index('I will report back.'), text.index('Wait for sampling'))
+                self.assertLess(text.index('Wait for sampling'), text.index('Sampling is underway.'))
+                self.assertLess(text.rindex('后台任务已完成'), text.index('Sampling finished.'))
+                self.assertEqual(progress.tasks, {'first': 'completed', 'second': 'completed'})
+                self.assertNotIn('后台任务仍在运行', text)
+
     def test_paused_question_is_only_cleaned_up_after_native_close(self):
         from unittest.mock import Mock
         backend = Mock()
