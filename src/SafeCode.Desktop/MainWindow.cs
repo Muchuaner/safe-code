@@ -189,13 +189,18 @@ public sealed class MainWindow : Window
 
     private void ShowMainWindow()
     {
-        WindowState = mainWindowState;
+        var restoredState = mainWindowState;
         ShowInTaskbar = true;
         Show();
-        Activate();
+        WindowState = restoredState;
         _ = Dispatcher.InvokeAsync(() =>
         {
-            if (!IsVisible || WindowState == WindowState.Minimized || lifetime.IsCancellationRequested) return;
+            if (!IsVisible || lifetime.IsCancellationRequested) return;
+            var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            // A re-shown WPF window can still have the native minimized state.
+            if (IsIconic(handle))
+                ShowWindow(handle, restoredState == WindowState.Maximized ? ShowMaximized : RestoreWindow);
+            Activate();
             browser.Visibility = Visibility.Visible;
             if (!mainPageNeedsReload || browser.CoreWebView2 is not { } view) return;
             mainPageNeedsReload = false;
@@ -908,6 +913,10 @@ public sealed class MainWindow : Window
         }
         catch (Exception error) { File.WriteAllText(output + ".error.txt", error.Message); Environment.ExitCode=1; Close(); }
     }
+    private const int ShowMaximized = 3;
+    private const int RestoreWindow = 9;
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
 }
