@@ -929,14 +929,19 @@ internal sealed class DesktopKeyAccess(string dataDirectory, Func<byte[],byte[]>
             await relay.Connection.CheckDeviceAsync(true,ct);
             var available=await CheckLaunchRouteAsync(saved.Port,saved.Local,ct);
             ValidateProfileModels(profile,available);
-            if(syncHistory&&organization!=null)
+            if(syncHistory&&(organization!=null || saved.Device!=null))
             {
                 var userData=Path.GetDirectoryName(library)!;
-                var fallback=ProfileText(profile["inferenceModels"]![0]!.AsObject(),"name")!;
                 using var time=CancellationTokenSource.CreateLinkedTokenSource(ct);
                 time.CancelAfter(TimeSpan.FromMinutes(10));
-                await DesktopWebHistory.SyncFollowupsAsync(relay.Client,userData,organization,time.Token);
-                await DesktopWebHistory.SyncAsync(relay.Client,userData,dataDirectory,organization,fallback,time.Token);
+                if(saved.Device!=null)
+                    await DesktopWebHistory.SyncFollowupsAsync(relay.Client,userData,
+                        organization??ProfileText(profile,"deploymentOrganizationUuid"),time.Token);
+                if(organization!=null)
+                {
+                    var fallback=ProfileText(profile["inferenceModels"]![0]!.AsObject(),"name")!;
+                    await DesktopWebHistory.SyncAsync(relay.Client,userData,dataDirectory,organization,fallback,time.Token);
+                }
             }
             if(OperatingSystem.IsWindows())
             {

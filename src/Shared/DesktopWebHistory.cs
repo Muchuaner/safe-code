@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -18,14 +19,20 @@ internal static class DesktopWebHistory
     private sealed record Entry(string Stamp, string Cwd);
     private sealed record Pending(string Project, string Scope, string Session, string Title, long Updated, Entry Entry);
 
-    internal static async Task SyncFollowupsAsync(HttpClient gateway, string userData, string organization,
+    internal static async Task SyncFollowupsAsync(HttpClient gateway, string userData, string? organization,
                                                   CancellationToken ct)
     {
         var configPath = Path.Combine(userData,"config.json");
         if (!File.Exists(configPath)) return;
         using var config = JsonDocument.Parse(File.ReadAllBytes(configPath));
         if (!Guid.TryParse(Text(config.RootElement,"lastKnownAccountUuid"),out var account)) return;
-        var root = Path.Combine(userData,"claude-code-sessions",account.ToString("D"),Uuid(organization));
+        var accountRoot = Path.Combine(userData,"claude-code-sessions",account.ToString("D"));
+        if (!Directory.Exists(accountRoot)) return;
+        var roots = organization != null
+            ? new[]{Path.Combine(accountRoot, Uuid(organization))}
+            : Directory.EnumerateDirectories(accountRoot).Where(path => Guid.TryParse(Path.GetFileName(path),out _)).Take(2).ToArray();
+        if (roots.Length != 1) return;
+        var root = roots[0];
         if (!Directory.Exists(root)) return;
         using var index = await GetAsync(gateway,Followups,optional:true,ct);
         if (index is null) return;
@@ -48,8 +55,9 @@ internal static class DesktopWebHistory
     internal static int ApplyFollowups(JsonElement batch, string metadataPath, string nativeProjects)
     {
         var records = batch.GetProperty("messages");
-        if (records.GetArrayLength() == 0) return 0;
-        var earliest = batch.GetProperty("after").GetInt64();
+        var hasResume = batch.TryGetProperty("resume",out var resume) && resume.ValueKind == JsonValueKind.Object;
+        if (records.GetArrayLength() == 0 && !hasResume) return 0;
+        var earliest = batch.TryGetProperty("after",out var after) ? after.GetInt64() : 0;
         var metadataBytes = File.ReadAllBytes(metadataPath);
         var metadata = JsonNode.Parse(metadataBytes)!.AsObject();
         var cli = Uuid((string?)metadata["cliSessionId"]);
@@ -74,9 +82,13 @@ internal static class DesktopWebHistory
         var history = File.ReadAllBytes(transcript);
         var seen = new HashSet<string>();
         var recent = new List<string>();
-        string? parent = null, lastRole = null;
-        foreach (var line in Encoding.UTF8.GetString(history).Split('\n'))
+        string? parent = null, lastRole = null, lastUserText = null;
+        long lastUserAt = 0;
+        int assistantCount = 0, lastAssistantLine = -1;
+        var lines = Encoding.UTF8.GetString(history).Split('\n');
+        for (int index = 0; index < lines.Length; index++)
         {
+            var line = lines[index];
             if (string.IsNullOrWhiteSpace(line)) continue;
             using var entry = JsonDocument.Parse(line);
             var frame = entry.RootElement;
@@ -87,20 +99,46 @@ internal static class DesktopWebHistory
             if (role is not ("user" or "assistant")) continue;
             parent = id;
             lastRole = role;
+            if (role == "user")
+            {
+                lastUserText = frame.TryGetProperty("message",out var user) &&
+                    user.ValueKind == JsonValueKind.Object && user.TryGetProperty("content",out var userContent)
+                    ? UserPrompt(userContent) : null;
+                lastUserAt = Timestamp(frame,"timestamp",0);
+                assistantCount = 0;
+            }
+            else
+            {
+                assistantCount++;
+                lastAssistantLine = index;
+            }
             if (role != "assistant" || Timestamp(frame,"timestamp",0) < earliest ||
                 !frame.TryGetProperty("message",out var message) ||
                 !message.TryGetProperty("content",out var parts)) continue;
             if (parts.ValueKind == JsonValueKind.Array)
                 recent.Add(string.Concat(parts.EnumerateArray().Select(part => Text(part,"text"))));
         }
-        if (parent is null || lastRole != "assistant") return 0;
+        if (parent is null) return 0;
+        var matches = hasResume && MatchesRecoveredTurn(resume,lastUserText,lastUserAt);
+        var recover = lastRole == "user" && matches;
+        if (!recover && lastRole != "assistant") return 0;
 
-        var count = 0;
         var activity = (long?)metadata["lastActivityAt"] ?? 0;
+        var count = 0;
+        if (matches && lastRole == "assistant" && assistantCount == 1 &&
+            FinishPartialTurn(lines[lastAssistantLine], Text(resume,"text") ?? "") is {} completed)
+        {
+            lines[lastAssistantLine] = completed;
+            history = Encoding.UTF8.GetBytes(string.Join("\n",lines));
+            recent.Add(resume.GetProperty("text").GetString()!);
+            activity = Math.Max(activity,Timestamp(resume,"timestamp",0));
+            count++;
+        }
         using var output = new MemoryStream(history.Length+4096);
         output.Write(history);
         if (history[^1] != (byte)'\n') output.WriteByte((byte)'\n');
-        foreach (var record in records.EnumerateArray())
+        var pending = recover ? new[]{resume}.Concat(records.EnumerateArray()) : records.EnumerateArray().AsEnumerable();
+        foreach (var record in pending)
         {
             var id = Uuid(Text(record,"id"));
             var text = record.GetProperty("text").GetString() ?? "";
@@ -108,8 +146,10 @@ internal static class DesktopWebHistory
                 continue;
             var timestamp = record.GetProperty("timestamp").GetInt64();
             var model = Text(record,"model") ?? (string?)metadata["model"] ?? "claude";
+            var body = recover && count == 0 ? text : "\n\n"+text;
+            if (recover && count == 0) recent.Add(text);
             var message = new { id="msg_"+id.Replace("-",""),type="message",role="assistant",model,
-                  content=new[]{new {type="text",text="\n\n"+text}},stop_reason="end_turn",
+                  content=new[]{new {type="text",text=body}},stop_reason="end_turn",
                   usage=new {input_tokens=0,output_tokens=0} };
             JsonSerializer.Serialize(output,new { parentUuid=parent,isSidechain=false,userType="external",cwd,
                 sessionId=cli,timestamp=DateTimeOffset.FromUnixTimeMilliseconds(timestamp).ToString("O"),
@@ -130,6 +170,42 @@ internal static class DesktopWebHistory
         DesktopKeyAccess.WriteProfileFile(transcript,output.ToArray());
         DesktopKeyAccess.WriteProfileFile(metadataPath,JsonSerializer.SerializeToUtf8Bytes(metadata));
         return count;
+    }
+
+    private static string? UserPrompt(JsonElement content)
+    {
+        if (content.ValueKind == JsonValueKind.String) return content.GetString();
+        if (content.ValueKind != JsonValueKind.Array) return null;
+        var parts = content.EnumerateArray().ToArray();
+        if (parts.Any(part => part.ValueKind != JsonValueKind.Object || Text(part,"type") == "tool_result"))
+            return null;
+        return string.Join("\n",parts.Where(part => Text(part,"type") == "text").Select(part => Text(part,"text")));
+    }
+
+    private static bool MatchesRecoveredTurn(JsonElement resume, string? prompt, long userAt)
+    {
+        var started = Timestamp(resume,"started",0);
+        // Require the same visible prompt and a nearby timestamp in the same native session.
+        if (prompt == null || userAt <= 0 || started <= 0 || userAt < started-300_000 || userAt > started+30_000)
+            return false;
+        var clean = Regex.Replace(prompt,@"<system-reminder>.*?</system-reminder>","",RegexOptions.Singleline).Trim();
+        return clean.Length > 0 && Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(clean))) == Text(resume,"prompt");
+    }
+
+    private static string? FinishPartialTurn(string line, string reply)
+    {
+        var frame = JsonNode.Parse(line)!.AsObject();
+        if (frame["isSidechain"]?.GetValue<bool>() == true || frame["message"] is not JsonObject message ||
+            message["content"] is not JsonArray parts || parts.Any(part => part is not JsonObject obj ||
+                (string?)obj["type"] is not ("text" or "thinking" or "redacted_thinking")))
+            return null;
+        var textParts = parts.OfType<JsonObject>().Where(part => (string?)part["type"] == "text").ToArray();
+        var partial = string.Concat(textParts.Select(part => (string?)part["text"]));
+        if (partial.Length == 0 || partial.Length >= reply.Length || !reply.StartsWith(partial,StringComparison.Ordinal))
+            return null;
+        textParts[^1]["text"] = (string?)textParts[^1]["text"] + reply[partial.Length..];
+        message["stop_reason"] = "end_turn";
+        return frame.ToJsonString();
     }
 
     internal static async Task SyncAsync(HttpClient gateway, string userData, string dataDirectory,

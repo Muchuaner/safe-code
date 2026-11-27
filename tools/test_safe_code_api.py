@@ -79,6 +79,29 @@ class SafeCodeApiTest(unittest.TestCase):
         self.assertEqual(registry.desktop_history_device(second, 'macos', 'machine-a', 'pair-e'), 'pair-b')
         self.assertEqual(registry.desktop_history_device(first, 'macos', None, 'pair-f'), 'pair-f')
 
+    def test_resuming_an_active_turn_uses_the_existing_queue_slot(self):
+        handler = object.__new__(server.PublicHandler)
+        handler.digest = self.digests[0]
+        handler.platform = 'macos'
+        handler.device = {'id': 'fixture-device'}
+        handler.verify_admitted_device = unittest.mock.Mock()
+        handler.check_model = unittest.mock.Mock()
+        response = {'content': [{'type': 'text', 'text': 'The same turn'}]}
+        payload = {'model': 'claude-fixture'}
+
+        def resume(data, *, authorize, **options):
+            self.assertIs(data, payload)
+            authorize(payload['model'])
+            return response
+
+        backend = SimpleNamespace(resume_active=resume)
+        queue = unittest.mock.Mock()
+        handler.server = SimpleNamespace(account=lambda *args, **kwargs: SimpleNamespace(cloudcli=backend), queue=queue)
+        self.assertIs(handler.execute_message(payload, stream=unittest.mock.Mock()), response)
+        handler.verify_admitted_device.assert_called_once_with()
+        handler.check_model.assert_called_once_with(payload['model'])
+        queue.slot.assert_not_called()
+
     def test_developer_policy_is_disabled_by_default_and_clears_raw_on_disable(self):
         first, second, _ = self.digests
         self.assertEqual(self.registry.desktop_policy(first), (False, False))

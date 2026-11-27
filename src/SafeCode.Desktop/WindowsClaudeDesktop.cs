@@ -131,13 +131,13 @@ internal static class WindowsClaudeDesktop
         bool packaged = appId != null && (exe == null || (access.Configured && access.UsesPackagedProfile()));
         using var executableLock = !packaged && exe != null ? File.Open(exe, FileMode.Open, FileAccess.Read, FileShare.Read) : null;
         if (executableLock != null) await VerifyPublisherAsync(exe!, ct);
-        long readySince = await access.PrepareLaunchAsync(ct);
         using var self = Process.GetCurrentProcess();
         var apps = Process.GetProcessesByName("Claude");
         try
         {
             var desktop = apps.Where(p => IsDesktopProcess(p, self.SessionId)).ToArray();
-            if (reopen)
+            long readySince = await access.PrepareLaunchAsync(ct,syncHistory:desktop.Length == 0);
+            if (reopen && desktop.Length != 0)
             {
                 foreach (var app in desktop)
                     if (!app.HasExited && app.MainWindowHandle != IntPtr.Zero) app.CloseMainWindow();
@@ -146,7 +146,7 @@ internal static class WindowsClaudeDesktop
                 try { await Task.WhenAll(desktop.Select(p => p.WaitForExitAsync(timeout.Token))); }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 { throw new InvalidOperationException("请从系统托盘完全退出 Claude Desktop，再点击「打开 Claude Desktop」。"); }
-                await access.PrepareLaunchAsync(ct);
+                await access.PrepareLaunchAsync(ct,syncHistory:true);
             }
             else if (desktop.Any(app => !app.HasExited && new DateTimeOffset(app.StartTime).ToUnixTimeMilliseconds() < readySince))
                 throw new InvalidOperationException("Claude Desktop 在本次网关启用前就已运行。请从系统托盘完全退出，再点击打开以载入当前配置。");

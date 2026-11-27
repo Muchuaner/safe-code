@@ -2998,6 +2998,62 @@ class CloudCLIGatewayTests(unittest.TestCase):
     def test_web_authorized_json_recovers_after_disconnect(self):
         self.check_web_authorized_run_recovers_after_disconnect(stream=False)
 
+    def test_reopened_desktop_replays_progress_and_follows_original_live_turn(self):
+        self.enable_cloudcli_web_fixture()
+        self.cloud.track_running = True
+        self.cloud.pause_after_frame = 1
+        self.cloud.release_stream = threading.Event()
+        self.addCleanup(self.cloud.release_stream.set)
+        self.cloud.reply = (200, [
+            {'type': 'session-id', 'sessionId': CLOUD_SESSION},
+            {'kind': 'text', 'role': 'assistant', 'sessionId': CLOUD_SESSION, 'content': 'Already received. '},
+            {'kind': 'text', 'role': 'assistant', 'sessionId': CLOUD_SESSION, 'content': 'Arrived after reconnect.'},
+            {'kind': 'complete', 'sessionId': CLOUD_SESSION, 'exitCode': 0},
+            {'type': 'done'},
+        ])
+        backend = self.manager.cloudcli
+        namespace = f'{backend.identity}:{self.session}'
+        original = conversation('Keep working after closing Desktop.', stream=True)
+        headers = {'Authorization': f'Bearer {DESKTOP_TOKEN}', 'x-claude-code-session-id': self.session}
+        aborts = []
+
+        def read_until(response, value):
+            while True:
+                line = response.readline()
+                self.assertTrue(line, f'Missing stream output {value!r}')
+                if value in line:
+                    return
+
+        with patch.object(gateway, 'cloudcli_websocket', return_value=(
+                lambda *a, **kw: ChatSocketFixture(aborts.append), OSError)):
+            with closing(http.client.HTTPConnection(*self.desktop.server_address, timeout=4)) as conn:
+                conn.request('POST', '/v1/messages', json.dumps(original), headers)
+                with conn.getresponse() as response:
+                    read_until(response, b'Already received.')
+            active = backend.active_conversations[namespace]
+            self.assertTrue(active.client_detached.wait(2))
+            changed = {**original, 'stream': False, 'output_config': {'effort': 'high'}}
+            self.assertEqual(self.request(changed)[0], 409)
+            with closing(http.client.HTTPConnection(*self.desktop.server_address, timeout=4)) as conn:
+                conn.request('POST', '/v1/messages', json.dumps(original), headers)
+                with conn.getresponse() as response:
+                    self.assertEqual(response.status, 200)
+                    read_until(response, b'Already received.')
+                    self.assertFalse(active.finished.is_set())
+                    self.cloud.release_stream.set()
+                    tail = response.read()
+                    self.assertIn(b'Arrived after reconnect.', tail)
+                    self.assertIn(b'event: message_stop', tail)
+                    self.assertNotIn(b'Already received.', tail)
+        self.assertTrue(active.finished.wait(2))
+        self.assertFalse(aborts)
+        self.assertEqual(len(self.cloud.requests), 1)
+        exported = backend.desktop_followup_export(self.session, False)
+        self.assertIn('Arrived after reconnect.', exported['resume']['text'])
+        self.assertEqual(exported['resume']['prompt'],
+                         hashlib.sha256(b'Keep working after closing Desktop.').hexdigest())
+        self.assertEqual(backend.desktop_followup_export(str(uuid.uuid4()), False), {'messages': []})
+
     def check_web_authorized_run_recovers_after_disconnect(self, stream):
         self.enable_cloudcli_web_fixture()
         self.cloud.track_running = True

@@ -146,6 +146,7 @@ internal static class MacSelfTest
         }
         Console.WriteLine("MAC_HISTORY_RETRIES_TRANSIENT_READS_OK");
         CheckMirroredHistoryMigration();
+        CheckColdLaunchRecoveredTurn();
         await CheckKeyHistoryAsync();
         string fingerprint=new('A',64);
         var rdp=MacClients.FreeRdpArguments(new(22119,"fixture",fingerprint),new("workspace","fixture password"),
@@ -206,6 +207,55 @@ internal static class MacSelfTest
             (int?)updated["completedTurns"] != 3)
             throw new Exception("历史更新未保留原消息、会话信息及 Auto 权限模式。");
         Console.WriteLine("MAC_MIRRORED_HISTORY_HIDES_TOOLS_AND_PRESERVES_TURNS_OK");
+    }
+
+    private static void CheckColdLaunchRecoveredTurn()
+    {
+        using var directory = new TempMirrorDirectory();
+        string cwd = Path.Combine(directory.Path,"Workspace"), scope = Guid.NewGuid().ToString("D");
+        string project = Path.Combine(directory.Path,System.Text.RegularExpressions.Regex.Replace(cwd,@"[^A-Za-z0-9]","-"));
+        Directory.CreateDirectory(project);
+        string transcript = Path.Combine(project,scope+".jsonl"), metadata = Path.Combine(directory.Path,"local_"+scope+".json");
+        string user = Guid.NewGuid().ToString("D"), assistant = Guid.NewGuid().ToString("D");
+        const string text = "Fixture question with no reply";
+        long started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        string prompt = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+        File.WriteAllText(metadata,JsonSerializer.Serialize(new { cliSessionId=scope,cwd }));
+        string userFrame = JsonSerializer.Serialize(new {
+            type="user",uuid=user,sessionId=scope,timestamp=DateTimeOffset.FromUnixTimeMilliseconds(started-100),
+            message=new { role="user",content=text }
+        })+"\n";
+        File.WriteAllText(transcript,userFrame);
+        using var mismatch = JsonDocument.Parse(JsonSerializer.Serialize(new {
+            messages=Array.Empty<object>(),resume=new { id=assistant,prompt=new string('0',64),started,
+                timestamp=started+3000,text="Recovered reply." }
+        }));
+        if (DesktopWebHistory.ApplyFollowups(mismatch.RootElement,metadata,directory.Path) != 0)
+            throw new Exception("恢复错误提示词的任务。");
+        using var receipt = JsonDocument.Parse(JsonSerializer.Serialize(new {
+            messages=Array.Empty<object>(),resume=new { id=assistant,prompt,started,timestamp=started+3000,text="Recovered reply." }
+        }));
+        if (DesktopWebHistory.ApplyFollowups(receipt.RootElement,metadata,directory.Path) != 1 ||
+            DesktopWebHistory.ApplyFollowups(receipt.RootElement,metadata,directory.Path) != 0)
+            throw new Exception("重开回填失败或重复写入。");
+        using var reply = JsonDocument.Parse(File.ReadLines(transcript).Last());
+        var frame = reply.RootElement;
+        if (frame.GetProperty("parentUuid").GetString() != user ||
+            frame.GetProperty("message").GetProperty("content")[0].GetProperty("text").GetString() != "Recovered reply.")
+            throw new Exception("恢复结果未进入原对话。");
+        string partial = Guid.NewGuid().ToString("D");
+        File.WriteAllText(transcript,userFrame+JsonSerializer.Serialize(new {
+            type="assistant",uuid=partial,parentUuid=user,sessionId=scope,
+            message=new { role="assistant",content=new[]{new {type="text",text="Recovered "}} }
+        })+"\n");
+        if (DesktopWebHistory.ApplyFollowups(receipt.RootElement,metadata,directory.Path) != 1)
+            throw new Exception("重开后未接上已保存的部分回复。");
+        using var finished = JsonDocument.Parse(File.ReadLines(transcript).Last());
+        if (File.ReadLines(transcript).Count() != 2 ||
+            finished.RootElement.GetProperty("uuid").GetString() != partial ||
+            finished.RootElement.GetProperty("message").GetProperty("content")[0].GetProperty("text").GetString() != "Recovered reply.")
+            throw new Exception("接续部分回复时生成了重复消息。");
+        Console.WriteLine("MAC_COLD_LAUNCH_RECOVERED_TURN_OK");
     }
 
     private sealed class TempMirrorDirectory : IDisposable

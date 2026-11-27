@@ -38,7 +38,7 @@ from prompt_review import PromptReviewer
 PUBLIC_ENABLED = 'public-enabled'
 PUBLIC_ORIGIN = 'public-origin'
 PUBLIC_CONCURRENCY = 'public-concurrency'
-GATEWAY_REVISION = 53
+GATEWAY_REVISION = 54
 DESKTOP_HISTORY = '/v1/desktop-history'
 DESKTOP_FOLLOWUPS = '/v1/desktop-followups'
 PUBLIC_KEY_QUEUE = 'public-key-queue'
@@ -522,6 +522,12 @@ class PublicHandler(Handler):
             stream = options.get('stream')
             manager = self.server.account(self.digest, self.platform, self.device, create=False)
             if manager is not None and manager.cloudcli is not None:
+                def authorize_resume(resolved_model):
+                    self.verify_admitted_device()
+                    self.check_model(resolved_model)
+                resumed = manager.cloudcli.resume_active(data, authorize=authorize_resume, **options)
+                if resumed is not None:
+                    return resumed
                 manager.cloudcli.request_previous_stop(data, options.get('session_header'))
             with self.server.queue.slot(self.digest, lambda: peer_disconnected(self.connection),
                                         on_wait=stream.queue_ping if stream is not None else None):

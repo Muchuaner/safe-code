@@ -471,6 +471,14 @@ def signature(messages):
     return digest.hexdigest()
 
 
+def desktop_retry_fingerprint(data, context_1m):
+    # Stream and per-process metadata can change on retry. The conversation,
+    # model, attachments, effort and tool definitions still have to match.
+    fields = [context_1m, signature(data.get('messages', [])),
+              *(data.get(name) for name in ('model', 'output_config', 'tool_choice', 'tools', 'max_tokens'))]
+    return hashlib.sha256(json.dumps(fields, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 def validate_request(data):
     if not isinstance(data, dict) or not MODEL.fullmatch(str(data.get('model', ''))):
         raise GatewayError('A native Claude model identifier is required', 400)
@@ -1454,6 +1462,8 @@ class CloudCliProgress:
         self.edit_anchor = None
         self.session = None
         self.parts = []
+        self.resume_turn = None
+        self.resume_prompt = None
         self.reply_bytes = 0
         self.pending = ''
         self.sent = 0
@@ -1499,13 +1509,17 @@ class CloudCliProgress:
                 self.on_disconnect(self.stream)
                 if self.output_closed:
                     return
-        if self.parts and self.parts[-1]['type'] == kind:
-            self.parts[-1][kind] += text
-        else:
-            block = {'type': kind, kind: text}
-            if kind == 'thinking':
-                block['signature'] = ''
-            self.parts.append(block)
+        turn = self.resume_turn
+        with turn.changed if turn else nullcontext():
+            if self.parts and self.parts[-1]['type'] == kind:
+                self.parts[-1][kind] += text
+            else:
+                block = {'type': kind, kind: text}
+                if kind == 'thinking':
+                    block['signature'] = ''
+                self.parts.append(block)
+            if turn:
+                turn.changed.notify_all()
 
     def notice(self, title, output=None, *, action=None):
         body = '\n\n> **SafeCode** · '+title
@@ -2281,6 +2295,54 @@ class ActiveCloudCliTurn:
         self.client_detached = threading.Event()
         self.stop_requested = threading.Event()
         self.finished = threading.Event()
+        self.changed = threading.Condition()
+        self.fingerprint = None
+        self.progress = None
+        self.parts = ()
+        self.response = None
+        self.error = None
+        self.reader = False
+
+    def complete(self, response=None, error=None):
+        with self.changed:
+            self.response = response
+            self.error = error
+            self.changed.notify_all()
+
+    def resume(self, stream):
+        with self.changed:
+            if self.reader:
+                raise CloudCliError('此会话已有桌面连接正在恢复。', 409)
+            self.reader = True
+        try:
+            index = offset = 0
+            while not stream.disconnected():
+                with self.changed:
+                    if self.error is not None:
+                        raise self.error
+                    chunks = []
+                    if stream.send_events and index < len(self.parts):
+                        for part in self.parts[index:]:
+                            kind = part['type']
+                            chunks.append((kind, part[kind][offset:]))
+                            index += 1
+                            offset = 0
+                        index -= 1
+                        offset = len(self.parts[index][self.parts[index]['type']])
+                    response = self.response
+                    if response is None and self.finished.is_set():
+                        raise CloudCliError('原任务已结束，网关没有收到可恢复的结果。', 409)
+                    if response is None and not any(text for _, text in chunks):
+                        self.changed.wait(1)
+                for kind, text in chunks:
+                    stream.write(kind, text)
+                if response is not None:
+                    return {**response, 'id': stream.message_id} if stream.started else response
+                stream.queue_ping()
+            raise ConnectionAbortedError('Desktop disconnected while restoring a CloudCLI turn')
+        finally:
+            with self.changed:
+                self.reader = False
 
 
 class CloudCliBackend:
@@ -2337,6 +2399,8 @@ class CloudCliBackend:
             db.execute('CREATE TABLE IF NOT EXISTS imported_session_receipts (scope TEXT PRIMARY KEY, session TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS requests (identity TEXT PRIMARY KEY, scope TEXT NOT NULL, '
                        'reply TEXT, created REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS desktop_resume_receipts (scope TEXT PRIMARY KEY, '
+                       'request TEXT NOT NULL, session TEXT NOT NULL, prompt TEXT NOT NULL, finished REAL NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS compact_receipts (scope TEXT PRIMARY KEY, history TEXT NOT NULL, '
                        'session TEXT NOT NULL, marker TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS request_operations (identity TEXT PRIMARY KEY, '
@@ -2782,12 +2846,36 @@ class CloudCliBackend:
                                 'LEFT JOIN imported_session_receipts i USING(scope) '
                                 'WHERE s.scope=? AND (? OR i.scope IS NULL) LIMIT 2',
                                 (namespace,include_imported)).fetchall()
-        if len(states) != 1 or not states[0][1]:
-            return {'messages': []}
-        session, _, finished, cutoff = states[0]
+            if len(states) != 1:
+                return {'messages': []}
+            session, anchor, finished, cutoff = states[0]
+            resume = self.desktop_completed_resume(db, namespace, session)
+        if not anchor:
+            return {'messages': [], **({'resume': resume} if resume else {})}
         after = int(1000 * (cutoff if cutoff is not None else finished))
         messages = self.read_followup_history(session,after)
-        return self.save_desktop_followups(namespace, session, finished, cutoff, messages)
+        result = self.save_desktop_followups(namespace, session, finished, cutoff, messages)
+        if resume:
+            result['resume'] = resume
+        return result
+
+    @staticmethod
+    def desktop_completed_resume(db, namespace, session):
+        row = db.execute('SELECT r.identity, r.reply, r.created, d.prompt, d.finished '
+                         'FROM desktop_resume_receipts d JOIN requests r ON r.identity=d.request '
+                         'WHERE d.scope=? AND r.scope=d.scope AND d.session=? AND r.reply IS NOT NULL '
+                         'AND NOT EXISTS (SELECT 1 FROM requests n WHERE n.scope=r.scope AND n.created>r.created)',
+                         (namespace, session)).fetchone()
+        if not row:
+            return None
+        request, reply, created, prompt, finished = row
+        reply = json.loads(reply)
+        value = desktop_assistant_text(reply)
+        if reply.get('stop_reason') != 'end_turn' or not value or len(value.encode()) > 2 * 1024 * 1024:
+            return None
+        return {'id': str(uuid.uuid5(IMPORTED_SESSION_NAMESPACE, request)),
+                'prompt': prompt, 'started': int(created*1000), 'timestamp': int(finished*1000),
+                'text': value, 'model': reply.get('model')}
 
     def read_followup_history(self, session, after):
         pages = []
@@ -3579,6 +3667,9 @@ class CloudCliBackend:
                 db.execute('INSERT OR REPLACE INTO workspace_prompts VALUES (?, ?, ?, ?)',
                            (namespace, session, progress.turn_position, progress.workspace_prompt_fingerprint))
             db.execute('UPDATE requests SET reply=? WHERE identity=?', (json.dumps(result, ensure_ascii=False), identity))
+            if progress.resume_prompt:
+                db.execute('INSERT OR REPLACE INTO desktop_resume_receipts VALUES (?,?,?,?,?)',
+                           (namespace,identity,session,progress.resume_prompt,time.time()))
             db.execute('UPDATE request_operations SET pending=0 WHERE identity=?', (identity,))
         model = progress.reported_model or progress.model
         manager.count_usage({'id': result['id'], 'model': model, 'usage': usage}, result['id'])
@@ -4035,6 +4126,28 @@ class CloudCliBackend:
             with self.active_lock:
                 del self.active_conversations[conversation]
                 turn.finished.set()
+            with turn.changed:
+                turn.changed.notify_all()
+
+    def resume_active(self, data, *, session_header=None, stream=None, context_1m=False, authorize=None, **_):
+        if stream is None or not isinstance(data, dict):
+            return None
+        scope = conversation_scope(data, session_header)
+        if not scope:
+            return None
+        with self.active_lock:
+            turn = self.active_conversations.get(self.identity+':'+scope)
+        if turn is None or turn.progress is None or not turn.progress.dispatched or turn.stop_requested.is_set():
+            return None
+        original = turn.progress.stream
+        if not turn.client_detached.is_set() and (original is None or not original.disconnected()):
+            return None
+        if turn.fingerprint != desktop_retry_fingerprint(data, context_1m):
+            return None
+        if authorize is not None:
+            authorize(turn.progress.model)
+        diagnostic(stage='session_route')
+        return turn.resume(stream)
 
     @contextmanager
     def configuration_lock(self):
@@ -4244,6 +4357,8 @@ class CloudCliBackend:
                                (now-30*86400,))
                     db.execute('DELETE FROM request_operations WHERE NOT EXISTS '
                                '(SELECT 1 FROM requests WHERE requests.identity=request_operations.identity)')
+                    db.execute('DELETE FROM desktop_resume_receipts WHERE NOT EXISTS '
+                               '(SELECT 1 FROM requests WHERE requests.identity=desktop_resume_receipts.request)')
                     db.execute('DELETE FROM workspace_prompts WHERE NOT EXISTS '
                                '(SELECT 1 FROM sessions WHERE sessions.scope=workspace_prompts.scope '
                                'AND sessions.session=workspace_prompts.session)')
@@ -4440,6 +4555,13 @@ class CloudCliBackend:
             progress.workspace_prompt_fingerprint = workspace_prompt_fingerprint
             progress.turn_position = position
             progress.edit_anchor = edit[0] if edit is not None else None
+            if scope and stream is not None:
+                if visible_task:
+                    progress.resume_prompt = hashlib.sha256(visible_task.encode()).hexdigest()
+                active_turn.fingerprint = desktop_retry_fingerprint(data, context_1m)
+                active_turn.parts = progress.parts
+                progress.resume_turn = active_turn
+                active_turn.progress = progress
             def dispatch():
                 if existing_project:
                     return self.call_chat(payload, progress, attachments, plan_mode, edit, title_text=label or task,
@@ -4471,14 +4593,18 @@ class CloudCliBackend:
             try:
                 result = self.advance(manager, data, messages, stream, namespace, identity, events, progress,
                                       before, project, workspace)
+                active_turn.complete(response=result)
                 if label and self.config.get('desktopQuestions') and 'sessionId' not in payload and progress.session:
                     with suppress(CloudCliError):
                         self.web_request('PUT', f'/api/providers/sessions/{progress.session}',
                                          json.dumps({'summary':label}).encode(), timeout=3)
                 return result
             except (CloudCliStopped, CloudCliNativeStop):
+                active_turn.complete(error=CloudCliError('原任务已停止。', 409))
                 raise
             except Exception as error:
+                if isinstance(error, GatewayError):
+                    active_turn.complete(error=error)
                 events.close()
                 rejected = isinstance(error, CloudCliRejected)
                 if not progress.dispatched or rejected:
@@ -5139,6 +5265,10 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(404, {'error': {'type': 'not_found_error', 'message': 'Unknown CLI bridge endpoint'}})
 
     def execute_message(self, data, **options):
+        if self.manager.cloudcli is not None:
+            response = self.manager.cloudcli.resume_active(data, **options)
+            if response is not None:
+                return response
         if not self.manager.capacity.acquire(blocking=False):
             raise GatewayError('Too many active Desktop requests', 429)
         try:
