@@ -733,8 +733,20 @@ DESKTOP_TITLE_PREFIXES = (
 DESKTOP_TITLE_DESCRIPTION = 'Here is the session description:\n<description>'
 
 
-def cloudcli_title_response(task):
+def cloudcli_title_response(task, data):
     """Answer Desktop's tagged metadata request without starting a CloudCLI chat."""
+    if task.startswith('<session>\n') and not data.get('tools'):
+        # Claude Code's JSON title helper can carry the active conversation ID.
+        description, closing, instruction = task[len('<session>\n'):].rpartition('\n</session>\n\n')
+        if closing and instruction.startswith('Write the title in '):
+            systems = [data.get('system'), *(m.get('content') for m in data['messages'] if m['role'] == 'system')]
+            for system in systems:
+                if isinstance(system, list):
+                    system = '\n'.join(b['text'] for b in system if isinstance(b, dict) and b.get('type') == 'text'
+                                       and isinstance(b.get('text'), str))
+                if (isinstance(system, str) and 'You are naming a coding session so the user can pick it out' in system
+                        and 'Return JSON with a single "title" field.' in system):
+                    return json.dumps({'title': desktop_title([{'role': 'user', 'content': description}])}, ensure_ascii=False)
     if not task.startswith(DESKTOP_TITLE_PREFIXES) or DESKTOP_TITLE_DESCRIPTION not in task:
         return None
     description = task.split(DESKTOP_TITLE_DESCRIPTION, 1)[1]
@@ -4349,7 +4361,7 @@ class CloudCliBackend:
         if (not chat_mode and len(original) == 1 and not scope
                 and not data.get('tools') and not data.get('system') and task == '.'):
             raise CloudCliError('CloudCLI requires text for the user task', 400)
-        title = cloudcli_title_response(task) if not chat_mode and len(messages) == 1 else None
+        title = cloudcli_title_response(task, data) if not chat_mode and len(messages) == 1 else None
         if title is not None:
             return self.local_reply(data['model'], title)
         if not chat_mode and desktop_suggestion(messages):
